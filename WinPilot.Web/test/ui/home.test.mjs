@@ -1,0 +1,95 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { loadScriptModule } from '../support/scriptModule.mjs';
+import * as vue from 'vue';
+
+test('an older failed API request cannot overwrite a newer successful connection', async () => {
+  const calls = [];
+  let version = 0, state = 'online';
+  const context = {
+    exports: {}, DOMException,
+    fetch: () => new Promise((resolve, reject) => calls.push({ resolve, reject })),
+    require: () => ({ connectionRestoreVersion: () => version,
+      markConnectionRestored() { version++; state = 'online'; },
+      markConnectionLostUnlessRestored(since) { if (since === version) state = 'disconnected'; } }),
+  };
+  runInNewContext(loadScriptModule(new URL('../../src/api/client.ts', import.meta.url)), context);
+  const api = context.exports;
+  const older = api.apiFetch('/old');
+  const newer = api.apiFetch('/new');
+  calls[1].resolve({ ok: true });
+  await newer;
+  calls[0].reject(new Error('late failure'));
+  await assert.rejects(older, api.WinPilotConnectionError);
+  assert.equal(state, 'online');
+  const failure = api.apiFetch('/failure');
+  calls[2].reject(new Error('current failure'));
+  await assert.rejects(failure);
+  assert.equal(state, 'disconnected');
+});
+
+function fixture() {
+  const calls = [], toasts = [], intervals = new Map(), timeouts = new Map();
+  let now = 100000, timer = 0, mount, unmount;
+  class Clock extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
+  const document = { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
+  const code = loadScriptModule(new URL('../../src/features/home/HomeView.vue', import.meta.url),
+    'refreshStatus,relativeCapturedAt,executeFeature,confirmFeature,confirmingFeature,autoEnabled,configureAutomaticRefresh,handlePageResume');
+  const context = { exports: {}, Date: Clock, AbortController, DOMException, document,
+    sessionStorage: { getItem: () => null },
+    window: { setInterval: cb => { intervals.set(++timer, cb); return timer; }, clearInterval: id => intervals.delete(id),
+      setTimeout: cb => { timeouts.set(++timer, cb); return timer; }, clearTimeout: id => timeouts.delete(id),
+      addEventListener() {}, removeEventListener() {} },
+    require: name => {
+      if (name === 'vue') return { ...vue, onMounted: cb => { mount = cb; }, onBeforeUnmount: cb => { unmount = cb; } };
+      if (name === 'vue-router') return { useRouter: () => ({}) };
+      if (name.endsWith('/client')) return { apiFetch: (url, init) => new Promise(resolve => calls.push({ url, init, resolve })), isAbortError: e => e?.name === 'AbortError', userErrorMessage: e => e.message };
+      if (name.endsWith('/toast')) return { showToast: (...args) => toasts.push(args) };
+      return {};
+    },
+  };
+  const scope = vue.effectScope();
+  scope.run(() => runInNewContext(code, context));
+  const subject = context.exports;
+  mount();
+  calls[0].resolve({ ok: true, json: async () => [] });
+  return { subject, calls, toasts, intervals, timeouts, document,
+    advance(ms) { now += ms; for (const cb of [...intervals.values()]) cb(); },
+    dispose() { unmount(); scope.stop(); } };
+}
+
+test('home clock starts on capture and stops at one hour or while hidden', async () => {
+  const f = fixture();
+  try {
+    assert.equal(f.intervals.size, 0);
+    const refresh = f.subject.refreshStatus();
+    f.calls.at(-1).resolve({ ok: true, json: async () => ({ cpuUsagePercent: 1, memoryUsagePercent: 1 }) });
+    await refresh;
+    assert.equal(f.intervals.size, 1);
+    f.advance(7200000);
+    assert.equal(f.subject.relativeCapturedAt.value, '1 小时前');
+    assert.equal(f.intervals.size, 0);
+    f.document.visibilityState = 'hidden';
+    f.subject.autoEnabled.value = true;
+    f.subject.configureAutomaticRefresh();
+    assert.equal(f.timeouts.size, 0);
+  } finally { f.dispose(); }
+});
+
+test('home confirmed actions share execution and ignore replies after leaving', async () => {
+  const f = fixture();
+  f.subject.confirmingFeature.value = { plugin: { id: 'sample' }, feature: { id: 'run', mode: 'action' } };
+  const execution = f.subject.confirmFeature();
+  await f.subject.confirmFeature();
+  const call = f.calls.at(-1);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/execute')).length, 1);
+  f.dispose();
+  assert.equal(call.init.signal.aborted, true);
+  call.resolve({ ok: true, json: async () => ({ succeeded: true, message: 'done' }) });
+  await execution;
+  assert.equal(f.toasts.length, 0);
+});

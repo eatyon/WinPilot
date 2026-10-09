@@ -1,0 +1,47 @@
+name: CNB Release Sync
+run-name: CNB Release ${{ github.event.release.tag_name || inputs.tag }}
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已发布的 GitHub Release 标签，例如 v1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winpilot-cnb-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  repo:
+    if: vars.CNB_REPOSITORY != ''
+    uses: ./.github/workflows/sync-cnb-repository.yml
+    secrets:
+      CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+
+  sync:
+    needs: repo
+    if: vars.CNB_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出同步脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: 同步已发布的附件和说明
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPOSITORY: ${{ vars.CNB_REPOSITORY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: ./Build/Sync-CnbRelease.ps1 -Tag $env:RELEASE_TAG -GitHubRepository $env:GITHUB_REPOSITORY -CnbRepository $env:CNB_REPOSITORY

@@ -1,0 +1,50 @@
+name: WinPilot Build
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winpilot-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: WinPilot.Web/package-lock.json
+
+      - name: 构建前端和 C# 项目
+        shell: pwsh
+        run: ./Build/Build.ps1 -Configuration Release
+
+      - name: 运行 Web 测试
+        shell: pwsh
+        working-directory: WinPilot.Web
+        run: npm test
+
+      - name: 运行 C# 测试
+        shell: pwsh
+        run: dotnet test ./Test/WinPilot.Test/WinPilot.Test.csproj -c Release --no-build --logger "trx" --results-directory ./artifacts/TestResults --blame-hang-timeout 2m

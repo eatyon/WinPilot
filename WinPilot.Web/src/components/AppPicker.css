@@ -1,0 +1,29 @@
+.app-select { display: block; width: 100%; min-width: 0; }
+.app-select-trigger { display: flex; width: 100%; min-width: 0; height: 34px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: var(--wp-picker-font-size, 12px); font-weight: var(--wp-picker-font-weight, 600); text-align: left; cursor: pointer; }
+.app-select-trigger > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-select-trigger:hover:not(:disabled) { background: var(--surface-hover); }
+.app-select-trigger:focus-visible { border-color: var(--accent-focus-ring); outline: 2px solid var(--accent-focus-ring); outline-offset: 1px; }
+.app-select-trigger:disabled { opacity: .5; cursor: default; }
+.app-select-chevron { width: 8px; height: 8px; flex: 0 0 8px; margin-top: -4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; color: var(--text-muted); transform: rotate(45deg); }
+.app-select-menu { position: fixed; z-index: 70; display: grid; overflow: hidden; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow-float); visibility: hidden; }
+.app-select-menu.is-positioned { visibility: visible; }
+.app-select-menu[hidden] { display: none; }
+.app-select-menu[popover] { inset: auto; height: auto; margin: 0; }
+.wp-button.app-menu-trigger { min-width: 76px; font-size: var(--wp-picker-font-size, 12px); font-weight: var(--wp-picker-font-weight, 600); }
+.app-menu-trigger::after { width: 7px; height: 7px; margin: -4px 0 0 4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; content: ""; transform: rotate(45deg); }
+.app-menu-group { display: grid; }
+.app-menu-group + .app-menu-group { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); }
+.app-menu-heading { padding: 6px 10px 5px; color: var(--text-subtle); font-size: 11px; font-weight: 650; }
+.app-menu-message { padding: 12px; color: var(--text-subtle); font-size: 13px; text-align: center; }
+.app-menu-message.error { color: var(--danger-text); }
+.app-select-option { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: flex-start; padding: 6px 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font: inherit; font-size: var(--wp-picker-font-size, 12px); font-weight: var(--wp-picker-font-weight, 600); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.app-select-option:hover:not(:disabled), .app-select-option:focus-visible { background: var(--accent-bg); color: var(--accent-text); }
+.app-select-option[aria-selected="true"] { background: var(--accent-bg); color: var(--accent-text); }
+.app-select-option:disabled { color: var(--text-subtle); cursor: default; }
+.app-select-options { box-sizing: border-box; min-height: 0; max-height: calc(var(--app-menu-max-height, 220px) - 2px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; scrollbar-width: thin; }
+.app-multi-option { gap: 8px; }
+.app-multi-option:hover:not(.is-disabled), .app-multi-option:focus-within { background: var(--accent-bg); color: var(--accent-text); }
+.app-multi-input { width: 15px; height: 15px; flex: 0 0 15px; margin: 0; accent-color: var(--accent-solid); cursor: inherit; }
+.app-multi-input:focus-visible { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
+.app-multi-option.is-disabled { color: var(--text-subtle); cursor: default; opacity: .5; }
+.app-multi-option.is-unavailable { color: var(--text-muted); }

@@ -1,0 +1,23 @@
+:where(:focus-visible) { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
+.wp-button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 8px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.wp-button:hover:not(:disabled) { background: var(--surface-hover); }
+.wp-button-primary { border-color: transparent; background: var(--accent-solid); color: var(--accent-contrast); }
+.wp-button-primary:hover:not(:disabled) { background: var(--accent-solid-hover); }
+.wp-button-danger { border-color: transparent; background: var(--danger-solid); color: var(--danger-contrast); }
+.wp-button-danger:hover:not(:disabled) { background: var(--danger-solid-hover); }
+.wp-button-icon { width: 36px; padding: 0; }
+.wp-button:disabled, .wp-input:disabled, .wp-checkbox:disabled, .wp-switch:disabled { cursor: default; opacity: .5; }
+.wp-button:focus-visible, .wp-checkbox:focus-visible, .wp-switch:focus-visible { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
+.wp-input { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+textarea.wp-input { height: auto; min-height: 90px; padding-block: 8px; resize: vertical; }
+.wp-input:focus { outline: none; border-color: var(--accent-focus-ring); box-shadow: 0 0 0 2px var(--accent-focus-ring); }
+.wp-input[aria-invalid="true"] { border-color: var(--danger-border); }
+.wp-checkbox { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-solid); }
+.wp-switch { position: relative; width: 38px; height: 22px; margin: 0; appearance: none; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--surface-hover); cursor: pointer; }
+.wp-switch::after { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(22 33 45 / 24%); content: ""; transition: transform 150ms ease; }
+.wp-switch:checked { border-color: var(--accent-solid); background: var(--accent-solid); }
+.wp-switch:checked::after { transform: translateX(16px); }
+.wp-select { position: relative; }
+.wp-select::after { display: none !important; }
+.app-select-native { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; border: 0 !important; opacity: 0; pointer-events: none; clip-path: inset(50%); }
+.wp-select .app-select-trigger { min-height: 34px; }

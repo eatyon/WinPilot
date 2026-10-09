@@ -1,0 +1,174 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { RouterLink } from 'vue-router';
+import { isAbortError, userErrorMessage } from '../../api/client';
+import { createPluginRequests } from './PluginRequests';
+import { showToast } from '../../ui/toast';
+import type { PluginInfo } from './PluginModels';
+
+const plugins = ref<PluginInfo[]>([]);
+const loading = ref(false);
+const error = ref('');
+const changingIds = ref(new Set<string>());
+const search = ref('');
+const requests = createPluginRequests();
+let loadGeneration = 0;
+const filteredPlugins = computed(() => {
+  const query = search.value.trim().toLowerCase();
+  if (!query) return plugins.value;
+  return plugins.value.filter((plugin) =>
+    [
+      plugin.manifest?.name,
+      plugin.id,
+      plugin.directoryName,
+      ...(plugin.manifest?.authors ?? []).map((author) => author.name),
+    ].some((value) => value?.toLowerCase().includes(query)),
+  );
+});
+onMounted(load);
+onBeforeUnmount(requests.dispose);
+async function readProblem(response: Response) {
+  const body = (await requests.json(response).catch(() => null)) as { detail?: string } | null;
+  return body?.detail ?? '操作失败，请稍后重试';
+}
+async function load(reload = false) {
+  const generation = ++loadGeneration;
+  requests.cancelReads();
+  loading.value = true;
+  error.value = '';
+  try {
+    const response = await requests.fetch(reload ? '/api/plugins/reload' : '/api/plugins', {
+      method: reload ? 'POST' : 'GET',
+    });
+    if (!response.ok) throw new Error(await readProblem(response));
+    const loaded = (await requests.json(response)) as PluginInfo[];
+    if (generation === loadGeneration) plugins.value = loaded;
+  } catch (cause) {
+    if (requests.active && generation === loadGeneration && !isAbortError(cause)) error.value = userErrorMessage(cause, '无法加载插件');
+  } finally {
+    if (generation === loadGeneration) loading.value = false;
+  }
+}
+async function toggle(plugin: PluginInfo) {
+  if (loading.value || !plugin.canChangeEnabled || changingIds.value.has(plugin.id)) return;
+  changingIds.value.add(plugin.id);
+  try {
+    const response = await requests.fetch(
+      `/api/plugins/${encodeURIComponent(plugin.id)}/${plugin.enabled ? 'disable' : 'enable'}`,
+      { method: 'POST' },
+    );
+    if (!response.ok) throw new Error(await readProblem(response));
+    const updated = (await requests.json(response)) as PluginInfo;
+    plugins.value = plugins.value.map((item) => (item.id === updated.id ? updated : item));
+    showToast(`插件已${updated.enabled ? '启用' : '禁用'}`, 'success');
+  } catch (cause) {
+    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '更新插件状态失败'), 'error');
+  } finally {
+    changingIds.value.delete(plugin.id);
+  }
+}
+</script>
+<template>
+  <section class="plugins-view">
+    <section class="plugins-panel">
+      <header class="plugins-heading">
+        <div>
+          <h2>插件管理</h2>
+          <p>管理或查看已安装的插件</p>
+        </div>
+        <div class="plugins-heading-actions">
+          <RouterLink class="button button-secondary" to="/plugins/market">插件市场</RouterLink>
+          <button class="button button-secondary" type="button" :disabled="loading || changingIds.size > 0" @click="load(true)">
+            {{ loading ? '正在扫描…' : '重新扫描' }}
+          </button>
+        </div>
+      </header>
+      <div class="plugin-list-summary">
+        <div class="plugin-summary-counts">
+          <span>
+            共
+            <strong>{{ plugins.length }}</strong>
+            个插件
+          </span>
+        </div>
+        <div class="plugin-search">
+          <input
+            v-model="search"
+            class="text-input"
+            type="search"
+            aria-label="搜索插件名称、ID 或作者"
+            placeholder="搜索名称、ID 或作者"
+            :disabled="!plugins.length"
+          />
+        </div>
+      </div>
+    </section>
+    <p v-if="error" class="status-message error" role="alert">{{ error }}</p>
+    <p v-else-if="loading && !plugins.length" class="plugin-empty">正在读取插件目录…</p>
+    <template v-else-if="plugins.length">
+      <div v-if="filteredPlugins.length" class="plugin-list">
+        <article v-for="plugin in filteredPlugins" :key="plugin.directory" class="plugin-card">
+          <div class="plugin-card-main">
+            <div class="plugin-title-line">
+              <div class="plugin-title-copy">
+                <h3>{{ plugin.manifest?.name ?? plugin.directoryName }}</h3>
+                <p>{{ plugin.manifest?.description || '未提供插件描述' }}</p>
+              </div>
+            </div>
+            <p class="plugin-meta">
+              <span>ID：{{ plugin.id }}</span>
+              <span v-if="plugin.manifest">v{{ plugin.manifest.version }}</span>
+              <span v-if="plugin.manifest?.authors?.length">
+                作者 {{ plugin.manifest.authors.map((author) => author.name || '—').join('、') }}
+              </span>
+            </p>
+            <p v-if="plugin.errors.length" class="plugin-error">{{ plugin.errors[0] }}</p>
+          </div>
+          <div class="plugin-card-footer">
+            <label
+              class="task-row-toggle"
+              :class="{ 'is-invalid-enabled': plugin.state === 'Invalid' && plugin.enabled }"
+              :title="
+                plugin.state === 'Invalid'
+                  ? plugin.canChangeEnabled
+                    ? plugin.enabled
+                      ? '关闭插件（当前版本不兼容）'
+                      : '启用插件（当前版本不兼容，不会加载）'
+                    : '无效插件无法修改'
+                  : plugin.enabled
+                    ? '关闭插件'
+                    : '开启插件'
+              "
+            >
+              <input
+                type="checkbox"
+                :aria-label="
+                  plugin.enabled
+                    ? `关闭 ${plugin.manifest?.name ?? plugin.id}`
+                    : `开启 ${plugin.manifest?.name ?? plugin.id}`
+                "
+                :checked="plugin.enabled"
+                :disabled="loading || !plugin.canChangeEnabled || changingIds.has(plugin.id)"
+                @change="toggle(plugin)"
+              />
+            </label>
+            <RouterLink class="button button-secondary" :to="`/plugins/${encodeURIComponent(plugin.id)}`">
+              详情
+            </RouterLink>
+          </div>
+        </article>
+      </div>
+      <div v-else class="plugin-empty">
+        <strong>没有匹配的插件</strong>
+        <p>尝试搜索插件名称、ID 或作者</p>
+      </div>
+    </template>
+    <div v-else class="plugin-empty">
+      <strong>暂无插件</strong>
+      <p>
+        插件文件夹
+        <code>User/Plugin</code>
+      </p>
+    </div>
+  </section>
+</template>

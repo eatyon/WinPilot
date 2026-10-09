@@ -1,0 +1,116 @@
+name: WinPilot Publish
+run-name: WinPilot ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，例如 v1.0.0 或 v1.0.0-beta.1'
+        required: true
+        type: string
+      create-release:
+        description: '创建 GitHub Release 草稿'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winpilot-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 校验版本
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          CREATE_RELEASE: ${{ inputs.create-release }}
+        run: |
+          $release = ./Build/Publish-Portable.ps1 -Version $env:INPUT_VERSION -ValidateVersionOnly
+          if ($env:CREATE_RELEASE -eq 'true') {
+            $existingCommit = git rev-parse --verify --quiet "refs/tags/$($release.Tag)^{commit}"
+            if ($LASTEXITCODE -eq 0) {
+              $currentCommit = git rev-parse HEAD
+              if ($LASTEXITCODE -ne 0 -or $existingCommit -ne $currentCommit) {
+                throw '版本标签指向的提交与本次构建源码不一致'
+              }
+            }
+          }
+          "tag=$($release.Tag)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($release.Prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: WinPilot.Web/package-lock.json
+
+      - name: 构建并打包便携版
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: ./Build/Publish-Portable.ps1 -Version $env:RELEASE_TAG
+
+      - name: 检查发布产物
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $packageName = "WinPilot-$env:RELEASE_TAG-win-x64.zip"
+          $package = Join-Path artifacts $packageName
+          if (-not (Test-Path -LiteralPath $package -PathType Leaf)) { throw "缺少发布产物：$package" }
+
+      - name: 保存构建产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: WinPilot-${{ steps.version.outputs.tag }}-win-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: artifacts/WinPilot-${{ steps.version.outputs.tag }}-win-x64.zip
+
+  release:
+    needs: build
+    if: inputs.create-release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载已验证的构建产物
+        uses: actions/download-artifact@v7
+        with:
+          name: WinPilot-${{ needs.build.outputs.tag }}-win-x64
+          path: artifacts
+
+      - name: 创建 GitHub Release 草稿
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: WinPilot ${{ needs.build.outputs.tag }}
+          draft: true
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+          files: artifacts/WinPilot-${{ needs.build.outputs.tag }}-win-x64.zip

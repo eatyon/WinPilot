@@ -1,0 +1,234 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using WinPilot.PluginContract;
+
+namespace WinPilot.Features.Plugins;
+
+public sealed record RegisteredPluginCommand(string PluginId, string PluginDisplayName, PluginCommandDefinition Definition);
+
+public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger<PluginCommandRegistry>? logger = null)
+{
+    private readonly object gate = new();
+    private readonly Dictionary<string, Entry> commands = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Entry> wildcardCommands = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Scope> scopes = new(StringComparer.OrdinalIgnoreCase);
+    private long registrationOrder;
+    private readonly ILogger logger = logger ?? NullLogger<PluginCommandRegistry>.Instance;
+
+    public Scope CreateScope(string pluginId, string displayName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        Scope? previous;
+        Scope scope;
+        lock (gate)
+        {
+            scopes.TryGetValue(pluginId, out previous);
+            scope = new(this, pluginId, displayName);
+            scopes[pluginId] = scope;
+        }
+        previous?.Dispose();
+        return scope;
+    }
+
+    public IReadOnlyList<RegisteredPluginCommand> GetAll()
+    {
+        lock (gate) return commands.Values.Concat(wildcardCommands.Values)
+            .Where(IsCurrent)
+            .OrderBy(entry => entry.Command.PluginDisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(entry => entry.RegistrationOrder)
+            .Select(entry => entry.Command).ToArray();
+    }
+
+    internal string? GetCommandName(string text)
+    {
+        text = text.Trim();
+        lock (gate) return Find(text)?.Command.Definition.Name
+            ?? (text.Length > 0 && !isReserved(text) && wildcardCommands.Values.Any(IsCurrent) ? "*" : null);
+    }
+
+    internal bool IsSupportedCommand(string text) => GetCommandName(text) is not null;
+
+    internal async Task<bool> ExecuteAsync(string text, Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken token)
+    {
+        (Entry Entry, CancellationTokenSource Cancellation)? registered = null;
+        (Entry Entry, CancellationTokenSource Cancellation)[] handlers = [];
+        text = text.Trim();
+        lock (gate)
+        {
+            var entry = Find(text);
+            if (entry is not null)
+                registered = (entry, CancellationTokenSource.CreateLinkedTokenSource(token, entry.Cancellation.Token));
+            else if (text.Length > 0 && !isReserved(text))
+                handlers = wildcardCommands.Values.Where(IsCurrent)
+                    .Select(item => (item, CancellationTokenSource.CreateLinkedTokenSource(token, item.Cancellation.Token))).ToArray();
+        }
+        if (registered is not { } matched)
+        {
+            await Task.WhenAll(handlers.Select(handler => ExecuteWildcardAsync(handler.Entry, handler.Cancellation, text, createReply, token)));
+            return handlers.Length > 0;
+        }
+        using (var cancellation = matched.Cancellation)
+        {
+            var entry = matched.Entry;
+            cancellation.Token.ThrowIfCancellationRequested();
+            var reply = createReply(cancellation.Token);
+            try
+            {
+                await entry.Handler(new(entry.Command.Definition.Name, text[entry.Command.Definition.Name.Length..].Trim(), reply), cancellation.Token);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                logger.LogWarning("插件 {PluginId} 命令「{Name}」处理失败，异常类型：{ErrorType}",
+                    entry.Command.PluginId, entry.Command.Definition.Name, exception.GetType().Name);
+                throw;
+            }
+            finally { (reply as IDisposable)?.Dispose(); }
+        }
+        return true;
+    }
+
+    private async Task ExecuteWildcardAsync(Entry entry, CancellationTokenSource cancellation, string text,
+        Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken callerToken)
+    {
+        using (cancellation)
+        {
+            cancellation.CancelAfter(TimeSpan.FromSeconds(60));
+            var executionToken = cancellation.Token;
+            IPluginCommandReply? reply = null;
+            try
+            {
+                executionToken.ThrowIfCancellationRequested();
+                reply = createReply(executionToken);
+                await Task.Run(() => entry.Handler(new("*", text, reply), executionToken), executionToken)
+                    .WaitAsync(executionToken);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                if (!callerToken.IsCancellationRequested && !entry.Cancellation.IsCancellationRequested)
+                    logger.LogWarning("插件 {PluginId} 通配命令处理或发送回复超时", entry.Command.PluginId);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning("插件 {PluginId} 通配命令处理失败，异常类型：{ErrorType}", entry.Command.PluginId, exception.GetType().Name);
+            }
+            finally
+            {
+                try { (reply as IDisposable)?.Dispose(); }
+                catch (Exception exception)
+                {
+                    logger.LogWarning("插件 {PluginId} 通配命令回复清理失败，异常类型：{ErrorType}", entry.Command.PluginId, exception.GetType().Name);
+                }
+            }
+        }
+    }
+
+    private bool IsCurrent(Entry entry) => scopes.TryGetValue(entry.Scope.PluginId, out var scope) && ReferenceEquals(scope, entry.Scope);
+
+    private Entry? Find(string text) => commands.Values
+        .Where(IsCurrent)
+        .Where(entry => Matches(entry.Command.Definition, text))
+        .MaxBy(entry => entry.Command.Definition.Name.Length);
+
+    private static bool Matches(PluginCommandDefinition definition, string text) =>
+        text.Equals(definition.Name, StringComparison.OrdinalIgnoreCase) ||
+        definition.Parameters is not null && text.StartsWith(definition.Name, StringComparison.OrdinalIgnoreCase) &&
+        text.Length > definition.Name.Length &&
+        (definition.AllowAttachedArguments || char.IsWhiteSpace(text[definition.Name.Length]));
+
+    private IDisposable Register(Scope scope, PluginCommandDefinition definition, PluginCommandHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(handler);
+        var wildcard = definition.Name == "*";
+        if (wildcard)
+        {
+            if (definition.Parameters is not null || definition.AllowAttachedArguments)
+                throw new ArgumentException("通配命令不能声明参数", nameof(definition));
+            definition = definition with { Description = "处理未匹配的命令" };
+        }
+        if (string.IsNullOrWhiteSpace(definition.Name) || definition.Name.Any(char.IsWhiteSpace) || definition.Name.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(definition.Description) || definition.Parameters is not null && string.IsNullOrWhiteSpace(definition.Parameters) ||
+            definition.AllowAttachedArguments && definition.Parameters is null)
+            throw new ArgumentException("命令名称、简介或参数声明无效", nameof(definition));
+        lock (gate)
+        {
+            if (!scopes.TryGetValue(scope.PluginId, out var current) || !ReferenceEquals(current, scope))
+                throw new InvalidOperationException("插件命令注册已失效");
+            var registrations = wildcard ? wildcardCommands : commands;
+            var key = wildcard ? scope.PluginId : definition.Name;
+            var reserved = !wildcard && isReserved(definition.Name);
+            if (reserved || registrations.TryGetValue(key, out _))
+            {
+                var owner = reserved ? "WinPilot" : $"{registrations[key].Command.PluginDisplayName} ({registrations[key].Command.PluginId})";
+                logger.LogWarning("插件 {PluginDisplayName} ({PluginId}) 命令「{Name}」已跳过：名称已被 {Owner} 占用",
+                    scope.DisplayName, scope.PluginId, definition.Name, owner);
+                return new Registration(static () => { });
+            }
+            var entry = new Entry(scope, new(scope.PluginId, scope.DisplayName, definition), handler, ++registrationOrder);
+            registrations.Add(key, entry);
+            return new Registration(() => Remove(entry));
+        }
+    }
+
+    private void Remove(Entry entry)
+    {
+        lock (gate)
+        {
+            var registrations = entry.Command.Definition.Name == "*" ? wildcardCommands : commands;
+            var key = entry.Command.Definition.Name == "*" ? entry.Scope.PluginId : entry.Command.Definition.Name;
+            if (!registrations.TryGetValue(key, out var current) || !ReferenceEquals(current, entry)) return;
+            registrations.Remove(key);
+        }
+        Cancel(entry);
+    }
+
+    private void Remove(Scope scope)
+    {
+        Entry[] removed;
+        lock (gate)
+        {
+            if (scopes.TryGetValue(scope.PluginId, out var current) && ReferenceEquals(current, scope)) scopes.Remove(scope.PluginId);
+            removed = commands.Values.Concat(wildcardCommands.Values).Where(entry => ReferenceEquals(entry.Scope, scope)).ToArray();
+            foreach (var entry in removed)
+            {
+                if (entry.Command.Definition.Name == "*") wildcardCommands.Remove(scope.PluginId);
+                else commands.Remove(entry.Command.Definition.Name);
+            }
+        }
+        foreach (var entry in removed) Cancel(entry);
+    }
+
+    private void Cancel(Entry entry)
+    {
+        try { entry.Cancellation.Cancel(); }
+        catch (AggregateException) { logger.LogWarning("插件 {PluginId} 命令取消回调异常，命令：{Name}", entry.Command.PluginId, entry.Command.Definition.Name); }
+        finally { entry.Cancellation.Dispose(); }
+    }
+
+    public sealed class Scope : IPluginCommandApi, IDisposable
+    {
+        private readonly PluginCommandRegistry registry;
+        internal string PluginId { get; }
+        internal string DisplayName { get; }
+        internal Scope(PluginCommandRegistry registry, string pluginId, string displayName)
+        {
+            this.registry = registry;
+            PluginId = pluginId;
+            DisplayName = displayName;
+        }
+        public IDisposable Register(PluginCommandDefinition definition, PluginCommandHandler handler) => registry.Register(this, definition, handler);
+        public void Dispose() => registry.Remove(this);
+    }
+
+    private sealed record Entry(Scope Scope, RegisteredPluginCommand Command, PluginCommandHandler Handler, long RegistrationOrder)
+    {
+        internal CancellationTokenSource Cancellation { get; } = new();
+    }
+
+    private sealed class Registration(Action remove) : IDisposable
+    {
+        private Action? removal = remove;
+        public void Dispose() => Interlocked.Exchange(ref removal, null)?.Invoke();
+    }
+}

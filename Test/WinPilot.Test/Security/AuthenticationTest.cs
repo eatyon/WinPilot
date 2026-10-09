@@ -1,0 +1,199 @@
+using WinPilot.Core;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text.Json;
+using WinPilot.Features.Security;
+using WinPilot.Web;
+
+namespace WinPilot.Test;
+
+public sealed class AuthenticationTest
+{
+    [Fact]
+    public void AuthStore_StoresPbkdf2RecordAndAllowsOnlyCorrectPassword()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            var store = new AuthStore(paths);
+            store.SetInitialPassword("a secure passphrase");
+
+            using var document = JsonDocument.Parse(File.ReadAllText(paths.AuthenticationFile));
+            Assert.Equal(32, Convert.FromBase64String(document.RootElement.GetProperty("Salt").GetString()!).Length);
+            Assert.Equal(32, Convert.FromBase64String(document.RootElement.GetProperty("Hash").GetString()!).Length);
+            Assert.Equal(2, document.RootElement.EnumerateObject().Count());
+            Assert.DoesNotContain("a secure passphrase", File.ReadAllText(paths.AuthenticationFile));
+            Assert.True(store.Verify("a secure passphrase"));
+            Assert.False(store.Verify("wrong password"));
+            Assert.Throws<InvalidOperationException>(() => store.SetInitialPassword("another secure passphrase"));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AuthStore_ProtectsAuthFileWithExpectedWindowsAcl()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            new AuthStore(paths).SetInitialPassword("a secure passphrase");
+            var rules = new FileInfo(paths.AuthenticationFile).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToArray();
+            Assert.Contains(rules, rule => rule.IdentityReference.Value == new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value && rule.AccessControlType == AccessControlType.Allow);
+            Assert.Contains(rules, rule => rule.IdentityReference.Value == new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value && rule.AccessControlType == AccessControlType.Allow);
+            Assert.DoesNotContain(rules, rule => rule.IsInherited);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void FailedPasswordReplacementPreservesExistingAuthenticationAndRemovesTemporaryFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        var paths = PortableDataPaths.Create(root);
+        try
+        {
+            var store = new AuthStore(paths);
+            store.SetInitialPassword("a secure passphrase");
+            var original = File.ReadAllText(paths.AuthenticationFile);
+            File.SetAttributes(paths.AuthenticationFile, FileAttributes.ReadOnly);
+            var error = Record.Exception(() => store.ChangePassword("a secure passphrase", "another secure passphrase"));
+            Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString() ?? "文件替换意外成功");
+            Assert.Equal(original, File.ReadAllText(paths.AuthenticationFile));
+            Assert.True(store.Verify("a secure passphrase"));
+            Assert.False(store.Verify("another secure passphrase"));
+            Assert.False(File.Exists(paths.AuthenticationFile + ".tmp"));
+        }
+        finally
+        {
+            if (File.Exists(paths.AuthenticationFile)) File.SetAttributes(paths.AuthenticationFile, FileAttributes.Normal);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void PasswordChangeAndSessionRevocation_InvalidateExistingSessions()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            var store = new AuthStore(paths);
+            var sessions = new SessionManager();
+            store.SetInitialPassword("a secure passphrase");
+            var session = sessions.Create();
+            store.ChangePassword("a secure passphrase", "another secure passphrase");
+            sessions.RevokeAll();
+
+            Assert.False(store.Verify("a secure passphrase"));
+            Assert.True(store.Verify("another secure passphrase"));
+            Assert.False(sessions.Validate(session));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void SessionRevocation_CancelsAuthenticatedLongRunningRequests()
+    {
+        var sessions = new SessionManager();
+        var session = sessions.Create();
+
+        Assert.True(sessions.TryValidate(session, out var invalidated));
+        Assert.False(invalidated.IsCancellationRequested);
+
+        sessions.RevokeAll();
+
+        Assert.True(invalidated.IsCancellationRequested);
+        Assert.False(sessions.Validate(session));
+    }
+
+    [Fact]
+    public void SessionCreationPrunesExpiredEntriesAndDisposalCancelsRemainingSessions()
+    {
+        using var sessions = new SessionManager();
+        var expired = sessions.Create();
+        Assert.True(sessions.TryValidate(expired, out var previousToken));
+        var field = typeof(SessionManager).GetField("sessions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var states = (System.Collections.IDictionary)field.GetValue(sessions)!;
+        var state = states[expired]!;
+        state.GetType().GetField("expiresAt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(state, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var active = sessions.Create();
+        Assert.False(states.Contains(expired));
+        Assert.True(previousToken.IsCancellationRequested);
+        Assert.True(sessions.TryValidate(active, out var activeToken));
+        sessions.Dispose();
+        sessions.Dispose();
+        Assert.True(activeToken.IsCancellationRequested);
+        var callbackRan = false;
+        using var registration = activeToken.Register(() => callbackRan = true);
+        Assert.True(callbackRan);
+        Assert.Empty(states.Keys.Cast<object>());
+        Assert.Throws<ObjectDisposedException>(() => sessions.Create());
+    }
+
+    [Fact]
+    public void LoginRateLimiter_LocksOnlyTheFailingSource()
+    {
+        var limiter = new LoginRateLimiter();
+        for (var index = 0; index < 5; index++) limiter.Failure("127.0.0.1");
+        Assert.True(limiter.IsLocked("127.0.0.1"));
+        Assert.False(limiter.IsLocked("192.168.1.10"));
+    }
+
+    [Fact]
+    public void ConcurrentLoginFailuresReportOneLockTransitionAndSuccessResetsTheSource()
+    {
+        var limiter = new LoginRateLimiter();
+        var transitions = 0;
+        Parallel.For(0, 100, _ =>
+        {
+            if (limiter.Failure("192.168.1.10")) Interlocked.Increment(ref transitions);
+        });
+        Assert.Equal(1, transitions);
+        Assert.True(limiter.IsLocked("192.168.1.10"));
+        limiter.Success("192.168.1.10");
+        Assert.False(limiter.IsLocked("192.168.1.10"));
+        for (var index = 0; index < 4; index++) Assert.False(limiter.Failure("192.168.1.10"));
+        Assert.True(limiter.Failure("192.168.1.10"));
+    }
+
+    [Fact]
+    public void LanBinding_FollowsUserSettingRegardlessOfPasswordState()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = new WinPilotSettings { LanAccessEnabled = true };
+            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
+
+            var paths = PortableDataPaths.Create(root);
+            Directory.CreateDirectory(paths.DataDirectory);
+            File.WriteAllText(paths.AuthenticationFile, "not valid json");
+            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
+
+            var store = new AuthStore(paths);
+            store.SetInitialPassword("a secure passphrase");
+            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
+            Assert.False(WebAccessPolicy.CanListenOnLan(new WinPilotSettings { LanAccessEnabled = false }));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AuthStore_RejectsLegacyOrUnexpectedFields()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            var store = new AuthStore(paths);
+            store.SetInitialPassword("a secure passphrase");
+            var legacy = File.ReadAllText(paths.AuthenticationFile).Replace("{", "{\"Algorithm\":\"PBKDF2-SHA512\",");
+            File.WriteAllText(paths.AuthenticationFile, legacy);
+            Assert.False(store.IsConfigured);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+}
