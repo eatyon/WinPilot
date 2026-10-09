@@ -13,7 +13,7 @@ public sealed class UpdateSourceTest
     [InlineData(UpdateSource.Cnb, "## 改进\n- 更新说明")]
     [InlineData(UpdateSource.GitHub, null)]
     [InlineData(UpdateSource.Cnb, null)]
-    public async Task ReleaseNotesFollowSelectedSourceAndCheckCache(UpdateSource source, string? notes)
+    public async Task ReleaseNotesFollowSelectedSourceOnEveryCheck(UpdateSource source, string? notes)
     {
         var requests = 0;
         using var service = Create((request, _) =>
@@ -25,10 +25,7 @@ public sealed class UpdateSourceTest
         await service.SaveSettingsAsync(new() { Source = source }, CancellationToken.None);
         var result = await service.CheckAsync(CancellationToken.None);
         Assert.Equal(notes ?? "", result.ReleaseNotes);
-        Assert.Same(result, await service.CheckAsync(CancellationToken.None));
-        Assert.Equal(1, requests);
-        await service.SaveSettingsAsync(new() { Source = source }, CancellationToken.None);
-        await service.CheckAsync(CancellationToken.None);
+        Assert.Equal(notes ?? "", (await service.CheckAsync(CancellationToken.None)).ReleaseNotes);
         Assert.Equal(2, requests);
     }
 
@@ -154,7 +151,7 @@ public sealed class UpdateSourceTest
     }
 
     [Fact]
-    public async Task SettingsInvalidateCacheAndFailuresNeverSwitchSource()
+    public async Task ChecksFollowSettingsAndFailuresNeverSwitchSource()
     {
         var hosts = new List<string>();
         using var service = Create((request, _) =>
@@ -250,7 +247,7 @@ public sealed class UpdateSourceTest
     }
 
     [Fact]
-    public async Task FailedSaveKeepsPersistedSettingsAndCheckCache()
+    public async Task FailedSaveKeepsPersistedSettingsAndSelectedSource()
     {
         var directory = Path.Combine(Path.GetTempPath(), "winpilot-update-save-failure", Guid.NewGuid().ToString("N"));
         var file = Path.Combine(directory, "config.json");
@@ -258,31 +255,39 @@ public sealed class UpdateSourceTest
         {
             using var service = Create((_, _) => Task.FromResult(Json(Release("v2.0.0", UpdateSource.GitHub))), file);
             var original = File.ReadAllText(file);
-            var cached = await service.CheckAsync(CancellationToken.None);
+            var result = await service.CheckAsync(CancellationToken.None);
             Directory.CreateDirectory(file + ".tmp");
             await Assert.ThrowsAnyAsync<Exception>(() => service.SaveSettingsAsync(new() { Source = UpdateSource.Cnb }, CancellationToken.None));
             Assert.Equal(UpdateSource.GitHub, service.GetSettings().Source);
             Assert.Equal(original, File.ReadAllText(file));
-            Assert.Same(cached, await service.CheckAsync(CancellationToken.None));
+            Assert.Equal(result, await service.CheckAsync(CancellationToken.None));
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
     [Fact]
-    public async Task InstallBlocksSettingsUntilFailureAndIsIndependentOfRequestToken()
+    public async Task InstallCapturesCheckedVersionAndIsIndependentOfRequestToken()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var service = Create(async (_, token) =>
+        var checks = 0;
+        using var service = Create(async (request, token) =>
         {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                return Json(Release($"v{++checks + 1}.0.0", UpdateSource.GitHub));
+            Assert.Contains("/v2.0.0/", request.RequestUri.AbsolutePath);
             entered.TrySetResult();
             await release.Task.WaitAsync(token);
             return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         });
+        await service.CheckAsync(CancellationToken.None);
         using var cancellation = new CancellationTokenSource();
-        Assert.True(await service.TryStartInstallAsync(0, cancellation.Token));
+        var target = new UpdateInstallRequest("2.0.0", UpdateSource.GitHub, UpdateChannel.Stable);
+        Assert.True(await service.TryStartInstallAsync(target, 0, cancellation.Token));
         cancellation.Cancel();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(await service.TryStartInstallAsync(target, 0, CancellationToken.None));
+        Assert.Equal("3.0.0", (await service.CheckAsync(CancellationToken.None)).LatestVersion);
         var save = service.SaveSettingsAsync(new() { Source = UpdateSource.Cnb }, CancellationToken.None);
         release.SetResult();
         await Assert.ThrowsAsync<InvalidOperationException>(() => save);

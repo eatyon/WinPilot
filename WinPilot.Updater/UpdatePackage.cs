@@ -45,7 +45,7 @@ internal static class UpdatePackage
         var packageRoot = Path.Combine(stagingDirectory, "WinPilot");
         if (!File.Exists(Path.Combine(packageRoot, "WinPilot.exe"))
             || !File.Exists(Path.Combine(packageRoot, "WinPilot.Updater.exe"))
-            || !Directory.Exists(Path.Combine(packageRoot, "wwwroot")))
+            || !File.Exists(Path.Combine(packageRoot, "wwwroot", "index.html")))
             throw new InvalidOperationException("更新包内容不完整");
         return packageRoot;
     }

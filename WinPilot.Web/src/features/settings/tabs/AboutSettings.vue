@@ -31,6 +31,7 @@ let updateNotesGeneration = 0;
 type UpdateSource = 'GitHub' | 'Cnb';
 type UpdateChannel = 'Stable' | 'Preview';
 type UpdateSettings = { source: UpdateSource; channel: UpdateChannel };
+const checkedUpdateSettings = ref<UpdateSettings>({ source: 'GitHub', channel: 'Stable' });
 const draftSource = ref<UpdateSource>('GitHub');
 const draftChannel = ref<UpdateChannel>('Stable');
 const loadingUpdateSettings = ref(false);
@@ -159,6 +160,7 @@ async function checkForUpdates() {
     else if (result.updateAvailable && result.latestVersion) {
       updateReleaseUrl.value = result.releaseUrl ?? releaseUrl;
       updateVersion.value = result.latestVersion;
+      checkedUpdateSettings.value = { source: result.source, channel: result.channel };
       updateNotes.value = result.releaseNotes ?? '';
       canInstallUpdate.value = result.canInstall === true;
       updateMessage.value = `发现新版本 v${result.latestVersion}${canInstallUpdate.value ? '' : '，此版本暂不支持在线安装'}`;
@@ -182,8 +184,15 @@ async function installUpdate() {
   updateReconnectDeadline = 0;
   updateMessageType.value = 'neutral';
   try {
-    const response = await requests.fetch('/api/update/install', { method: 'POST' });
-    if (!response.ok) throw new Error();
+    const response = await requests.fetch('/api/update/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: updateVersion.value, ...checkedUpdateSettings.value }),
+    });
+    if (!response.ok) {
+      const error = await requests.json(response).catch(() => ({})) as { message?: string };
+      throw new Error(error.message || '无法启动在线更新，请前往版本发布页面手动下载');
+    }
     updateMessage.value = '正在准备更新…';
     await loadUpdateStatus();
   } catch (cause) {
@@ -192,7 +201,7 @@ async function installUpdate() {
       await loadUpdateStatus();
       return;
     }
-    finishUpdate('无法启动在线更新，请前往版本发布页面手动下载', 'error');
+    finishUpdate(cause instanceof Error ? cause.message : '无法启动在线更新，请前往版本发布页面手动下载', 'error');
   }
 }
 

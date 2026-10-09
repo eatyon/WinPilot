@@ -54,7 +54,7 @@ public sealed class UpdatePackageTest : IDisposable
     [InlineData("WinPilot/wwwroot/index.html")]
     public async Task MissingRequiredComponentRejectsPackage(string missing)
     {
-        var entries = new[] { "WinPilot/WinPilot.exe", "WinPilot/WinPilot.Updater.exe", "WinPilot/wwwroot/index.html" };
+        var entries = new[] { "WinPilot/WinPilot.exe", "WinPilot/WinPilot.Updater.exe", "WinPilot/wwwroot/index.html", "WinPilot/wwwroot/assets/app.js" };
         var (path, hash) = Package(entries.Where(entry => entry != missing));
         await Assert.ThrowsAsync<InvalidOperationException>(() => UpdatePackage.ExtractVerifiedAsync(path, hash, Path.Combine(root, "staging")));
     }

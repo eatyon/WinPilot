@@ -38,6 +38,10 @@ public sealed class UpdateSettingsEndpointTest
             var initial = await client.GetFromJsonAsync<Dictionary<string, string>>("/api/update/settings");
             Assert.Equal("GitHub", initial!["source"]);
             Assert.Equal("Stable", initial["channel"]);
+            using var rejectedInstall = await client.PostAsJsonAsync("/api/update/install", new { version = "2.0.0", source = "GitHub", channel = "Stable" });
+            Assert.Equal(HttpStatusCode.Conflict, rejectedInstall.StatusCode);
+            var installError = await rejectedInstall.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            Assert.Equal("更新信息已变化，请重新检查更新", installError.GetProperty("message").GetString());
             Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync("/api/update/settings", new { source = "Cnb", channel = "Preview" })).StatusCode);
             Assert.Equal(UpdateSource.Cnb, WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Updates.Source);
             Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/update/settings", new { source = 99, channel = "Stable" })).StatusCode);

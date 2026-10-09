@@ -14,9 +14,8 @@ public sealed class UpdateCheckService : IDisposable
     private readonly string currentDisplayVersion;
     private UpdateSettings settings;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private UpdateCheckResult? cachedResult;
-    private UpdateRelease? cachedRelease;
-    private DateTime cachedAtUtc;
+    private UpdateCheckResult? lastResult;
+    private UpdateRelease? lastRelease;
     private readonly object installStatusGate = new();
     private UpdateInstallStatus installStatus = new("Idle", 0, null, "");
     private int installRunning;
@@ -50,8 +49,8 @@ public sealed class UpdateCheckService : IDisposable
             if (Volatile.Read(ref installRunning) != 0) throw new InvalidOperationException("更新任务正在进行，无法修改更新设置");
             if (configurationFile is not null) WinPilotSettings.Update(configurationFile, current => current with { Updates = next });
             Volatile.Write(ref settings, next);
-            cachedResult = null;
-            cachedRelease = null;
+            lastResult = null;
+            lastRelease = null;
             logger.LogInformation("更新设置已保存，更新源：{Source}，版本通道：{Channel}", SourceName(next.Source), ChannelName(next.Channel));
             return next;
         }
@@ -59,38 +58,32 @@ public sealed class UpdateCheckService : IDisposable
     }
 
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken)
-        => (await GetUpdateAsync(cancellationToken)).Result;
-
-    private async Task<(UpdateCheckResult Result, UpdateRelease? Release)> GetUpdateAsync(CancellationToken cancellationToken)
     {
         await gate.WaitAsync(cancellationToken);
         try
         {
             var selected = settings;
-            if (cachedResult is not null && cachedResult.Source == selected.Source && cachedResult.Channel == selected.Channel
-                && DateTime.UtcNow - cachedAtUtc < TimeSpan.FromMinutes(10)) return (cachedResult, cachedRelease);
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(TimeSpan.FromSeconds(60));
-                cachedRelease = await releases.GetAsync(selected, timeout.Token);
-                var updateAvailable = cachedRelease is not null && cachedRelease.Version.CompareTo(currentVersion) > 0;
-                cachedResult = new UpdateCheckResult(currentDisplayVersion, cachedRelease?.Version.Value, updateAvailable,
-                    cachedRelease?.ReleaseUrl, updateAvailable && cachedRelease!.CanInstall, false, selected.Source, selected.Channel, cachedRelease?.ReleaseNotes ?? "");
+                lastRelease = await releases.GetAsync(selected, timeout.Token);
+                var updateAvailable = lastRelease is not null && lastRelease.Version.CompareTo(currentVersion) > 0;
+                lastResult = new UpdateCheckResult(currentDisplayVersion, lastRelease?.Version.Value, updateAvailable,
+                    lastRelease?.ReleaseUrl, updateAvailable && lastRelease!.CanInstall, false, selected.Source, selected.Channel, lastRelease?.ReleaseNotes ?? "");
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
                 logger.LogWarning(exception, "检查更新失败，更新源：{Source}，版本通道：{Channel}", SourceName(selected.Source), ChannelName(selected.Channel));
-                cachedRelease = null;
-                cachedResult = new UpdateCheckResult(currentDisplayVersion, null, false, null, false, true, selected.Source, selected.Channel, "");
+                lastRelease = null;
+                lastResult = new UpdateCheckResult(currentDisplayVersion, null, false, null, false, true, selected.Source, selected.Channel, "");
             }
-            cachedAtUtc = DateTime.UtcNow;
-            if (!cachedResult.CheckFailed)
+            if (!lastResult.CheckFailed)
             {
-                logger.LogDebug("更新检查完成，更新源：{Source}，版本通道：{Channel}，当前版本：{CurrentVersion}，最新版本：{LatestVersion}", SourceName(selected.Source), ChannelName(selected.Channel), cachedResult.CurrentVersion, cachedResult.LatestVersion ?? "暂无发布版本");
+                logger.LogDebug("更新检查完成，更新源：{Source}，版本通道：{Channel}，当前版本：{CurrentVersion}，最新版本：{LatestVersion}", SourceName(selected.Source), ChannelName(selected.Channel), lastResult.CurrentVersion, lastResult.LatestVersion ?? "暂无发布版本");
             }
-            return (cachedResult, cachedRelease);
+            return lastResult;
         }
         finally { gate.Release(); }
     }
@@ -100,28 +93,30 @@ public sealed class UpdateCheckService : IDisposable
         lock (installStatusGate) return installStatus;
     }
 
-    public async Task<bool> TryStartInstallAsync(int parentProcessId, CancellationToken cancellationToken)
+    public async Task<bool> TryStartInstallAsync(UpdateInstallRequest target, int parentProcessId, CancellationToken cancellationToken)
     {
         await gate.WaitAsync(cancellationToken);
         try
         {
-            if (Interlocked.CompareExchange(ref installRunning, 1, 0) != 0) return false;
+            if (Volatile.Read(ref installRunning) != 0) return false;
+            if (lastResult is not { UpdateAvailable: true, CheckFailed: false } result || lastRelease is not { } release
+                || target.Version != result.LatestVersion || target.Source != result.Source || target.Channel != result.Channel)
+                throw new InvalidOperationException("更新信息已变化，请重新检查更新");
+            Interlocked.Exchange(ref installRunning, 1);
             SetInstallStatus("Preparing", 0, null, "正在准备更新…");
-            _ = Task.Run(() => DownloadAndLaunchAsync(parentProcessId));
+            _ = Task.Run(() => DownloadAndLaunchAsync(parentProcessId, result, release));
             return true;
         }
         finally { gate.Release(); }
     }
 
-    private async Task DownloadAndLaunchAsync(int parentProcessId)
+    private async Task DownloadAndLaunchAsync(int parentProcessId, UpdateCheckResult result, UpdateRelease release)
     {
         string? updateDirectory = null;
         try
         {
             logger.LogInformation("开始准备更新，主程序进程 ID：{ParentProcessId}", parentProcessId);
-            var (result, release) = await GetUpdateAsync(CancellationToken.None);
-            if (result.CheckFailed || !result.UpdateAvailable) throw new InvalidOperationException("当前没有可安装的更新");
-            if (release is null || !release.CanInstall) throw new InvalidOperationException("此版本暂不支持在线更新，请前往版本发布页面手动下载");
+            if (!release.CanInstall) throw new InvalidOperationException("此版本暂不支持在线更新，请前往版本发布页面手动下载");
             var updaterPath = Path.Combine(AppContext.BaseDirectory, "WinPilot.Updater.exe");
             if (!File.Exists(updaterPath)) throw new InvalidOperationException("当前安装缺少更新器，请手动下载最新版本");
 
@@ -167,7 +162,7 @@ public sealed class UpdateCheckService : IDisposable
         }
     }
 
-    private async Task DownloadFileAsync(Uri url, string destination, Action<long, long?> progress, CancellationToken cancellationToken)
+    internal async Task DownloadFileAsync(Uri url, string destination, Action<long, long?> progress, CancellationToken cancellationToken, TimeSpan? idleTimeout = null)
     {
         using var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -175,9 +170,18 @@ public sealed class UpdateCheckService : IDisposable
         await using var target = File.Create(destination);
         var buffer = new byte[81920];
         long downloaded = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        while (true)
         {
+            timeout.CancelAfter(idleTimeout ?? TimeSpan.FromSeconds(60));
+            int read;
+            try { read = await source.ReadAsync(buffer.AsMemory(), timeout.Token); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException("下载更新包超时，请重试");
+            }
+            timeout.CancelAfter(Timeout.InfiniteTimeSpan);
+            if (read == 0) break;
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
             downloaded += read;
             progress(downloaded, response.Content.Headers.ContentLength);
@@ -202,4 +206,5 @@ public sealed class UpdateCheckService : IDisposable
 }
 
 public sealed record UpdateCheckResult(string CurrentVersion, string? LatestVersion, bool UpdateAvailable, string? ReleaseUrl, bool CanInstall, bool CheckFailed, UpdateSource Source, UpdateChannel Channel, string ReleaseNotes);
+public sealed record UpdateInstallRequest(string Version, UpdateSource Source, UpdateChannel Channel);
 public sealed record UpdateInstallStatus(string State, long DownloadedBytes, long? TotalBytes, string Message);

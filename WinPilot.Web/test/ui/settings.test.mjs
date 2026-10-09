@@ -314,6 +314,27 @@ test('update status polling schedules only after the preceding request completes
   } finally { f.dispose(); }
 });
 
+test('install submits the checked version and channel and displays a changed-target rejection', async () => {
+  const f = fixture('tabs/AboutSettings.vue', 'checkForUpdates,installUpdate,installingUpdate,canInstallUpdate,updateMessage,updateMessageType');
+  try {
+    const checking = f.subject.checkForUpdates();
+    f.calls[0].resolve(response({ source: 'Cnb', channel: 'Preview', updateAvailable: true, latestVersion: '2.0.0-beta.1', canInstall: true }));
+    await checking;
+    const install = f.subject.installUpdate();
+    assert.equal(f.calls[1].url, '/api/update/install');
+    assert.equal(f.calls[1].init.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(f.calls[1].init.body), { version: '2.0.0-beta.1', source: 'Cnb', channel: 'Preview' });
+    f.calls[1].resolve(response({ message: '更新信息已变化，请重新检查更新' }, false));
+    await install;
+    assert.equal(f.subject.updateMessage.value, '更新信息已变化，请重新检查更新');
+    assert.equal(f.subject.updateMessageType.value, 'error');
+    assert.equal(f.subject.installingUpdate.value, false);
+    assert.equal(f.subject.canInstallUpdate.value, false);
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.timers.size, 0);
+  } finally { f.dispose(); }
+});
+
 for (const actualVersion of ['2.0.0', '1.0.0', '3.0.0']) {
   test('current about page completes update after reconnection: ' + actualVersion, async () => {
     const f = fixture('tabs/AboutSettings.vue', 'version,updateVersion,updateReleaseUrl,updateNotes,canInstallUpdate,installUpdate,installingUpdate,updateMessage,updateMessageType');

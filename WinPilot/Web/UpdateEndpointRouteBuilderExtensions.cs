@@ -20,10 +20,14 @@ public static class UpdateEndpointRouteBuilderExtensions
         });
         endpoints.MapPost("/api/update/check", async (UpdateCheckService updates, HttpContext context) => Results.Ok(await updates.CheckAsync(context.RequestAborted)));
         endpoints.MapGet("/api/update/status", (UpdateCheckService updates) => Results.Ok(updates.GetInstallStatus()));
-        endpoints.MapPost("/api/update/install", async (UpdateCheckService updates, HttpContext context) =>
+        endpoints.MapPost("/api/update/install", async (UpdateInstallRequest target, UpdateCheckService updates, HttpContext context) =>
         {
-            if (!await updates.TryStartInstallAsync(Environment.ProcessId, context.RequestAborted)) return Results.Conflict(new { message = "更新任务正在进行" });
-            return Results.Accepted();
+            try
+            {
+                if (!await updates.TryStartInstallAsync(target, Environment.ProcessId, context.RequestAborted)) return Results.Conflict(new { message = "更新任务正在进行" });
+                return Results.Accepted();
+            }
+            catch (InvalidOperationException exception) { return Results.Conflict(new { message = exception.Message }); }
         });
 
         return endpoints;
