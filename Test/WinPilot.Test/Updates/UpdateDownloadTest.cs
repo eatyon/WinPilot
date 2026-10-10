@@ -22,8 +22,11 @@ public sealed class UpdateDownloadTest : IDisposable
         var download = service.DownloadFileAsync(new("https://example.test/package.zip"), Destination,
             (_, _) => { }, cancellation.Token, TimeSpan.FromMilliseconds(200));
         await source.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        if (cancelCaller) cancellation.Cancel();
-        if (cancelCaller) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+        if (cancelCaller)
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+        }
         else Assert.Equal("下载更新包超时，请重试", (await Assert.ThrowsAsync<TimeoutException>(() => download)).Message);
         Assert.True(source.Disposed);
         using var file = File.Open(Destination, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
@@ -32,14 +35,15 @@ public sealed class UpdateDownloadTest : IDisposable
     [Fact]
     public async Task ContinuousProgressResetsIdleTimeoutAndCompletesLongerDownload()
     {
-        var source = new DownloadStream(TimeSpan.FromMilliseconds(200), 6);
+        const int chunks = 20;
+        var source = new DownloadStream(TimeSpan.FromMilliseconds(200), chunks);
         using var service = Create(source);
         var progress = new List<long>();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await service.DownloadFileAsync(new("https://example.test/package.zip"), Destination,
-            (bytes, _) => progress.Add(bytes), cancellation.Token, TimeSpan.FromSeconds(1));
-        Assert.Equal(new long[] { 1, 2, 3, 4, 5, 6 }, progress);
-        Assert.Equal(new byte[] { 1, 1, 1, 1, 1, 1 }, await File.ReadAllBytesAsync(Destination));
+            (bytes, _) => progress.Add(bytes), cancellation.Token, TimeSpan.FromSeconds(3));
+        Assert.Equal(Enumerable.Range(1, chunks).Select(index => (long)index), progress);
+        Assert.Equal(Enumerable.Repeat((byte)1, chunks), await File.ReadAllBytesAsync(Destination));
         Assert.True(source.Disposed);
     }
 
