@@ -425,19 +425,22 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SecurityNotificationSettings_HaveDefaultsAndRejectEmptySpecificChannels()
+    public async Task SecurityNotificationSettings_HaveDefaultsAndValidateOneChannel()
     {
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
         using var defaultsResponse = await client.GetAsync("/api/security/notifications");
         defaultsResponse.EnsureSuccessStatusCode();
         using var defaults = System.Text.Json.JsonDocument.Parse(await defaultsResponse.Content.ReadAsStringAsync());
-        Assert.Equal("AllEnabled", defaults.RootElement.GetProperty("deliveryMode").GetString());
+        Assert.Equal("", defaults.RootElement.GetProperty("channel").GetString());
         Assert.Equal(SecurityEventDefaults.Notified.Select(type => type.ToString()), defaults.RootElement.GetProperty("events").EnumerateArray().Select(item => item.GetString()));
 
-        var invalid = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet" }, deliveryMode = "SpecificChannels", channels = Array.Empty<string>() });
+        using var invalid = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet" }, channel = "unknown" });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
-        var saved = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet", "LoginSourceLocked" }, deliveryMode = "SpecificChannels", channels = new[] { "telegram", "webhook" } });
+        using var saved = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet", "LoginSourceLocked" }, channel = "telegram" });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        using var savedJson = System.Text.Json.JsonDocument.Parse(await saved.Content.ReadAsStringAsync());
+        Assert.Equal("telegram", savedJson.RootElement.GetProperty("channel").GetString());
+        Assert.Equal(2, savedJson.RootElement.EnumerateObject().Count());
     }
 
     [Fact]

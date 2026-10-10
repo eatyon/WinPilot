@@ -88,7 +88,7 @@ public sealed class TaskActionPersistence
         TaskActionType.Delay => new() { Type = action.Type.ToString(), DelaySeconds = action.DelaySeconds, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Keyboard => new() { Type = action.Type.ToString(), Keys = action.Keys?.ToArray() ?? [], ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Shell => new() { Type = action.Type.ToString(), Shell = action.Shell ?? "", Command = action.Command ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.SendNotification or TaskActionType.SendNotificationToChannel => new() { Type = action.Type.ToString(), NotificationTitle = EmptyToNull(action.NotificationTitle), NotificationContent = action.NotificationContent ?? "", NotificationChannel = EmptyToNull(action.NotificationChannel), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
+        TaskActionType.SendNotification => new() { Type = action.Type.ToString(), NotificationTitle = EmptyToNull(action.NotificationTitle), NotificationContent = action.NotificationContent ?? "", NotificationChannel = EmptyToNull(action.NotificationChannel), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Extension => new() { Type = action.Type.ToString(), PluginId = action.PluginId, ActionId = action.ActionId, Parameters = action.Parameters, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         _ => throw new JsonException($"动作类型无效：{action.Type}")
     };

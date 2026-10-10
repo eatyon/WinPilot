@@ -8,13 +8,9 @@ import AppMultiSelect from '../../../components/AppMultiSelect.vue';
 import { showToast } from '../../../ui/toast';
 import { safeModeEnabled } from '../../security/safeMode';
 
-type DeliveryMode = 'AllEnabled' | 'SpecificChannels';
-type NotificationMode = DeliveryMode | 'Disabled';
 type SecurityNotificationSettings = {
-  enabled: boolean;
+  channel: string;
   events: string[];
-  deliveryMode: DeliveryMode;
-  channels: string[];
 };
 
 const requests = createSettingsRequests();
@@ -32,10 +28,8 @@ const saving = ref(false);
 const notificationSaving = ref(false);
 const notificationError = ref('');
 const notifications = reactive<SecurityNotificationSettings>({
-  enabled: false,
+  channel: '',
   events: [],
-  deliveryMode: 'AllEnabled',
-  channels: [],
 });
 const eventOptions = [
   ['PasswordSet', '管理员密码已设置/修改'],
@@ -47,29 +41,7 @@ const eventOptions = [
   ['SessionsRevoked', 'Session 被撤销'],
   ['SecurityNotificationSettingsChanged', '安全通知配置已修改'],
 ] as const;
-const channelOptions = [
-  ['windows', 'Windows 通知'],
-  ['webhook', 'Webhook'],
-  ['telegram', 'Telegram'],
-  ['workweixin', '企业微信'],
-  ['feishu', '飞书'],
-  ['onebot', 'OneBot'],
-  ['qqbot', 'QQBot'],
-] as const;
-
-const mode = computed<NotificationMode>(() =>
-  notifications.enabled ? notifications.deliveryMode : 'Disabled',
-);
-const modeOptions = [
-  { value: 'Disabled', label: '关闭' },
-  { value: 'AllEnabled', label: '所有已开启渠道' },
-  { value: 'SpecificChannels', label: '指定渠道' },
-];
-function selectedLabel(values: string[], options: readonly (readonly [string, string])[], empty: string) {
-  const labels = options.filter(([value]) => values.includes(value)).map(([, label]) => label);
-  return labels.length ? labels.join('、') : empty;
-}
-const channelsLabel = computed(() => selectedLabel(notifications.channels, channelOptions, '请选择渠道'));
+const channelOptions = ref<{ value: string; label: string }[]>([]);
 const eventsLabel = computed(() => {
   const count = eventOptions.filter(([value]) => eventSelected(value)).length;
   return count ? `${count} 个事件` : '请选择事件';
@@ -82,17 +54,22 @@ function eventSelected(value: string) {
 
 onMounted(async () => {
   try {
-    const [passwordResponse, notificationsResponse] = await Promise.all([
+    const [passwordResponse, notificationsResponse, channelsResponse] = await Promise.all([
       requests.fetch('/api/security/password'),
       requests.fetch('/api/security/notifications'),
+      requests.fetch('/api/notification-channels'),
     ]);
-    if (!passwordResponse.ok || !notificationsResponse.ok) throw new Error('无法读取安全设置');
-    const [password, settings] = await Promise.all([
+    if (!passwordResponse.ok || !notificationsResponse.ok || !channelsResponse.ok) throw new Error('无法读取安全设置');
+    const [password, settings, channels] = await Promise.all([
       requests.json<{ configured: boolean }>(passwordResponse),
       requests.json<SecurityNotificationSettings>(notificationsResponse),
+      requests.json<{ value: string; label: string }[]>(channelsResponse),
     ]);
     configured.value = Boolean(password.configured);
     Object.assign(notifications, settings);
+    channelOptions.value = [{ value: '', label: '禁用' }, ...channels.map(option => ({
+      value: option.value ? option.value.toLowerCase() : 'all-enabled', label: option.label,
+    }))];
     settingsLoaded.value = true;
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
@@ -112,13 +89,6 @@ function toggle(values: string[], value: string, checked: boolean) {
 function toggleEvent(value: string, checked: boolean) {
   toggle(notifications.events, value, checked);
   if (value === 'PasswordSet') toggle(notifications.events, 'PasswordChanged', checked);
-}
-function selectMode(mode: NotificationMode) {
-  if (mode === 'Disabled') notifications.enabled = false;
-  else {
-    notifications.enabled = true;
-    notifications.deliveryMode = mode;
-  }
 }
 async function savePassword() {
   if (safeModeEnabled.value || !settingsLoaded.value || saving.value || !requests.active) return;
@@ -154,14 +124,6 @@ async function savePassword() {
 async function saveNotifications() {
   if (safeModeEnabled.value || !settingsLoaded.value || notificationSaving.value || !requests.active) return;
   notificationError.value = '';
-  if (
-    notifications.enabled &&
-    notifications.deliveryMode === 'SpecificChannels' &&
-    notifications.channels.length === 0
-  ) {
-    notificationError.value = '指定渠道时至少选择一个通知渠道';
-    return;
-  }
   notificationSaving.value = true;
   try {
     const response = await requests.fetch('/api/security/notifications', {
@@ -267,31 +229,12 @@ async function saveNotifications() {
       </div>
       <div class="security-notification-form">
         <label class="field-control">
-          <span>通知模式</span>
-          <AppSelect
-            :model-value="mode"
-            :options="modeOptions"
-            :disabled="loading || !settingsLoaded || notificationSaving"
-            @change="selectMode"
-          />
-        </label>
-        <label
-          v-if="notifications.enabled && notifications.deliveryMode === 'SpecificChannels'"
-          class="field-control"
-        >
           <span>通知渠道</span>
-          <AppMultiSelect
-            :model-value="notifications.channels"
-            :options="channelOptions.map(([value, label]) => ({ value, label }))"
-            :label="channelsLabel"
-            :disabled="
-              loading || !settingsLoaded ||
-              notificationSaving ||
-              !notifications.enabled ||
-              notifications.deliveryMode !== 'SpecificChannels'
-            "
+          <AppSelect
+            v-model="notifications.channel"
+            :options="channelOptions"
+            :disabled="loading || !settingsLoaded || notificationSaving"
             aria-label="通知渠道"
-            @toggle="(value, checked) => toggle(notifications.channels, value, checked)"
           />
         </label>
         <label class="field-control security-notification-events">

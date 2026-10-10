@@ -369,10 +369,7 @@ public sealed class TaskService : BackgroundService
                 logger.LogInformation("终端命令{Result}，终端类型：{Shell}", result.ReceivedOutput ? "已收到输出" : "等待输出超时，暂未确认执行结果", result.Shell);
                 break;
             case TaskActionType.SendNotification:
-                await SendConfiguredNotification(action, context, null, false);
-                break;
-            case TaskActionType.SendNotificationToChannel:
-                await SendConfiguredNotification(action, context, action.NotificationChannel, true);
+                await SendConfiguredNotification(action, context);
                 break;
             case TaskActionType.Extension:
                 await ExecuteExtension(action, context);
@@ -380,8 +377,9 @@ public sealed class TaskService : BackgroundService
         }
     }
 
-    private async Task SendConfiguredNotification(TaskAction action, PluginTaskRunContext context, string? channel, bool ignoreEnabled, PluginImageContent? pluginImage = null)
+    private async Task SendConfiguredNotification(TaskAction action, PluginTaskRunContext context, PluginImageContent? pluginImage = null)
     {
+        var channel = action.NotificationChannel;
         var (contentTemplate, directImagePath) = ExtractDirectImagePath(action.NotificationContent);
         var contentNames = VariableResolver.ExtractNames(contentTemplate);
         var contentImageNames = ValidateImageVariables(contentTemplate, variableCatalog);
@@ -412,7 +410,7 @@ public sealed class TaskService : BackgroundService
         var (imagePath, temporaryImagePath) = pluginImage is null ? await ResolveNotificationImageAsync(imageTemplate, resolvedContext) : await ResolvePluginImageAsync(pluginImage, context.CancellationToken);
         try
         {
-            await SendNotification(new(action.NotificationTitle ?? "WinPilot 通知", content, imagePath), channel, context.CancellationToken, ignoreEnabled);
+            await SendNotification(new(action.NotificationTitle ?? "WinPilot 通知", content, imagePath), channel, context.CancellationToken, !string.IsNullOrWhiteSpace(channel));
             if (temporaryImagePath is not null)
                 await Task.Delay(TimeSpan.FromSeconds(2), context.CancellationToken);
         }
@@ -579,7 +577,6 @@ public sealed class TaskService : BackgroundService
         TaskActionType.Keyboard => "发送按键",
         TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
         TaskActionType.SendNotification => "发送通知",
-        TaskActionType.SendNotificationToChannel => $"发送通知到 {action.NotificationChannel}",
         TaskActionType.Extension => "插件扩展",
         _ => action.Type.ToString()
     };
@@ -840,10 +837,8 @@ public sealed class TaskService : BackgroundService
                     throw new InvalidOperationException("Shell 仅支持 CMD 或 PowerShell");
                 case TaskActionType.Shell when string.IsNullOrWhiteSpace(action.Command):
                     throw new InvalidOperationException("请输入 Shell 命令");
-                case TaskActionType.SendNotification or TaskActionType.SendNotificationToChannel when string.IsNullOrWhiteSpace(action.NotificationContent):
+                case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
                     throw new InvalidOperationException("请输入通知内容或图片变量");
-                case TaskActionType.SendNotificationToChannel when string.IsNullOrWhiteSpace(action.NotificationChannel):
-                    throw new InvalidOperationException("请选择通知渠道");
             }
     }
 
@@ -903,8 +898,8 @@ public sealed class TaskService : BackgroundService
             var image = values.TryGetValue("image", out var imageValue) ? imageValue as PluginImageContent : null;
             if (values.TryGetValue("image", out imageValue) && imageValue is not null && image is null)
                 throw new InvalidOperationException("image 必须是 PluginImageContent");
-            var notification = new TaskAction(string.IsNullOrWhiteSpace(channel) ? TaskActionType.SendNotification : TaskActionType.SendNotificationToChannel, NotificationTitle: GetString(values, "title") ?? "", NotificationContent: GetString(values, "content") ?? "", NotificationChannel: channel);
-            await SendConfiguredNotification(notification, context, channel, !string.IsNullOrWhiteSpace(channel), image);
+            var notification = new TaskAction(TaskActionType.SendNotification, NotificationTitle: GetString(values, "title") ?? "", NotificationContent: GetString(values, "content") ?? "", NotificationChannel: channel);
+            await SendConfiguredNotification(notification, context, image);
             return;
         }
 
@@ -959,7 +954,7 @@ public sealed class TaskService : BackgroundService
 
     private void ValidateNotificationActions(WinPilotTask task)
     {
-        foreach (var action in task.Actions.Where(action => action.Type is TaskActionType.SendNotification or TaskActionType.SendNotificationToChannel))
+        foreach (var action in task.Actions.Where(action => action.Type == TaskActionType.SendNotification))
             ValidateNotificationImages(action.NotificationContent, variableCatalog);
     }
 

@@ -5,7 +5,9 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
+using WinPilot.Features.Notifications;
 using WinPilot.Features.Tasks;
 using WinPilot.Web;
 
@@ -13,6 +15,31 @@ namespace WinPilot.Test;
 
 public sealed class TaskServiceTest
 {
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("QQBot", true)]
+    public async Task NotificationActionUsesSelectedChannelAndPersistsIt(string? channel, bool ignoreEnabled)
+    {
+        var notifications = new RecordingNotifications();
+        await using var fixture = new TaskServiceFixture(notifications);
+        fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.SendNotification, NotificationContent: "测试通知", NotificationChannel: channel)]));
+        var saved = Assert.Single(fixture.Tasks.GetAll()).Actions.Single();
+        Assert.Equal(TaskActionType.SendNotification, saved.Type);
+        Assert.Equal(channel ?? "", saved.NotificationChannel);
+        var persisted = TaskActionPersistence.From(saved);
+        Assert.Equal(string.IsNullOrWhiteSpace(channel) ? null : channel, persisted.NotificationChannel);
+        var restored = persisted.ToAction();
+        Assert.Equal(TaskActionType.SendNotification, restored.Type);
+        Assert.Equal(persisted.NotificationChannel, restored.NotificationChannel);
+        fixture.Tasks.RunNow("Notification");
+        var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("测试通知", sent.Message.Content);
+        Assert.Equal(saved.NotificationChannel, sent.Channel);
+        Assert.Equal(ignoreEnabled, sent.IgnoreEnabled);
+    }
+
     [Fact]
     public async Task TaskApiReturnsOnlyFieldsForTheSelectedActionType()
     {
@@ -312,4 +339,13 @@ public sealed class TaskServiceTest
         Assert.False(fixture.Tasks.GetAll().Single(task => task.Name == "已关闭").Enabled);
     }
 
+    private sealed class RecordingNotifications : INotificationService
+    {
+        internal TaskCompletionSource<(NotificationMessage Message, string? Channel, bool IgnoreEnabled)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
+        {
+            Sent.TrySetResult((message, channel, ignoreChannelEnabled));
+            return Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)]);
+        }
+    }
 }

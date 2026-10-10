@@ -7,7 +7,7 @@ import * as vue from 'vue';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload');
+    'tasks, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions');
   const requests = [];
   const toasts = [];
   let unmount;
@@ -33,6 +33,35 @@ function fixture() {
   };
   return { subject, requests, toasts, action, open, reply, dispose: () => { unmount(); scope.stop(); } };
 }
+
+test('notification action defaults to enabled channels and preserves explicit channel selection', () => {
+  const f = fixture();
+  try {
+    const action = f.subject.createAction();
+    action.type = 'SendNotification';
+    action.notificationContent = '测试通知';
+    assert.equal(action.notificationChannel, '');
+    const task = { name: 'Task', trigger: { type: 'WinPilotStartup' }, actions: [action] };
+    for (const channel of ['', 'QQBot']) {
+      action.notificationChannel = channel;
+      assert.equal(Object.keys(f.subject.validate(task)).length, 0);
+      assert.equal(f.subject.actionPayload(action).notificationChannel, channel);
+    }
+  } finally { f.dispose(); }
+});
+
+test('notification channel options are read from the host rather than declared by the task page', async () => {
+  const f = fixture();
+  try {
+    const loading = f.subject.loadTasks();
+    const options = [{ value: '', label: '已启用渠道' }, { value: 'Windows', label: 'Windows 通知' }];
+    assert.equal(f.requests.filter(request => request.url === '/api/notification-channels').length, 1);
+    for (const request of f.requests)
+      request.resolve({ ok: true, json: async () => request.url === '/api/notification-channels' ? options : [] });
+    await loading;
+    assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify(options));
+  } finally { f.dispose(); }
+});
 
 test('tag and close process actions report missing fields before saving', () => {
   const f = fixture();
@@ -193,13 +222,17 @@ test('an older page loadTasks cannot overwrite a newer result', async () => {
   const f = fixture();
   try {
     const old = f.subject.loadTasks();
+    const oldRequests = f.requests.slice();
     const latest = f.subject.loadTasks();
-    assert.ok(f.requests.slice(0, 4).every(request => request.init.signal.aborted));
-    for (const request of f.requests.slice(4)) request.resolve({ ok: true, json: async () => [{ name: 'new' }] });
+    const channels = [{ value: 'QQBot', label: 'QQBot' }];
+    assert.ok(oldRequests.every(request => request.init.signal.aborted));
+    for (const request of f.requests.slice(oldRequests.length))
+      request.resolve({ ok: true, json: async () => request.url === '/api/notification-channels' ? channels : [{ name: 'new' }] });
     await latest;
-    for (const request of f.requests.slice(0, 4)) request.resolve({ ok: true, json: async () => [{ name: 'old' }] });
+    for (const request of oldRequests) request.resolve({ ok: true, json: async () => [{ name: 'old' }] });
     await old;
     assert.equal(f.subject.tasks.value[0].name, 'new');
+    assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify(channels));
   } finally { f.dispose(); }
 });
 

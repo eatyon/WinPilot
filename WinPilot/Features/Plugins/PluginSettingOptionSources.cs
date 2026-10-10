@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using WinPilot.Features.Notifications;
 
 namespace WinPilot.Features.Plugins;
 
@@ -7,16 +8,9 @@ public static class PluginSettingOptionSources
     public const string NotificationChannels = "notificationChannels";
 
     private static readonly IReadOnlyList<PluginSettingOption> ChannelOptions =
-    [
-        new("all-enabled", "所有已开启渠道"),
-        new("windows", "Windows 通知"),
-        new("webhook", "Webhook"),
-        new("telegram", "Telegram"),
-        new("workweixin", "企业微信"),
-        new("feishu", "飞书"),
-        new("onebot", "OneBot"),
-        new("qqbot", "QQBot")
-    ];
+        NotificationChannelCatalog.All
+            .Select(channel => new PluginSettingOption(channel.Id.ToLowerInvariant(), channel.DisplayName))
+            .Prepend(new(NotificationChannelCatalog.AllEnabled, NotificationChannelCatalog.EnabledDisplayName)).ToArray();
 
     public static IReadOnlyList<PluginSettingOption> GetOptions(string source) => source switch
     {

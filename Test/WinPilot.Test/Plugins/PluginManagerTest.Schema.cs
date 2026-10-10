@@ -1,5 +1,6 @@
-using WinPilot.Core;
 using System.Text.Json;
+using WinPilot.Core;
+using WinPilot.Features.Notifications;
 using WinPilot.Features.Plugins;
 
 namespace WinPilot.Test;
@@ -57,10 +58,10 @@ public sealed partial class PluginManagerTest
         Assert.Equal("qqbot", selected.RootElement[0].GetProperty("options")[0].GetProperty("value").GetString());
         Assert.Equal("QQBot", selected.RootElement[0].GetProperty("options")[0].GetProperty("label").GetString());
         var channels = PluginSettingOptionSources.GetOptions("notificationChannels");
-        Assert.Contains(channels, option => option.Value == "all-enabled");
-        Assert.Contains(channels, option => option.Value == "windows");
+        Assert.Equal(("all-enabled", "已启用渠道"), (channels[0].Value, channels[0].Label));
+        Assert.Equal(NotificationChannelCatalog.All.Select(channel => (channel.Id.ToLowerInvariant(), channel.DisplayName)),
+            channels.Skip(1).Select(option => (option.Value, option.Label)));
         Assert.Equal(channels.Count, channels.Select(option => option.Value).Distinct(StringComparer.Ordinal).Count());
-        Assert.All(channels, option => Assert.False(string.IsNullOrWhiteSpace(option.Label)));
     }
 
     [Fact]

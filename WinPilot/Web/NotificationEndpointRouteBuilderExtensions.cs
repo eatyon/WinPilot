@@ -9,6 +9,9 @@ public static class NotificationEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapNotificationEndpoints(this IEndpointRouteBuilder endpoints, string configurationFile, INotificationService notifications)
     {
+        endpoints.MapGet("/api/notification-channels", () => Results.Ok(NotificationChannelCatalog.All
+            .Select(channel => new { value = channel.Id, label = channel.DisplayName })
+            .Prepend(new { value = "", label = NotificationChannelCatalog.EnabledDisplayName })));
         endpoints.MapGet("/api/settings/notifications", () => Results.Ok(WinPilotSettings.LoadAndInitialize(configurationFile).Notifications));
         endpoints.MapPut("/api/settings/notifications", async (NotificationSettings settings, ILoggerFactory loggerFactory, CommandBotConfiguration bots, HttpContext context) =>
         {
@@ -41,17 +44,7 @@ public static class NotificationEndpointRouteBuilderExtensions
                     "qqbot" => existing with { QQBotEnabled = settings.QQBotEnabled, QQBotAppId = settings.QQBotAppId, QQBotClientSecret = settings.QQBotClientSecret, QQBotOpenId = settings.QQBotOpenId, QQBotGroupOpenId = settings.QQBotGroupOpenId, QQBotSendTarget = settings.QQBotSendTarget, QQBotMessageFormat = settings.QQBotMessageFormat },
                     _ => throw new InvalidOperationException("通知渠道无效")
                 }, context.RequestAborted);
-                var channelName = channel.ToLowerInvariant() switch
-                {
-                    "windows" => "Windows",
-                    "webhook" => "Webhook",
-                    "telegram" => "Telegram",
-                    "workweixin" => "企业微信",
-                    "feishu" => "飞书",
-                    "onebot" => "OneBot",
-                    "qqbot" => "QQBot",
-                    _ => channel
-                };
+                var channelName = NotificationChannelCatalog.GetDisplayName(channel);
                 logger.LogInformation("通知渠道 {Channel} 设置已保存", channelName);
                 return Results.Ok(merged);
             }

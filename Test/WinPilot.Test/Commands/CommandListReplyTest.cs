@@ -12,9 +12,8 @@ public sealed class CommandListReplyTest
         var names = Enumerable.Range(1, 41).Select(index => $"标签{index}").ToArray();
         var sequences = new List<int>();
         var heights = new List<int>();
-        var logger = new CommandBotTestObserver();
         await CommandListReply.SendAsync("已有标签", names, "用法：启动标签 标签名",
-            (_, _) => throw new InvalidOperationException("不应发送文字", logger.Entries.LastOrDefault().Exception), (bytes, sequence) =>
+            (_, _) => throw new InvalidOperationException("不应发送文字"), (bytes, sequence) =>
             {
                 using var stream = new MemoryStream(bytes);
                 using var image = Image.FromStream(stream);
@@ -22,7 +21,7 @@ public sealed class CommandListReplyTest
                 heights.Add(image.Height);
                 sequences.Add(sequence);
                 return Task.CompletedTask;
-            }, logger, "Test", CancellationToken.None);
+            }, NullLogger.Instance, "Test", CancellationToken.None);
         Assert.Equal(new[] { 1, 2, 3 }, sequences);
         Assert.Equal(heights[0], heights[1]);
         Assert.True(heights[2] < heights[1]);
@@ -35,8 +34,6 @@ public sealed class CommandListReplyTest
         var replies = new List<string>();
         var imageAttempts = 0;
         var sequences = new List<int>();
-        var logger = new CommandBotTestObserver();
-        var failure = new IOException("模拟发送失败");
         await CommandListReply.SendAsync("已有标签", names, "用法：启动标签 标签名", (text, sequence) =>
         {
             Assert.InRange(text.Length, 1, 1500);
@@ -46,10 +43,9 @@ public sealed class CommandListReplyTest
         }, (_, _) =>
         {
             imageAttempts++;
-            throw failure;
-        }, logger, "Test", CancellationToken.None);
+            throw new IOException("模拟发送失败");
+        }, NullLogger.Instance, "Test", CancellationToken.None);
         Assert.Equal(1, imageAttempts);
-        Assert.Same(failure, Assert.Single(logger.Entries).Exception);
         Assert.Contains(names[0], string.Concat(replies));
         Assert.Contains(names[1], string.Concat(replies));
         Assert.Equal(Enumerable.Range(2, replies.Count), sequences);

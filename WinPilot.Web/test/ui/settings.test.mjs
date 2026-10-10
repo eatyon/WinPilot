@@ -166,6 +166,34 @@ test('notification toggle rolls back on failure and duplicate saves are blocked'
   } finally { f.dispose(); }
 });
 
+test('security notifications use one channel selector and keep event selection unchanged', async () => {
+  const f = fixture('tabs/SecuritySettings.vue', 'notifications,channelOptions,saveNotifications');
+  try {
+    const loading = f.mount();
+    f.calls.find(call => call.url === '/api/security/password').resolve(response({ configured: false }));
+    f.calls.find(call => call.url === '/api/security/notifications').resolve(response({
+      channel: '', events: ['LoginFailed'],
+    }));
+    f.calls.find(call => call.url === '/api/notification-channels').resolve(response([
+      { value: '', label: '已启用渠道' }, { value: 'QQBot', label: 'QQBot' },
+    ]));
+    await loading;
+    assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify([
+      { value: '', label: '禁用' }, { value: 'all-enabled', label: '已启用渠道' }, { value: 'qqbot', label: 'QQBot' },
+    ]));
+    assert.equal(f.subject.notifications.channel, '');
+    for (const channel of ['qqbot', 'all-enabled', '']) {
+      f.subject.notifications.channel = channel;
+      const saving = f.subject.saveNotifications();
+      const call = f.calls.at(-1);
+      const body = JSON.parse(call.init.body);
+      assert.deepEqual(body, { channel, events: ['LoginFailed'] });
+      call.resolve(response(body));
+      await saving;
+    }
+  } finally { f.dispose(); }
+});
+
 for (const [page, members, save] of [
   ['tabs/SecuritySettings.vue', 'saveNotifications,savePassword', s => Promise.all([s.saveNotifications(), s.savePassword()])],
   ['tabs/AdvancedSettings.vue', 'save', s => s.save(true)],

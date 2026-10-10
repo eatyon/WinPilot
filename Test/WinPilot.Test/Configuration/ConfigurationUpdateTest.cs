@@ -39,7 +39,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.False(settings.CommandBots.QQBotEnabled);
         Assert.False(settings.Notifications.WindowsEnabled);
         Assert.False(settings.SafeModeEnabled);
-        Assert.False(settings.SecurityNotifications.Enabled);
+        Assert.Equal("", settings.SecurityNotifications.Channel);
         Assert.Equal(UpdateSource.GitHub, settings.Updates.Source);
         Assert.Equal(UpdateChannel.Stable, settings.Updates.Channel);
         Assert.False(root.ContainsKey("plugins"));
@@ -69,7 +69,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
         var loaded = WinPilotSettings.LoadAndInitialize(FilePath);
         Assert.Equal(original, File.ReadAllText(FilePath));
         Assert.Equal("", loaded.CommandBots.TelegramPrefix);
-        Assert.False(loaded.SecurityNotifications.Enabled);
+        Assert.Equal("", loaded.SecurityNotifications.Channel);
         WinPilotSettings.Update(FilePath, current => current with { LanAccessEnabled = true });
         var saved = WinPilotSettings.LoadAndInitialize(FilePath);
         Assert.True(saved.LanAccessEnabled);
@@ -98,7 +98,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
                 case 1: WinPilotSettings.Update(FilePath, current => current with { SafeModeEnabled = true }); break;
                 case 2: WinPilotSettings.Update(FilePath, current => current with { Notifications = current.Notifications with { QQBotAppId = "app" } }); break;
                 case 3: WinPilotSettings.Update(FilePath, current => current with { CommandBots = current.CommandBots with { TelegramPrefix = "/" } }); break;
-                case 4: WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Enabled = true } }); break;
+                case 4: WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Channel = "all-enabled" } }); break;
             }
         })));
         var saved = WinPilotSettings.LoadAndInitialize(FilePath);
@@ -106,7 +106,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.True(saved.SafeModeEnabled);
         Assert.Equal("app", saved.Notifications.QQBotAppId);
         Assert.Equal("/", saved.CommandBots.TelegramPrefix);
-        Assert.True(saved.SecurityNotifications.Enabled);
+        Assert.Equal("all-enabled", saved.SecurityNotifications.Channel);
         Assert.False(File.Exists(FilePath + ".tmp"));
     }
 

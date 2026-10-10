@@ -8,13 +8,10 @@ namespace WinPilot.Features.Security;
 public sealed class SecurityEventNotifier(PortableDataPaths paths, INotificationService notifications, ILogger<SecurityEventNotifier> logger)
 {
     private static readonly TimeSpan LoginFailureNotificationInterval = TimeSpan.FromMinutes(5);
-    private static readonly HashSet<string> ValidChannels = new(StringComparer.OrdinalIgnoreCase) { "windows", "webhook", "telegram", "workweixin", "feishu", "onebot", "qqbot" };
     private readonly ConcurrentDictionary<string, DateTimeOffset> loginFailureNotifications = new(StringComparer.Ordinal);
     private long nextFailureCleanupUtcTicks;
     private bool? authConfigured;
     private readonly object authStateGate = new();
-
-    public static IReadOnlyList<string> Channels => ["windows", "webhook", "telegram", "workweixin", "feishu", "onebot", "qqbot"];
 
     public bool ObserveAuthConfiguration(bool configured)
     {
@@ -52,11 +49,11 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
             if (!events.Contains(SecurityEventType.PasswordSet)) events.Add(SecurityEventType.PasswordSet);
             if (!events.Contains(SecurityEventType.PasswordChanged)) events.Add(SecurityEventType.PasswordChanged);
         }
-        if (!Enum.IsDefined(settings.DeliveryMode)) throw new InvalidOperationException("安全通知投递模式无效");
-        var channels = (settings.Channels ?? []).Where(channel => !string.IsNullOrWhiteSpace(channel)).Select(channel => channel.Trim().ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (channels.Any(channel => !ValidChannels.Contains(channel))) throw new InvalidOperationException("安全通知渠道无效");
-        if (settings.DeliveryMode == SecurityNotificationDeliveryMode.SpecificChannels && channels.Length == 0) throw new InvalidOperationException("指定渠道时至少选择一个通知渠道");
-        return settings with { Events = events, Channels = channels };
+        var channel = (settings.Channel ?? "").Trim().ToLowerInvariant();
+        if (channel.Length > 0 && channel != NotificationChannelCatalog.AllEnabled
+            && !NotificationChannelCatalog.All.Any(item => item.Id.Equals(channel, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("安全通知渠道无效");
+        return settings with { Events = events, Channel = channel };
     }
 
     private SecurityNotificationSettings LoadSettings() => WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).SecurityNotifications;
@@ -67,7 +64,7 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
         var enabled = type is SecurityEventType.PasswordSet or SecurityEventType.PasswordChanged
             ? selected.Contains(SecurityEventType.PasswordSet) || selected.Contains(SecurityEventType.PasswordChanged)
             : selected.Contains(type);
-        if (!settings.Enabled || !enabled) return false;
+        if (string.IsNullOrWhiteSpace(settings.Channel) || !enabled) return false;
         if (type != SecurityEventType.LoginFailed || string.IsNullOrWhiteSpace(sourceIp)) return true;
         var now = DateTimeOffset.UtcNow;
         var nextCleanup = Volatile.Read(ref nextFailureCleanupUtcTicks);
@@ -88,11 +85,8 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
         try
         {
             var message = new NotificationMessage("WinPilot 安全事件", Describe(type, sourceIp, isLoopback, lockoutDuration, enabled), Event: $"Security.{type}");
-            IReadOnlyList<NotificationChannelResult> results;
-            if (settings.DeliveryMode == SecurityNotificationDeliveryMode.AllEnabled)
-                results = await notifications.SendAsync(message).ConfigureAwait(false);
-            else
-                results = (await Task.WhenAll((settings.Channels ?? []).Select(channel => notifications.SendAsync(message, channel: channel, ignoreChannelEnabled: true))).ConfigureAwait(false)).SelectMany(result => result).ToArray();
+            var allEnabled = settings.Channel == NotificationChannelCatalog.AllEnabled;
+            var results = await notifications.SendAsync(message, channel: allEnabled ? null : settings.Channel, ignoreChannelEnabled: !allEnabled).ConfigureAwait(false);
             foreach (var result in results.Where(result => !result.Succeeded)) logger.LogWarning("安全事件通知发送失败，事件：{Event}，通知渠道：{Channel}", EventName(type), result.Channel);
         }
         catch (Exception exception)

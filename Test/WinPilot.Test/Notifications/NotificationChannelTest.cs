@@ -9,15 +9,51 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
 using WinPilot.Features.Notifications;
+using WinPilot.Features.Notifications.CommandBots;
+using WinPilot.Web;
 
 namespace WinPilot.Test;
 
 public sealed class NotificationChannelTest
 {
+    [Fact]
+    public async Task ChannelOptionsEndpointUsesCatalogWithoutInitializingSettings()
+    {
+        var paths = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<CommandBotConfiguration>();
+        using var notifications = new NotificationService(paths, NullLogger<NotificationService>.Instance);
+        await using var app = builder.Build();
+        app.MapNotificationEndpoints(paths.ConfigurationFile, notifications);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.GetAsync("/api/notification-channels");
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var options = json.RootElement.EnumerateArray().ToArray();
+        Assert.Equal("", options[0].GetProperty("value").GetString());
+        Assert.Equal(NotificationChannelCatalog.EnabledDisplayName, options[0].GetProperty("label").GetString());
+        Assert.Equal(NotificationChannelCatalog.All.Select(channel => (channel.Id, channel.DisplayName)),
+            options.Skip(1).Select(option => (option.GetProperty("value").GetString()!, option.GetProperty("label").GetString()!)));
+        Assert.False(File.Exists(paths.ConfigurationFile));
+    }
+
+    [Theory]
+    [InlineData("windows", "Windows 通知")]
+    [InlineData("WorkWeixin", "企业微信")]
+    [InlineData("QQBOT", "QQBot")]
+    [InlineData("unknown", "unknown")]
+    public void ChannelDisplayNamesIgnoreIdCasingAndPreserveUnknownIds(string id, string displayName)
+    {
+        Assert.Equal(displayName, NotificationChannelCatalog.GetDisplayName(id));
+    }
+
     [Fact]
     public async Task TransportTimeoutIsReportedAsFailureButCallerCancellationPropagates()
     {

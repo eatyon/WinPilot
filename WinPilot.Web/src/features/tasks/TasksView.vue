@@ -59,7 +59,6 @@ type Action = {
     | 'Keyboard'
     | 'Shell'
     | 'SendNotification'
-    | 'SendNotificationToChannel'
     | 'Extension';
   programPath: string;
   arguments: string;
@@ -161,18 +160,9 @@ const actionOptions = [
   ['Shell', 'Shell'],
   ['Keyboard', '键盘模拟'],
   ['SendNotification', '发送通知'],
-  ['SendNotificationToChannel', '发送通知到指定渠道'],
   ['Extension', '插件扩展'],
 ] as const;
-const channelOptions = [
-  ['Windows', 'Windows 通知'],
-  ['Webhook', 'Webhook'],
-  ['Telegram', 'Telegram'],
-  ['WorkWeixin', '企业微信'],
-  ['Feishu', '飞书'],
-  ['OneBot', 'OneBot'],
-  ['QQBot', 'QQBot'],
-] as const;
+const channelOptions = ref<{ value: string; label: string }[]>([]);
 function clearTriggerErrors() {
   delete fieldErrors.value.cron;
   delete fieldErrors.value.processPaths;
@@ -352,7 +342,7 @@ const createAction = (): Action => ({
   command: '',
   notificationTitle: '',
   notificationContent: '',
-  notificationChannel: 'Windows',
+  notificationChannel: '',
   pluginId: '',
   actionId: '',
   parameters: {},
@@ -419,7 +409,7 @@ const actionCoreLabel = (action: Action) =>
             ? `启动快捷标签 · ${action.tagName || '未选择'}`
             : action.type === 'CloseProcess'
               ? `关闭进程 · ${action.processName || '未指定'}${action.currentUserOnly ? ' · 当前用户' : ''}`
-              : action.type === 'SendNotification' || action.type === 'SendNotificationToChannel'
+              : action.type === 'SendNotification'
                 ? `发送通知 · ${action.notificationContent || '未设置'}`
                 : `启动程序 · ${action.programPath || '未指定'}`;
 const actionLabel = (action: Action, index: number, total: number) =>
@@ -470,14 +460,14 @@ async function loadTasks() {
   const controller = new AbortController();
   loadController = controller;
   try {
-    const urls = ['/api/tasks', '/api/programs/tags', '/api/plugin-task-extensions/triggers', '/api/plugin-task-extensions/actions'];
+    const urls = ['/api/tasks', '/api/programs/tags', '/api/plugin-task-extensions/triggers', '/api/plugin-task-extensions/actions', '/api/notification-channels'];
     const values = await Promise.all(urls.map(async url => {
       const response = await apiFetch(url, { signal: controller.signal });
       if (!response.ok) throw new Error(await responseError(response));
       return response.json();
     }));
     if (!isPageActive || loadController !== controller || controller.signal.aborted) return;
-    [tasks.value, tags.value, registeredTriggers.value, registeredActions.value] = values;
+    [tasks.value, tags.value, registeredTriggers.value, registeredActions.value, channelOptions.value] = values;
     pageError.value = '';
   } catch (cause) {
     if (isPageActive && loadController === controller && !controller.signal.aborted && !isAbortError(cause))
@@ -580,11 +570,8 @@ function validate(value: Task) {
       result[`action-${index}`] = '请输入有效的延迟秒数';
     if (action.type === 'Keyboard' && !action.keys.length) result[`action-${index}`] = '请选择至少一个按键';
     if (action.type === 'Shell' && !action.command.trim()) result[`action-${index}`] = '请输入 Shell 命令';
-    if (action.type === 'SendNotification' || action.type === 'SendNotificationToChannel') {
-      if (!action.notificationContent.trim()) result[`action-${index}`] = '请填写通知内容';
-      else if (action.type === 'SendNotificationToChannel' && !action.notificationChannel)
-        result[`action-${index}`] = '请选择通知渠道';
-    }
+    if (action.type === 'SendNotification' && !action.notificationContent.trim())
+      result[`action-${index}`] = '请填写通知内容';
   });
   return result;
 }
@@ -596,7 +583,6 @@ const actionFields: Record<Action['type'], readonly (keyof Action)[]> = {
   Keyboard: ['keys'],
   Shell: ['shell', 'command'],
   SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
-  SendNotificationToChannel: ['notificationTitle', 'notificationContent', 'notificationChannel'],
   Extension: ['pluginId', 'actionId', 'parameters'],
 };
 function actionPayload(action: Action) {
@@ -1159,9 +1145,7 @@ onBeforeUnmount(() => {
               />
               <input v-model="action.command" placeholder="输入要执行的命令" />
             </template>
-            <template
-              v-else-if="action.type === 'SendNotification' || action.type === 'SendNotificationToChannel'"
-            >
+            <template v-else-if="action.type === 'SendNotification'">
               <div class="field-control">
                 <div class="notification-content-heading">
                   <span>
@@ -1180,14 +1164,14 @@ onBeforeUnmount(() => {
                 </div>
                 <textarea v-model="action.notificationContent" placeholder="通知内容" rows="4"></textarea>
               </div>
-              <div v-if="action.type === 'SendNotificationToChannel'" class="field-control">
+              <div class="field-control">
                 <span>
                   发送渠道
                   <b>*</b>
                 </span>
                 <AppSelect
                   v-model="action.notificationChannel"
-                  :options="channelOptions.map(([value, label]) => ({ value, label }))"
+                  :options="channelOptions"
                 />
               </div>
             </template>

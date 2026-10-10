@@ -13,18 +13,10 @@ public enum SecurityEventType
     SecurityNotificationSettingsChanged
 }
 
-public enum SecurityNotificationDeliveryMode
-{
-    AllEnabled,
-    SpecificChannels
-}
-
 public sealed record SecurityNotificationSettings
 {
-    public bool Enabled { get; init; }
+    public string Channel { get; init; } = "";
     public IReadOnlyList<SecurityEventType> Events { get; init; } = SecurityEventDefaults.Notified;
-    public SecurityNotificationDeliveryMode DeliveryMode { get; init; } = SecurityNotificationDeliveryMode.AllEnabled;
-    public IReadOnlyList<string> Channels { get; init; } = [];
 }
 
 public static class SecurityEventDefaults

@@ -33,28 +33,29 @@ public sealed class NotificationService : INotificationService, IDisposable
     {
         var settings = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
         var channels = new List<Task<NotificationChannelResult>>();
-        if (IsSelected(channel, "webhook") && (ignoreChannelEnabled || settings.WebhookEnabled))
-            channels.Add(SendChannel("Webhook", () => webhook.SendAsync(settings, message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "telegram") && (ignoreChannelEnabled || settings.TelegramEnabled))
-            channels.Add(SendChannel("Telegram", () => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "workweixin") && (ignoreChannelEnabled || settings.WorkWeixinEnabled))
-            channels.Add(SendChannel("企业微信", () => workWeixin.SendAsync(settings, message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "windows") && (ignoreChannelEnabled || settings.WindowsEnabled))
-            channels.Insert(0, SendChannel("Windows", () => WindowsNotificationChannel.SendAsync(message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "feishu") && (ignoreChannelEnabled || settings.FeishuEnabled))
-            channels.Add(SendChannel("飞书", () => feishu.SendAsync(settings, message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "onebot") && (ignoreChannelEnabled || settings.OneBotEnabled))
-            channels.Add(SendChannel("OneBot", () => oneBot.SendAsync(settings, message, cancellationToken), cancellationToken));
-        if (IsSelected(channel, "qqbot") && (ignoreChannelEnabled || settings.QQBotEnabled))
-            channels.Add(SendChannel("QQBot", () => qqbot.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.Webhook) && (ignoreChannelEnabled || settings.WebhookEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.Webhook, () => webhook.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.Telegram) && (ignoreChannelEnabled || settings.TelegramEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.Telegram, () => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.WorkWeixin) && (ignoreChannelEnabled || settings.WorkWeixinEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.WorkWeixin, () => workWeixin.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.Windows) && (ignoreChannelEnabled || settings.WindowsEnabled))
+            channels.Insert(0, SendChannel(NotificationChannelCatalog.Windows, () => WindowsNotificationChannel.SendAsync(message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.Feishu) && (ignoreChannelEnabled || settings.FeishuEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.Feishu, () => feishu.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.OneBot) && (ignoreChannelEnabled || settings.OneBotEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.OneBot, () => oneBot.SendAsync(settings, message, cancellationToken), cancellationToken));
+        if (IsSelected(channel, NotificationChannelCatalog.QQBot) && (ignoreChannelEnabled || settings.QQBotEnabled))
+            channels.Add(SendChannel(NotificationChannelCatalog.QQBot, () => qqbot.SendAsync(settings, message, cancellationToken), cancellationToken));
         return await Task.WhenAll(channels);
     }
 
     private static bool IsSelected(string? selected, string channel) =>
         string.IsNullOrWhiteSpace(selected) || string.Equals(selected, channel, StringComparison.OrdinalIgnoreCase);
 
-    private async Task<NotificationChannelResult> SendChannel(string name, Func<Task> send, CancellationToken cancellationToken)
+    private async Task<NotificationChannelResult> SendChannel(string id, Func<Task> send, CancellationToken cancellationToken)
     {
+        var name = NotificationChannelCatalog.GetDisplayName(id);
         try
         {
             await send();

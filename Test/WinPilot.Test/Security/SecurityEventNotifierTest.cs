@@ -21,7 +21,7 @@ public sealed class SecurityEventNotifierTest
         cache["active"] = DateTimeOffset.UtcNow;
         notifier.Record(SecurityEventType.LoginFailed, "current", notificationSettings: new SecurityNotificationSettings
         {
-            Enabled = true,
+            Channel = NotificationChannelCatalog.AllEnabled,
             Events = [SecurityEventType.LoginFailed]
         });
         Assert.False(cache.ContainsKey("expired"));
@@ -33,13 +33,13 @@ public sealed class SecurityEventNotifierTest
     public void DefaultsAndValidation_FollowTheSecurityNotificationContract()
     {
         var settings = new SecurityNotificationSettings();
-        Assert.Equal(SecurityNotificationDeliveryMode.AllEnabled, settings.DeliveryMode);
+        Assert.Equal("", settings.Channel);
         Assert.Equal(SecurityEventDefaults.Notified, settings.Events);
-        Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(new SecurityNotificationSettings { DeliveryMode = SecurityNotificationDeliveryMode.SpecificChannels }));
-        Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(new SecurityNotificationSettings { DeliveryMode = (SecurityNotificationDeliveryMode)999 }));
-
-        var validated = SecurityEventNotifier.Validate(new SecurityNotificationSettings { DeliveryMode = SecurityNotificationDeliveryMode.SpecificChannels, Channels = ["Telegram", "webhook", "telegram"] });
-        Assert.Equal(["telegram", "webhook"], validated.Channels);
+        Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = "unknown" }));
+        Assert.Equal("", SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = " " }).Channel);
+        Assert.Equal(NotificationChannelCatalog.AllEnabled, SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = NotificationChannelCatalog.AllEnabled }).Channel);
+        var validated = SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = " Telegram " });
+        Assert.Equal("telegram", validated.Channel);
         var passwordEvents = SecurityEventNotifier.Validate(new SecurityNotificationSettings { Events = [SecurityEventType.PasswordChanged] });
         Assert.Contains(SecurityEventType.PasswordSet, passwordEvents.Events);
         Assert.Contains(SecurityEventType.PasswordChanged, passwordEvents.Events);
@@ -55,7 +55,7 @@ public sealed class SecurityEventNotifierTest
             var sender = new RecordingNotificationService();
             using var loggerFactory = LoggerFactory.Create(builder => { });
             var notifier = new SecurityEventNotifier(paths, sender, loggerFactory.CreateLogger<SecurityEventNotifier>());
-            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Enabled = true, Events = [SecurityEventType.PasswordSet] } }.Save(paths.ConfigurationFile);
+            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Channel = NotificationChannelCatalog.AllEnabled, Events = [SecurityEventType.PasswordSet] } }.Save(paths.ConfigurationFile);
 
             notifier.Record(SecurityEventType.PasswordSet);
             notifier.Record(SecurityEventType.PasswordChanged);
@@ -113,36 +113,34 @@ public sealed class SecurityEventNotifierTest
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task NotificationDelivery_UsesEnabledChannelsOrSpecificChannelsWithoutBlockingOtherChannels()
+    [Theory]
+    [InlineData("", true, null, false, 0)]
+    [InlineData("all-enabled", true, null, false, 1)]
+    [InlineData("telegram", true, "telegram", true, 1)]
+    [InlineData("all-enabled", false, null, false, 0)]
+    public async Task NotificationDelivery_UsesSelectedChannelAndEvent(string channel, bool selectEvent, string? expectedChannel, bool ignoreEnabled, int expectedCalls)
     {
         var root = Path.Combine(Path.GetTempPath(), "WinPilot.Security.Test", Guid.NewGuid().ToString("N"));
         try
         {
             var paths = PortableDataPaths.Create(root);
-            var sender = new RecordingNotificationService("telegram");
-            using var provider = new RollingFileLoggerProvider(paths.LogsDirectory);
-            using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(provider));
+            var sender = new RecordingNotificationService();
+            using var loggerFactory = LoggerFactory.Create(builder => { });
             var notifier = new SecurityEventNotifier(paths, sender, loggerFactory.CreateLogger<SecurityEventNotifier>());
 
-            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Enabled = true, Events = [SecurityEventType.PasswordSet] } }.Save(paths.ConfigurationFile);
+            new WinPilotSettings { SecurityNotifications = new SecurityNotificationSettings
+            {
+                Channel = channel,
+                Events = selectEvent ? [SecurityEventType.PasswordSet] : []
+            } }.Save(paths.ConfigurationFile);
             notifier.Record(SecurityEventType.PasswordSet);
-            await sender.WaitForCalls(1);
-            Assert.Equal((string?)null, sender.Calls[0].Channel);
-            Assert.False(sender.Calls[0].IgnoreChannelEnabled);
-
-            sender.Calls.Clear();
-            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Enabled = true, Events = [SecurityEventType.PasswordSet], DeliveryMode = SecurityNotificationDeliveryMode.SpecificChannels, Channels = ["telegram", "webhook"] } }.Save(paths.ConfigurationFile);
-            notifier.Record(SecurityEventType.PasswordSet);
-            await sender.WaitForCalls(2);
-            Assert.All(sender.Calls, call => Assert.True(call.IgnoreChannelEnabled));
-            Assert.Equal(["telegram", "webhook"], sender.Calls.Select(call => call.Channel).OrderBy(channel => channel).ToArray());
-
-            sender.Calls.Clear();
-            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Events = [] } }.Save(paths.ConfigurationFile);
-            notifier.Record(SecurityEventType.PasswordSet);
-            await Task.Delay(50);
-            Assert.Empty(sender.Calls);
+            if (expectedCalls == 0)
+                Assert.Empty(sender.Calls);
+            else
+            {
+                await sender.WaitForCalls(expectedCalls);
+                Assert.Equal((expectedChannel, ignoreEnabled), Assert.Single(sender.Calls));
+            }
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -157,8 +155,8 @@ public sealed class SecurityEventNotifierTest
             var sender = new RecordingNotificationService();
             using var loggerFactory = LoggerFactory.Create(builder => { });
             var notifier = new SecurityEventNotifier(paths, sender, loggerFactory.CreateLogger<SecurityEventNotifier>());
-            var previous = new SecurityNotificationSettings { Enabled = true, Events = [SecurityEventType.SecurityNotificationSettingsChanged], DeliveryMode = SecurityNotificationDeliveryMode.SpecificChannels, Channels = ["telegram"] };
-            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings { Enabled = false } }.Save(paths.ConfigurationFile);
+            var previous = new SecurityNotificationSettings { Channel = "telegram", Events = [SecurityEventType.SecurityNotificationSettingsChanged] };
+            new WinPilotSettings { Port = 9123, SecurityNotifications = new SecurityNotificationSettings() }.Save(paths.ConfigurationFile);
 
             notifier.Record(SecurityEventType.SecurityNotificationSettingsChanged, notificationSettings: previous);
 
@@ -171,13 +169,13 @@ public sealed class SecurityEventNotifierTest
 
     private static int Count(string value, string part) => value.Split(part, StringSplitOptions.None).Length - 1;
 
-    private sealed class RecordingNotificationService(string? failedChannel = null) : INotificationService
+    private sealed class RecordingNotificationService : INotificationService
     {
         public List<(string? Channel, bool IgnoreChannelEnabled)> Calls { get; } = [];
         public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
         {
             lock (Calls) Calls.Add((channel, ignoreChannelEnabled));
-            return Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new NotificationChannelResult(channel ?? "all", !string.Equals(channel, failedChannel, StringComparison.OrdinalIgnoreCase))]);
+            return Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new NotificationChannelResult(channel ?? "all", true)]);
         }
         public async Task WaitForCalls(int expected)
         {

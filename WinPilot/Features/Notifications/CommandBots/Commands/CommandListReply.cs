@@ -24,9 +24,9 @@ internal static class CommandListReply
                     continue;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (Exception exception) when (!token.IsCancellationRequested)
+                catch (Exception) when (!token.IsCancellationRequested)
                 {
-                    logger.LogWarning(exception, "{Channel} 命令列表图片生成或发送失败，尝试文字回复", channel);
+                    logger.LogWarning("{Channel} 命令列表图片生成或发送失败，尝试文字回复", channel);
                 }
             }
             var text = $"{heading}：\n" + string.Join("\n", items) +
