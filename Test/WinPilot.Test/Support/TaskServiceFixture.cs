@@ -67,6 +67,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     private sealed class Keyboard : IKeyboardInputSimulator { public void Send(IReadOnlyList<KeyboardKey> keys) { } }
     internal sealed class TaskLogger : Microsoft.Extensions.Logging.ILogger<TaskService>
     {
+        internal System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
         internal volatile bool ActionCancelled;
         internal TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -74,6 +75,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId eventId,
             TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
+            Messages.Enqueue(formatter(state, exception));
             if (ActionCancelled) Cancelled.TrySetResult();
         }
     }

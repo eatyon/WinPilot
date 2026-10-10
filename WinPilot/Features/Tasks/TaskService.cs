@@ -81,6 +81,8 @@ public sealed class TaskService : BackgroundService
         {
             if (tasks.ContainsKey(task.Name))
                 throw new InvalidOperationException("同名任务已存在");
+            if (File.Exists(GetTaskFilePath(task.Name)))
+                throw new InvalidOperationException("同名任务文件已存在");
             Save(task, false);
             tasks[task.Name] = task;
             ClearRuntimeState(task.Name);
@@ -105,6 +107,8 @@ public sealed class TaskService : BackgroundService
                 Save(task);
             else
             {
+                if (File.Exists(nextFile))
+                    throw new InvalidOperationException("同名任务文件已存在");
                 File.Move(originalFile, nextFile);
                 try { Save(task); }
                 catch
@@ -568,16 +572,18 @@ public sealed class TaskService : BackgroundService
             throw new InvalidOperationException($"通知发送失败：{string.Join('、', failed)}");
     }
 
-    private static string DescribeAction(TaskAction action) => action.Type switch
+    private string DescribeAction(TaskAction action) => action.Type switch
     {
         TaskActionType.StartProgram => $"启动程序「{action.ProgramPath}」",
         TaskActionType.StartTag => $"启动快捷标签「{action.TagName}」",
         TaskActionType.CloseProcess => $"{(action.Force ? "强制关闭" : "关闭")}进程「{action.ProcessName}」",
         TaskActionType.Delay => $"延迟 {action.DelaySeconds} 秒",
-        TaskActionType.Keyboard => "发送按键",
+        TaskActionType.Keyboard => $"发送按键「{string.Join(" + ", action.Keys ?? [])}」",
         TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
-        TaskActionType.SendNotification => "发送通知",
-        TaskActionType.Extension => "插件扩展",
+        TaskActionType.SendNotification => $"发送「{(string.IsNullOrWhiteSpace(action.NotificationChannel) ? NotificationChannelCatalog.EnabledDisplayName : NotificationChannelCatalog.GetDisplayName(action.NotificationChannel))}」通知",
+        TaskActionType.Extension when action.PluginId is not null && action.ActionId is not null
+            && extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition) => $"插件扩展「{definition.PluginDisplayName}」",
+        TaskActionType.Extension => $"插件扩展「{action.PluginId}」",
         _ => action.Type.ToString()
     };
 

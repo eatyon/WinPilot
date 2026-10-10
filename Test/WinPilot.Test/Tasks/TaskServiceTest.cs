@@ -16,6 +16,34 @@ namespace WinPilot.Test;
 public sealed class TaskServiceTest
 {
     [Theory]
+    [InlineData(TaskActionType.Keyboard, null, "发送按键「F11」")]
+    [InlineData(TaskActionType.Keyboard, "Ctrl", "发送按键「Ctrl + F11」")]
+    [InlineData(TaskActionType.SendNotification, null, "发送「已启用渠道」通知")]
+    [InlineData(TaskActionType.SendNotification, "QQBot", "发送「QQBot」通知")]
+    [InlineData(TaskActionType.Extension, "test", "插件扩展「测试插件」")]
+    [InlineData(TaskActionType.Extension, "missing", "插件扩展「missing」")]
+    public async Task ActionLogsIncludeKeysChannelOrPluginName(TaskActionType type, string? value, string description)
+    {
+        await using var fixture = new TaskServiceFixture(new RecordingNotifications());
+        using var scope = fixture.Extensions.CreateScope("test", "测试插件");
+        ((WinPilot.PluginContract.IPluginTaskActionApi)scope).Register([new("run", "测试动作")],
+            (_, _, _) => Task.FromResult(WinPilot.PluginContract.PluginTaskActionResult.Success()));
+        var action = type switch
+        {
+            TaskActionType.Keyboard => new TaskAction(type, Keys: value is null ? ["F11"] : [value, "F11"]),
+            TaskActionType.SendNotification => new TaskAction(type, NotificationContent: "测试通知", NotificationChannel: value),
+            _ => new TaskAction(type, PluginId: value, ActionId: "run", ContinueOnFailure: true)
+        };
+        fixture.Tasks.Create(new("test", true, new(TaskTriggerType.WinPilotStartup),
+            [action, new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        fixture.Tasks.RunNow("test");
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains($"任务「test」第 1 个动作开始：{description}", fixture.Logger.Messages);
+        if (type == TaskActionType.Extension && value == "missing")
+            Assert.Contains($"任务「test」第 1 个动作失败：{description}，继续执行后续动作", fixture.Logger.Messages);
+    }
+
+    [Theory]
     [InlineData(null, false)]
     [InlineData("", false)]
     [InlineData("QQBot", true)]
@@ -180,6 +208,34 @@ public sealed class TaskServiceTest
         await fixture.Logger.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         fixture.Tasks.RunNow("Example");
         Assert.Equal(0, fixture.Programs.Launches);
+    }
+
+    [Theory]
+    [InlineData("create")]
+    [InlineData("rename")]
+    public async Task ExistingUnloadedFilePreventsCreateAndRename(string operation)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Example");
+        var original = Assert.Single(fixture.Tasks.GetAll());
+        var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "Example.json");
+        var originalContent = File.ReadAllText(originalFile);
+        var target = Path.Combine(fixture.Paths.TasksDirectory, "Unloaded.json");
+        const string invalidContent = "invalid task";
+        File.WriteAllText(target, invalidContent);
+        var replacement = original with { Name = "Unloaded" };
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (operation == "create") fixture.Tasks.Create(replacement);
+            else fixture.Tasks.Update(original.Name, replacement);
+        });
+
+        Assert.Equal("同名任务文件已存在", exception.Message);
+        Assert.Equal(original, Assert.Single(fixture.Tasks.GetAll()));
+        Assert.Equal(originalContent, File.ReadAllText(originalFile));
+        Assert.Equal(invalidContent, File.ReadAllText(target));
+        Assert.Empty(Directory.GetFiles(fixture.Paths.TasksDirectory, "*.tmp"));
     }
 
     [Fact]
