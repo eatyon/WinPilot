@@ -28,7 +28,7 @@ namespace WinPilot;
 internal static class Program
 {
     [STAThread]
-    private static async Task Main()
+    private static async Task Main(string[] args)
     {
         using var singleInstanceGuard = SingleInstanceGuard.TryAcquire();
         if (singleInstanceGuard is null)
@@ -185,6 +185,8 @@ internal static class Program
 
             _ = app.Services.GetRequiredService<PluginManager>();
             app.Services.GetRequiredService<TaskService>().NotifyPluginsLoaded();
+            if (args.Length == 1 && args[0] == "--update-completed")
+                loggerFactory.CreateLogger<UpdateCheckService>().LogInformation("更新完成，版本：{Version}", WinPilotVersion.DisplayVersion);
             Application.Run(trayContext);
         }
         catch (Exception exception) when (IsAddressAlreadyInUse(exception))

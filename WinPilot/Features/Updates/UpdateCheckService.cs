@@ -115,7 +115,8 @@ public sealed class UpdateCheckService : IDisposable
         string? updateDirectory = null;
         try
         {
-            logger.LogInformation("开始准备更新，主程序进程 ID：{ParentProcessId}", parentProcessId);
+            logger.LogInformation("开始更新，目标版本：{Version}，更新源：{Source}", result.LatestVersion, SourceName(result.Source));
+            logger.LogDebug("开始准备更新，主程序进程 ID：{ParentProcessId}", parentProcessId);
             if (!release.CanInstall) throw new InvalidOperationException("此版本暂不支持在线更新，请前往版本发布页面手动下载");
             var updaterPath = Path.Combine(AppContext.BaseDirectory, "WinPilot.Updater.exe");
             if (!File.Exists(updaterPath)) throw new InvalidOperationException("当前安装缺少更新器，请手动下载最新版本");
@@ -126,18 +127,18 @@ public sealed class UpdateCheckService : IDisposable
             updateDirectory = Path.Combine(Path.GetTempPath(), $"WinPilot-update-{Guid.NewGuid():N}");
             Directory.CreateDirectory(updateDirectory);
             var packagePath = Path.Combine(updateDirectory, "package.zip");
-            logger.LogInformation("开始下载更新包，版本：{Version}，文件：{Package}，更新源：{Source}", result.LatestVersion, package.Name, SourceName(result.Source));
+            logger.LogDebug("开始下载更新包，版本：{Version}，文件：{Package}，更新源：{Source}", result.LatestVersion, package.Name, SourceName(result.Source));
             await DownloadFileAsync(packageUrl, packagePath, (downloaded, total) => SetInstallStatus("Downloading", downloaded, total, "正在下载更新…"), CancellationToken.None);
-            logger.LogInformation("更新包下载完成，版本：{Version}，文件大小：{Bytes} 字节", result.LatestVersion, new FileInfo(packagePath).Length);
+            logger.LogDebug("更新包下载完成，版本：{Version}，文件大小：{Bytes} 字节", result.LatestVersion, new FileInfo(packagePath).Length);
             SetInstallStatus("Verifying", 0, null, "正在校验更新包…");
             if (!string.Equals(await ComputeSha256Async(packagePath, CancellationToken.None), packageHash, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("更新包校验失败");
-            logger.LogInformation("更新包 SHA-256 校验通过，版本：{Version}", result.LatestVersion);
+            logger.LogDebug("更新包 SHA-256 校验通过，版本：{Version}", result.LatestVersion);
             var temporaryUpdaterPath = Path.Combine(updateDirectory, "WinPilot.Updater.exe");
             File.Copy(updaterPath, temporaryUpdaterPath, true);
             var arguments = $"--parent-pid {parentProcessId} --package-path \"{packagePath}\" --package-sha256 {packageHash} --target-dir \"{AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)}\" --cleanup-dir \"{updateDirectory}\"";
             using var updaterProcess = Process.Start(new ProcessStartInfo(temporaryUpdaterPath, arguments) { UseShellExecute = true, Verb = "runas", WorkingDirectory = updateDirectory });
             if (updaterProcess is null) throw new InvalidOperationException("无法启动更新器");
-            logger.LogInformation("更新器已启动，目标版本：{Version}，更新器进程 ID：{UpdaterProcessId}", result.LatestVersion, updaterProcess.Id);
+            logger.LogDebug("更新器已启动，目标版本：{Version}，更新器进程 ID：{UpdaterProcessId}", result.LatestVersion, updaterProcess.Id);
             SetInstallStatus("Restarting", 0, null, "更新器已启动，WinPilot 即将重启…");
             await Task.Delay(500);
             System.Windows.Forms.Application.Exit();

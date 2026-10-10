@@ -25,7 +25,8 @@ try
     }
     catch (ArgumentException) { }
     UpdatePackage.ReplaceFiles(packageRoot, targetDirectory);
-    using var restartedProcess = Process.Start(new ProcessStartInfo(restartPath) { UseShellExecute = true, WorkingDirectory = targetDirectory });
+    using var restartedProcess = Process.Start(new ProcessStartInfo(restartPath) { Arguments = "--update-completed", UseShellExecute = true, WorkingDirectory = targetDirectory });
+    if (restartedProcess is null) throw new InvalidOperationException("程序文件已更新，但无法重新启动 WinPilot");
 }
 catch (Exception exception)
 {
