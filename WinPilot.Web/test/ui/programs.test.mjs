@@ -3,11 +3,12 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
+import { readFileSync } from 'node:fs';
 import * as vue from 'vue';
 
 async function fixture() {
   const code = loadScriptModule(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url),
-    'launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, groups, selectedUserName, tagName, pendingActions, launchFormError, pageError');
+    'launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, groups, selectedUserName, tagName, pendingActions, launchFormError, pageError, editTag, cancelTagEdit, editingTagName, launchPanel, programPath, argumentsText, workingDirectory, runElevated, silent, launchFormMessage');
   let mounted;
   let unmount;
   const requests = [];
@@ -52,6 +53,54 @@ test('program writes do not cancel each other and duplicate submissions are igno
     await Promise.all([launch, save]);
     assert.equal(f.subject.pendingActions.size, 0);
     assert.equal(f.toasts.length, 2);
+  } finally { f.dispose(); }
+});
+
+test('tag editing scrolls without focusing, cancel and save reset the form, and failed saves retain input', async () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const panel = source.match(/<section ref="launchPanel"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+  assert.ok(panel?.includes('重新编辑已保存的标签配置'));
+  assert.ok(panel?.includes('class="launch-form"'));
+  const f = await fixture();
+  try {
+    let scrolls = 0;
+    f.subject.launchPanel.value = { scrollIntoView() { scrolls++; }, focus() { assert.fail('editing must not focus'); } };
+    const tag = { name: 'Tag', programPath: 'C:/app.exe', arguments: '--test', workingDirectory: 'C:/', runElevated: true, silent: true };
+    function assertFormCleared() {
+      for (const field of ['tagName', 'programPath', 'argumentsText', 'workingDirectory', 'launchFormError', 'launchFormMessage'])
+        assert.equal(f.subject[field].value, '', field);
+      assert.equal(f.subject.runElevated.value, false);
+      assert.equal(f.subject.silent.value, false);
+      assert.equal(f.subject.editingTagName.value, undefined);
+    }
+    await f.subject.editTag(tag);
+    assert.equal(scrolls, 1);
+    assert.equal(f.subject.editingTagName.value, 'Tag');
+    assert.equal(f.subject.programPath.value, tag.programPath);
+    f.subject.cancelTagEdit();
+    assertFormCleared();
+    assert.equal(scrolls, 1);
+    await f.subject.editTag(tag);
+    const save = f.subject.saveTag();
+    assert.equal(f.requests[0].url, '/api/programs/tags/Tag');
+    assert.equal(f.requests[0].init.method, 'PUT');
+    f.subject.cancelTagEdit();
+    assert.equal(f.subject.editingTagName.value, 'Tag');
+    f.requests[0].resolve({ ok: true });
+    await setImmediate();
+    f.requests[1].resolve({ ok: true, json: async () => [tag] });
+    await save;
+    assertFormCleared();
+    assert.equal(scrolls, 2);
+    await f.subject.editTag(tag);
+    const failedSave = f.subject.saveTag();
+    f.requests.at(-1).resolve({ ok: false, json: async () => ({ detail: '路径无效' }) });
+    await failedSave;
+    assert.equal(f.subject.editingTagName.value, tag.name);
+    for (const [field, value] of Object.entries({ tagName: tag.name, programPath: tag.programPath, argumentsText: tag.arguments, workingDirectory: tag.workingDirectory, runElevated: true, silent: true }))
+      assert.equal(f.subject[field].value, value, field);
+    assert.equal(f.subject.launchFormError.value, '路径无效');
+    assert.equal(scrolls, 3);
   } finally { f.dispose(); }
 });
 

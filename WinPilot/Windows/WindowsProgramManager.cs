@@ -387,7 +387,7 @@ public sealed class WindowsProgramManager : IProgramManager
             ".bat" or ".cmd" => new LaunchPlan(Environment.GetEnvironmentVariable("ComSpec") ?? Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/d /s /c \"{scriptPath}{AppendArguments(request.Arguments)}\"", request.Silent),
             ".vbs" => new LaunchPlan(Path.Combine(Environment.SystemDirectory, "wscript.exe"), $"//nologo {scriptPath}{AppendArguments(request.Arguments)}", true),
             ".py" => new LaunchPlan(FindPythonExecutable(), $"{scriptPath}{AppendArguments(request.Arguments)}", request.Silent),
-            _ => throw new InvalidOperationException("仅支持 .exe、.bat、.cmd、.vbs 和 .py 文件")
+            _ => throw new InvalidOperationException("不支持此文件类型")
         };
     }
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowReactive, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, watch } from 'vue';
 import AppModal from '../../components/AppModal.vue';
 import AppSelect from '../../components/AppSelect.vue';
+import HelpHint from '../../components/HelpHint.vue';
 import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import { showToast } from '../../ui/toast';
 import AppIcon from '../../components/AppIcon.vue';
@@ -70,6 +71,7 @@ const tagLaunchMessage = ref('');
 const tagLaunchTarget = ref<ProgramTag>();
 const tagSearch = ref('');
 const editingTagName = ref<string>();
+const launchPanel = ref<HTMLElement>();
 const programPath = ref('');
 const argumentsText = ref('');
 const workingDirectory = ref('');
@@ -362,18 +364,15 @@ async function saveTag() {
   }, async () => {
     launchFormMessage.value = '标签已保存';
     showToast(launchFormMessage.value, 'success');
-    if (editingTagName.value === originalName && tagName.value.trim() === payload.name) {
-      editingTagName.value = undefined;
-      tagName.value = '';
-    }
+    if (editingTagName.value === originalName && tagName.value.trim() === payload.name) resetLaunchForm();
     await loadTags();
   }, error => {
     launchFormError.value = userErrorMessage(error, '保存标签失败，请稍后重试');
     showToast(launchFormError.value);
   });
 }
-function editTag(tag: ProgramTag) {
-  if (safeModeEnabled.value) return;
+async function editTag(tag: ProgramTag) {
+  if (safeModeEnabled.value || pendingActions.has('save-tag')) return;
   editingTagName.value = tag.name;
   tagName.value = tag.name;
   programPath.value = tag.programPath;
@@ -381,6 +380,24 @@ function editTag(tag: ProgramTag) {
   workingDirectory.value = tag.workingDirectory;
   runElevated.value = tag.runElevated;
   silent.value = tag.silent;
+  launchFormError.value = launchFormMessage.value = '';
+  await nextTick();
+  if (isPageActive && !safeModeEnabled.value && editingTagName.value === tag.name)
+    launchPanel.value?.scrollIntoView({ block: 'start' });
+}
+function cancelTagEdit() {
+  if (pendingActions.has('save-tag')) return;
+  resetLaunchForm();
+}
+function resetLaunchForm() {
+  editingTagName.value = undefined;
+  tagName.value = '';
+  programPath.value = '';
+  argumentsText.value = '';
+  workingDirectory.value = '';
+  runElevated.value = false;
+  silent.value = false;
+  launchFormError.value = launchFormMessage.value = '';
 }
 async function confirmDeleteTag() {
   if (safeModeEnabled.value || !tagDeleteTarget.value) return;
@@ -539,28 +556,32 @@ function formatMemory(bytes: number) {
       </template>
       <p v-else class="program-empty">请选择用户后查询进程</p>
     </section>
-    <section class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }">
+    <section ref="launchPanel" class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }">
       <div class="program-panel-header">
         <div>
           <h2>
-            启动程序
+            {{ editingTagName ? `编辑快捷标签「${editingTagName}」` : '启动程序' }}
             <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
               <AppIcon name="lock" />
             </span>
           </h2>
-          <p>支持 .exe、.bat、.cmd、.vbs 和 .py 文件</p>
+          <p>{{ editingTagName ? '重新编辑已保存的标签配置' : '启动指定程序或运行脚本' }}</p>
         </div>
       </div>
-      <form class="launch-form" @submit.prevent="launch">
-        <label class="field-control launch-wide">
-          <span>程序名 / 程序路径</span>
+      <form class="launch-form" @submit.prevent="editingTagName ? saveTag() : launch()">
+        <div class="field-control launch-wide">
+          <span>
+            <label for="launch-program-path">程序 / 脚本路径</label>
+            <HelpHint label="支持 .exe、.bat、.cmd、.vbs 和 .py 文件，.py 需要安装 Python" />
+          </span>
           <input
+            id="launch-program-path"
             v-model="programPath"
             required
             :disabled="safeModeEnabled"
-            placeholder="例如 C:\Program Files\App\App.exe"
+            placeholder="请输入完整路径"
           />
-        </label>
+        </div>
         <label class="field-control">
           <span>启动参数</span>
           <input v-model="argumentsText" :disabled="safeModeEnabled" placeholder="可留空" />
@@ -581,16 +602,22 @@ function formatMemory(bytes: number) {
         </div>
         <label class="field-control">
           <span>标签名称</span>
-          <input v-model="tagName" :disabled="safeModeEnabled" placeholder="创建标签时填写" />
+          <input v-model="tagName" :disabled="safeModeEnabled" :placeholder="editingTagName ? '请输入标签名称' : '创建标签时填写'" />
         </label>
         <p v-if="launchFormError" class="launch-error" role="alert">{{ launchFormError }}</p>
         <p v-else-if="launchFormMessage" class="launch-result success" role="status">{{ launchFormMessage }}</p>
         <div class="launch-actions">
-          <button class="button button-primary" type="submit" :disabled="safeModeEnabled || isLaunching">
+          <button v-if="editingTagName" class="button button-primary" type="submit" :disabled="safeModeEnabled || pendingActions.has('save-tag')">
+            {{ pendingActions.has('save-tag') ? '正在保存…' : '保存标签' }}
+          </button>
+          <button v-else class="button button-primary" type="submit" :disabled="safeModeEnabled || isLaunching">
             {{ isLaunching ? '正在启动…' : '启动程序' }}
           </button>
-          <button class="button button-secondary" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="saveTag">
-            {{ editingTagName ? '保存标签' : '创建标签' }}
+          <button v-if="editingTagName" class="button button-secondary" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="cancelTagEdit">
+            取消编辑
+          </button>
+          <button v-else class="button button-secondary" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="saveTag">
+            创建标签
           </button>
         </div>
       </form>
