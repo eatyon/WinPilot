@@ -60,6 +60,122 @@ public sealed class PluginConfigurationTest : IDisposable
         PluginSettingsSchema.ValidateStorage(schema, """{"value":"已填写"}""");
     }
 
+    [Fact]
+    public void EmptyNumbersUseDefaultsWithoutChangingZeroOrEmptyText()
+    {
+        const string schema = """
+            [{"name":"number","type":"number","default":5,"required":true},
+             {"name":"zero","type":"number","default":5},{"name":"text","type":"text"},
+             {"name":"fixed","type":"collection","mode":"fixed","items":[
+               {"name":"group","fields":[{"name":"number","type":"number"}]}]},
+             {"name":"rows","type":"collection","mode":"dynamic","item":{"fields":[
+               {"name":"number","type":"number","default":2.5}]}}]
+            """;
+        var config = PluginSettingsSchema.ApplyDefaults(schema, JsonNode.Parse(
+            """{"number":"","zero":0,"text":"","fixed":{"group":{"number":""}},"rows":[{"number":"","__winpilot":{"id":"row","remark":"条目"}}]}""")!.AsObject());
+        Assert.Equal(5, config["number"]!.GetValue<int>());
+        Assert.Equal(0, config["zero"]!.GetValue<int>());
+        Assert.Equal("", config["text"]!.GetValue<string>());
+        Assert.Equal(0, config["fixed"]!["group"]!["number"]!.GetValue<int>());
+        Assert.Equal(2.5, config["rows"]![0]!["number"]!.GetValue<double>());
+        PluginSettingsSchema.ValidateStorage(schema, config.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("\"min\":\"0\"")]
+    [InlineData("\"max\":null")]
+    [InlineData("\"min\":1e400")]
+    [InlineData("\"min\":2,\"max\":1")]
+    [InlineData("\"min\":1")]
+    [InlineData("\"step\":0")]
+    [InlineData("\"step\":-1")]
+    [InlineData("\"step\":\"1\"")]
+    [InlineData("\"step\":true")]
+    [InlineData("\"max\":-1")]
+    [InlineData("\"step\":2,\"default\":1")]
+    public void InvalidNumberConstraintsOrDefaultsAreRejected(string constraints)
+    {
+        var schema = "[{\"name\":\"value\",\"type\":\"number\"," + constraints + "}]";
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(schema));
+        var fields = JsonNode.Parse(schema)!.AsArray();
+        var collection = new JsonArray(new JsonObject
+        {
+            ["name"] = "group", ["type"] = "collection", ["mode"] = "dynamic",
+            ["item"] = new JsonObject { ["fields"] = fields }
+        });
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(collection.ToJsonString()));
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("checkbox")]
+    public void NumericConstraintsAreRejectedOnOtherFieldTypes(string type)
+    {
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(
+            $$"""[{"name":"value","type":"{{type}}","min":0}]"""));
+    }
+
+    [Theory]
+    [InlineData("0.1", true)]
+    [InlineData("0.3", true)]
+    [InlineData("0.30000000000000004", true)]
+    [InlineData("0.5", true)]
+    [InlineData("0", false)]
+    [InlineData("0.6", false)]
+    [InlineData("0.2", false)]
+    public void NumericLimitsApplyToOrdinaryAndCollectionFields(string number, bool valid)
+    {
+        const string field = """{"name":"value","type":"number","min":0.1,"max":0.5,"step":0.2,"default":0.1}""";
+        foreach (var mode in new[] { "ordinary", "fixed", "dynamic" })
+        {
+            var schema = mode switch
+            {
+                "fixed" => $$"""[{"name":"group","type":"collection","mode":"fixed","items":[{"name":"item","fields":[{{field}}]}]}]""",
+                "dynamic" => $$$"""[{"name":"group","type":"collection","mode":"dynamic","item":{"fields":[{{{field}}}]}}]""",
+                _ => "[" + field + "]"
+            };
+            var content = mode switch
+            {
+                "fixed" => "{\"group\":{\"item\":{\"value\":" + number + "}}}",
+                "dynamic" => "{\"group\":[{\"value\":" + number + ",\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}}]}",
+                _ => "{\"value\":" + number + "}"
+            };
+            PluginSettingsSchema.ValidateDefinition(schema);
+            if (valid) PluginSettingsSchema.ValidateStorage(schema, content);
+            else Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(",\"step\":\"any\"")]
+    public void UndeclaredStepOrAnyAllowsFractionalValues(string constraint)
+    {
+        var schema = "[{\"name\":\"value\",\"type\":\"number\"" + constraint + "}]";
+        PluginSettingsSchema.ValidateDefinition(schema);
+        PluginSettingsSchema.ValidateStorage(schema, """{"value":0.25}""");
+    }
+
+    [Theory]
+    [InlineData("\"延迟秒数\"", "延迟秒数")]
+    [InlineData("\"\"", "interval")]
+    [InlineData("null", "interval")]
+    public void StorageValidationUsesFieldLabelWithNameFallback(string label, string expectedName)
+    {
+        var schema = $$"""[{"name":"interval","label":{{label}},"type":"number","min":1,"max":5,"step":2,"default":1,"required":true}]""";
+        var cases = new[]
+        {
+            ("{}", "不能为空"), ("{\"interval\":\"bad\"}", "格式无效"),
+            ("{\"interval\":0}", "不能小于 1"), ("{\"interval\":6}", "不能大于 5"),
+            ("{\"interval\":2}", "不符合步长 2")
+        };
+        foreach (var (content, message) in cases)
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+            Assert.Equal(expectedName + message, exception.Message);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -91,6 +207,19 @@ public sealed class PluginConfigurationTest : IDisposable
         manager.Disable("healthy");
         manager.Reload();
         Assert.Equal(2, manager.GetPlugins().Count);
+    }
+
+    [Theory]
+    [InlineData("{\"rows\":{}}", "路线配置格式无效，请重新打开配置")]
+    [InlineData("{\"rows\":[1]}", "路线配置包含无效条目，请重新添加")]
+    [InlineData("{\"rows\":[{}]}", "路线配置条目信息不完整，请重新添加")]
+    [InlineData("{\"rows\":[{\"__winpilot\":{\"id\":\"item\"}}]}", "备注不能为空")]
+    [InlineData("{\"rows\":[{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}},{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}}]}", "路线配置包含重复条目，请删除后重新添加")]
+    public void CollectionStorageErrorsUseDisplayNamesAndActionableMessages(string content, string message)
+    {
+        const string schema = """[{"name":"rows","label":"路线配置","type":"collection","mode":"dynamic","item":{"fields":[{"name":"value","type":"text"}]}}]""";
+        var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+        Assert.Equal(message, exception.Message);
     }
 
     [Fact]
@@ -143,6 +272,8 @@ public sealed class PluginConfigurationTest : IDisposable
         Assert.False(written["toggle"]!.GetValue<bool>());
         Assert.Equal(0, written["count"]!.GetValue<int>());
         Assert.False(File.Exists(path + ".tmp"));
+        manager.WriteStorage("test", """{"count":""}""");
+        Assert.Equal(0, JsonNode.Parse(File.ReadAllText(path))!["count"]!.GetValue<int>());
         var original = File.ReadAllText(path);
         Assert.Throws<InvalidOperationException>(() => manager.WriteStorage("test", """{"toggle":"true"}"""));
         Assert.Equal(original, File.ReadAllText(path));

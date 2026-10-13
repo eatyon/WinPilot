@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { isAbortError, userErrorMessage } from '../../api/client';
+import { isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { createPluginRequests } from './PluginRequests';
 import { showToast } from '../../ui/toast';
 import type { PluginInfo } from './PluginModels';
@@ -49,20 +49,30 @@ async function load(reload = false) {
     if (generation === loadGeneration) loading.value = false;
   }
 }
+function onToggle(event: Event, plugin: PluginInfo) {
+  (event.target as HTMLInputElement).checked = plugin.enabled;
+  return toggle(plugin);
+}
+
 async function toggle(plugin: PluginInfo) {
   if (loading.value || !plugin.canChangeEnabled || changingIds.value.has(plugin.id)) return;
+  const failureMessage = plugin.enabled ? '插件禁用失败' : '插件启用失败';
   changingIds.value.add(plugin.id);
   try {
     const response = await requests.fetch(
       `/api/plugins/${encodeURIComponent(plugin.id)}/${plugin.enabled ? 'disable' : 'enable'}`,
       { method: 'POST' },
     );
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(failureMessage);
     const updated = (await requests.json(response)) as PluginInfo;
+    if (!requests.active) return;
     plugins.value = plugins.value.map((item) => (item.id === updated.id ? updated : item));
-    showToast(`插件已${updated.enabled ? '启用' : '禁用'}`, 'success');
+    if (updated.state === 'Failed' || updated.state === 'Invalid')
+      showToast(failureMessage, 'error');
+    else showToast(`插件已${updated.enabled ? '启用' : '禁用'}`, 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '更新插件状态失败'), 'error');
+    if (requests.active && !isAbortError(cause) && !(cause instanceof WinPilotConnectionError))
+      showToast(failureMessage, 'error');
   } finally {
     changingIds.value.delete(plugin.id);
   }
@@ -127,29 +137,18 @@ async function toggle(plugin: PluginInfo) {
           <div class="plugin-card-footer">
             <label
               class="task-row-toggle"
-              :class="{ 'is-invalid-enabled': plugin.state === 'Invalid' && plugin.enabled }"
-              :title="
-                plugin.state === 'Invalid'
-                  ? plugin.canChangeEnabled
-                    ? plugin.enabled
-                      ? '关闭插件（当前版本不兼容）'
-                      : '启用插件（当前版本不兼容，不会加载）'
-                    : '无效插件无法修改'
-                  : plugin.enabled
-                    ? '关闭插件'
-                    : '开启插件'
-              "
+              :title="!plugin.canChangeEnabled ? '无法启用' : plugin.enabled ? '禁用插件' : '启用插件'"
             >
               <input
                 type="checkbox"
                 :aria-label="
                   plugin.enabled
-                    ? `关闭 ${plugin.manifest?.name ?? plugin.id}`
-                    : `开启 ${plugin.manifest?.name ?? plugin.id}`
+                    ? `禁用 ${plugin.manifest?.name ?? plugin.id}`
+                    : `启用 ${plugin.manifest?.name ?? plugin.id}`
                 "
                 :checked="plugin.enabled"
                 :disabled="loading || !plugin.canChangeEnabled || changingIds.has(plugin.id)"
-                @change="toggle(plugin)"
+                @change="onToggle($event, plugin)"
               />
             </label>
             <RouterLink class="button button-secondary" :to="`/plugins/${encodeURIComponent(plugin.id)}`">

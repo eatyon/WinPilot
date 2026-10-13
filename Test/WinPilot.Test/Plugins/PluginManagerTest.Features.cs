@@ -39,7 +39,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public async Task ReloadClosesExistingPageSessions()
+    public async Task ReloadPreservesExistingPageSessionsAndClosesRemovedPluginSessions()
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -61,7 +61,7 @@ public sealed partial class PluginManagerTest
             var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using (sessions)
             {
-                var manager = new PluginManager(paths, NullLogger<PluginManager>.Instance, new PagePluginRuntime(), sessions);
+                using var manager = new PluginManager(paths, NullLogger<PluginManager>.Instance, new PagePluginRuntime(), sessions);
                 var resources = new PluginWebResourceService(manager);
                 var webVersion = resources.GetVersion("page-plugin");
                 Assert.Equal(webVersion, resources.GetVersion("page-plugin"));
@@ -78,6 +78,9 @@ public sealed partial class PluginManagerTest
 
                 manager.Reload();
 
+                Assert.Equal("reply", await manager.SendPageMessageAsync(id, "request", CancellationToken.None));
+                Directory.Delete(directory, true);
+                manager.Reload();
                 await Assert.ThrowsAsync<KeyNotFoundException>(() => manager.SendPageMessageAsync(id, "request", CancellationToken.None));
             }
         }

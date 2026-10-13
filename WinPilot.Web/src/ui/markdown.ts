@@ -15,6 +15,7 @@ export async function renderMarkdown(source: string) {
     return renderLink(tokens, index, options, environment, self);
   };
   return DOMPurify.sanitize(markdown.render(source), {
+    ADD_ATTR: ['target'],
     FORBID_TAGS: ['img', 'svg', 'iframe', 'form', 'input', 'button'],
   });
 }

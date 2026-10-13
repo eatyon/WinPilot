@@ -173,7 +173,7 @@ public sealed class PluginManager : IDisposable
             stateSubscribers.Remove(plugin.Id);
         }
         if (deleteData && Directory.Exists(plugin.DataDirectory)) Directory.Delete(plugin.DataDirectory, recursive: true);
-        logger.LogInformation("插件 {PluginId} 已删除，插件数据处理：{DeleteData}", plugin.Id, deleteData ? "删除" : "保留");
+        logger.LogInformation("插件「{PluginName}」已删除，插件数据处理：{DeleteData}", plugin.Manifest?.Name ?? plugin.Id, deleteData ? "删除" : "保留");
     }
 
     public string ReadStorage(string id)
@@ -196,7 +196,7 @@ public sealed class PluginManager : IDisposable
         var plugin = GetPlugin(id);
         var definition = ReadSettingsDefinition(id);
         var submitted = JsonNode.Parse(content) as JsonObject
-            ?? throw new InvalidOperationException("插件配置必须是 JSON 对象");
+            ?? throw new InvalidOperationException("插件配置格式无效，请重新打开配置");
         var configuration = PluginSettingsSchema.ApplyDefaults(definition, submitted);
         PluginSettingsSchema.ValidateStorage(definition, configuration.ToJsonString());
         configurationStore.Update(Path.Combine(plugin.DataDirectory, "config.json"),
@@ -211,7 +211,7 @@ public sealed class PluginManager : IDisposable
     private void RestartCore(string id)
     {
         var plugin = GetPlugin(id);
-        if (!plugin.Enabled || plugin.State == PluginState.Invalid) return;
+        if (!plugin.Enabled) return;
         StopCore(plugin.Id);
         StartCore(plugin.Id);
     }
@@ -321,17 +321,19 @@ public sealed class PluginManager : IDisposable
         IPluginRuntimeInstance? instance;
         lock (gate) runtimes.TryGetValue(plugin.Id, out instance);
         if (instance is not IPluginRuntimeActionFeatures features) return new(false, "插件未提供点击执行功能能力");
+        var pluginName = plugin.Manifest?.Name ?? plugin.Id;
+        var featureName = feature.GetProperty("name").GetString() ?? featureId;
         try
         {
-            logger.LogDebug("开始执行插件功能，插件 ID：{PluginId}，功能 ID：{FeatureId}", plugin.Id, featureId);
+            logger.LogDebug("开始执行插件「{PluginName}」功能「{FeatureName}」", pluginName, featureName);
             var result = features.ExecuteFeature(featureId);
-            if (result.Succeeded) logger.LogInformation("插件功能执行完成，插件 ID：{PluginId}，功能 ID：{FeatureId}", plugin.Id, featureId);
-            else logger.LogWarning("插件功能执行失败，插件 ID：{PluginId}，功能 ID：{FeatureId}", plugin.Id, featureId);
+            if (result.Succeeded) logger.LogInformation("插件「{PluginName}」功能「{FeatureName}」执行完成", pluginName, featureName);
+            else logger.LogWarning("插件「{PluginName}」功能「{FeatureName}」执行失败", pluginName, featureName);
             return result;
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "执行插件功能时发生异常，插件 ID：{PluginId}，功能 ID：{FeatureId}", plugin.Id, featureId);
+            logger.LogError(exception, "执行插件「{PluginName}」功能「{FeatureName}」时发生异常", pluginName, featureName);
             throw;
         }
     }
@@ -427,11 +429,12 @@ public sealed class PluginManager : IDisposable
         RunLifecycle(id, () => StartCore(id));
     }
 
-    private void StartCore(string id)
+    private void StartCore(string id, bool enable = false)
     {
-        LoadCore(id);
         var plugin = GetPlugin(id);
+        if (!plugin.Enabled && !enable) throw new InvalidOperationException("已禁用插件不能加载");
         IPluginRuntimeInstance? instance = null;
+        var validated = false;
         try
         {
             pageSessions.CloseByPlugin(plugin.Id);
@@ -441,6 +444,21 @@ public sealed class PluginManager : IDisposable
                 runtimes.Remove(plugin.Id, out previous);
             }
             DisposeRuntime(previous, plugin.Id);
+            plugin = DiscoverCore(plugin.Directory, plugin.Id)
+                ?? throw new InvalidOperationException("插件校验失败，请检查插件文件和声明");
+            plugin = InitializeConfiguration(plugin);
+            UpdatePlugin(plugin);
+            if (plugin.State == PluginState.Invalid)
+                throw new InvalidOperationException(string.Join("；", plugin.Errors));
+            validated = true;
+            if (enable)
+            {
+                WriteLifecycleEnabled(plugin, true);
+                plugin = plugin with { Enabled = true };
+                UpdatePlugin(plugin);
+            }
+            LoadCore(id);
+            plugin = GetPlugin(id);
             instance = runtime.Start(plugin);
             if (instance is IPluginRuntimeStatus status) status.StateChanged += json => PublishState(plugin.Id, json);
             lock (gate) runtimes[plugin.Id] = instance;
@@ -453,8 +471,18 @@ public sealed class PluginManager : IDisposable
                 if (runtimes.TryGetValue(plugin.Id, out var current) && ReferenceEquals(current, instance))
                     runtimes.Remove(plugin.Id);
             DisposeRuntime(instance, plugin.Id);
-            logger.LogError(exception, "插件 {PluginId} 启动失败", plugin.Id);
-            UpdatePlugin(plugin with { State = PluginState.Failed, Errors = [$"插件执行失败：{exception.Message}"] });
+            if (!validated && plugin.Enabled)
+            {
+                plugin = plugin with { Enabled = false };
+                TryWriteDisabledSetting(plugin);
+            }
+            logger.LogError(exception, "插件「{PluginName}」启动失败", plugin.Manifest?.Name ?? plugin.Id);
+            UpdatePlugin(plugin with
+            {
+                State = PluginState.Failed,
+                CanChangeEnabled = validated && plugin.CanChangeEnabled,
+                Errors = [validated ? $"插件执行失败：{exception.Message}" : exception.Message]
+            });
         }
     }
 
@@ -512,40 +540,88 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            StopAll();
             paths.EnsurePluginsDirectory();
-            var discovered = Directory.EnumerateDirectories(paths.PluginsDirectory, "*", SearchOption.TopDirectoryOnly)
-                .Select(directory => Discover(directory))
+            var directories = Directory.EnumerateDirectories(paths.PluginsDirectory, "*", SearchOption.TopDirectoryOnly)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var previous = GetPlugins();
+            var previousById = previous.ToDictionary(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase);
+            PluginInfo[] retained;
+            lock (gate) retained = previous.Where(plugin => directories.Contains(plugin.Directory) && runtimes.ContainsKey(plugin.Id)).ToArray();
+            var retainedDirectories = retained.Select(plugin => plugin.Directory).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var retainedIds = retained.Select(plugin => plugin.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var skippedPlugins = new List<PluginInfo>();
+            var discovered = directories.Where(directory => !retainedDirectories.Contains(directory))
+                .Select(directory => Discover(directory, previousById, skippedPlugins))
                 .Where(plugin => plugin is not null)
                 .Select(plugin => plugin!)
-                .OrderBy(plugin => plugin.Manifest?.Name ?? plugin.DirectoryName, StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();
+            var candidateIds = retainedIds.Concat(discovered.Select(plugin => plugin.Id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var duplicateIds = discovered.Where(plugin => plugin.Manifest is not null)
-                .GroupBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase)
-                .Where(group => group.Count() > 1)
-                .Select(group => group.Key)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (duplicateIds.Count > 0)
+            discovered = discovered.GroupBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var original = previousById.GetValueOrDefault(group.Key);
+                    if (original is not null && !directories.Contains(original.Directory)) original = null;
+                    var current = original is null ? null : group.FirstOrDefault(plugin =>
+                        plugin.Directory.Equals(original.Directory, StringComparison.OrdinalIgnoreCase));
+                    if (retainedIds.Contains(group.Key) || original is not null && current is null)
+                    {
+                        logger.LogWarning("忽略重复插件 ID {PluginId}", group.Key);
+                        return null;
+                    }
+                    if (group.Count() == 1) return group.Single();
+                    logger.LogWarning("忽略重复插件 ID {PluginId}", group.Key);
+                    return current;
+                })
+                .Where(plugin => plugin is not null)
+                .Select(plugin => plugin!)
+                .ToArray();
+            for (var index = 0; index < discovered.Length; index++)
             {
-                foreach (var duplicateId in duplicateIds) logger.LogWarning("忽略重复插件 ID {PluginId}", duplicateId);
-                discovered = discovered.Where(plugin => !duplicateIds.Contains(plugin.Id)).ToArray();
+                var plugin = InitializeConfiguration(discovered[index]);
+                var original = previousById.GetValueOrDefault(plugin.Id);
+                if (plugin.State == PluginState.Invalid && plugin.Enabled)
+                {
+                    TryWriteDisabledSetting(plugin);
+                    plugin = plugin with { Enabled = false };
+                }
+                else if (plugin.State == PluginState.Discovered && original?.State is PluginState.Stopped or PluginState.Failed or PluginState.Loaded
+                    && original.Directory.Equals(plugin.Directory, StringComparison.OrdinalIgnoreCase))
+                    plugin = plugin with { State = original.State, Errors = original.Errors };
+                discovered[index] = plugin;
+            }
+            foreach (var group in skippedPlugins.GroupBy(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase))
+            {
+                if (candidateIds.Contains(group.Key) || group.Count() != 1) continue;
+                var plugin = group.Single();
+                if (plugin.Enabled) TryWriteDisabledSetting(plugin);
             }
 
-            lock (gate) plugins = discovered;
-            logger.LogInformation("插件扫描完成，发现 {Count} 个插件目录", discovered.Length);
-            foreach (var plugin in discovered.Where(plugin => plugin.Enabled && plugin.State != PluginState.Invalid)) StartCore(plugin.Id);
+            var next = retained.Concat(discovered)
+                .OrderBy(plugin => plugin.Manifest?.Name ?? plugin.DirectoryName, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+            var nextById = next.ToDictionary(plugin => plugin.Id, StringComparer.OrdinalIgnoreCase);
+            foreach (var plugin in previous.Where(plugin => !nextById.TryGetValue(plugin.Id, out var current)
+                || !current.Directory.Equals(plugin.Directory, StringComparison.OrdinalIgnoreCase)))
+            {
+                StopCore(plugin.Id);
+                lock (gate) stateSubscribers.Remove(plugin.Id);
+            }
+            lock (gate) plugins = next;
+            logger.LogInformation("插件扫描完成，发现 {Count} 个插件目录", next.Length);
+            foreach (var plugin in discovered.Where(plugin => plugin.Enabled && plugin.State != PluginState.Invalid
+                && (!previousById.TryGetValue(plugin.Id, out var original)
+                    || !original.Directory.Equals(plugin.Directory, StringComparison.OrdinalIgnoreCase)))) StartCore(plugin.Id);
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "扫描插件目录失败");
-            lock (gate) plugins = [];
         }
     }
 
-    private PluginInfo? Discover(string directory)
+    private PluginInfo? Discover(string directory, IReadOnlyDictionary<string, PluginInfo> previous, List<PluginInfo> skippedPlugins)
     {
-        try { return DiscoverCore(directory); }
+        try { return DiscoverCore(directory, previous: previous, skippedPlugins: skippedPlugins); }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "跳过无法读取的插件目录 {Directory}", directory);
@@ -553,7 +629,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private PluginInfo? DiscoverCore(string directory)
+    private PluginInfo? DiscoverCore(string directory, string? expectedId = null, IReadOnlyDictionary<string, PluginInfo>? previous = null, List<PluginInfo>? skippedPlugins = null)
     {
         var directoryName = Path.GetFileName(directory);
         var errors = new List<string>();
@@ -581,9 +657,13 @@ public sealed class PluginManager : IDisposable
         }
 
         if (manifest is not null) ValidateManifest(manifest, directory, errors);
+        if (expectedId is not null && manifest is not null
+            && !expectedId.Equals(manifest.Id?.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("插件 ID 已变化，请重新扫描插件目录");
         if (manifest is null)
         {
             logger.LogWarning("忽略无效插件目录 {Directory}：{Errors}", directory, string.Join("；", errors));
+            if (expectedId is not null) throw new InvalidOperationException(string.Join("；", errors));
             return null;
         }
 
@@ -593,40 +673,54 @@ public sealed class PluginManager : IDisposable
             return null;
         }
         var id = manifest.Id.Trim();
-        var enabled = ReadLifecycleEnabled(id, Path.Combine(paths.PluginDataDirectory, id));
-        var versionIncompatible = errors.Count == 1 && IsVersionIncompatible(manifest);
-        if (errors.Count > 0 && !versionIncompatible)
+        if (previous is not null && previous.TryGetValue(id, out var original)
+            && !original.Directory.Equals(directory, StringComparison.OrdinalIgnoreCase) && Directory.Exists(original.Directory))
         {
-            logger.LogWarning("忽略无效插件目录 {Directory}：{Errors}", directory, string.Join("；", errors));
+            logger.LogWarning("忽略重复插件 ID {PluginId}", id);
             return null;
         }
-        if (errors.Count > 0) logger.LogWarning("发现无效插件目录 {Directory}：{Errors}", directory, string.Join("；", errors));
-        var canChangeEnabled = errors.Count == 0 || versionIncompatible;
-        if (errors.Count == 0)
-        {
-            try
-            {
-                var dataDirectory = Path.Combine(paths.PluginDataDirectory, id);
-                configurationStore.Initialize(Path.Combine(dataDirectory, "plugin.json"),
-                    () => JsonSerializer.SerializeToNode(new PluginLifecycleState(), LifecycleJsonOptions)!.AsObject());
-                if (!string.IsNullOrWhiteSpace(manifest.SettingsUi))
-                    configurationStore.Initialize(Path.Combine(dataDirectory, "config.json"),
-                        () =>
-                        {
-                            var definition = File.ReadAllText(ResolveDeclarationPath(directory, manifest.SettingsUi));
-                            PluginSettingsSchema.ValidateDefinition(definition);
-                            return PluginSettingsSchema.ApplyDefaults(definition, new JsonObject());
-                        });
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
-            {
-                logger.LogWarning(exception, "插件 {PluginId} 配置初始化失败", id);
-                errors.Add("插件配置初始化失败，请检查数据目录权限和配置声明");
-                canChangeEnabled = false;
-            }
-        }
+        var enabled = ReadLifecycleEnabled(id, Path.Combine(paths.PluginDataDirectory, id));
+        var versionIncompatible = errors.Count == 1 && IsVersionIncompatible(manifest);
+        var ignored = errors.Count > 0 && !versionIncompatible;
+        if (errors.Count > 0) logger.LogWarning("{Action}无效插件目录 {Directory}：{Errors}", ignored ? "忽略" : "发现", directory, string.Join("；", errors));
         var state = errors.Count > 0 ? PluginState.Invalid : enabled ? PluginState.Discovered : PluginState.Disabled;
-        return new PluginInfo(id, directoryName, directory, Path.Combine(paths.PluginDataDirectory, id), manifest, state, enabled, errors, canChangeEnabled);
+        var plugin = new PluginInfo(id, directoryName, directory, Path.Combine(paths.PluginDataDirectory, id), manifest, state, enabled, errors, errors.Count == 0);
+        if (ignored && expectedId is null)
+        {
+            skippedPlugins?.Add(plugin);
+            return null;
+        }
+        return plugin;
+    }
+
+    private PluginInfo InitializeConfiguration(PluginInfo plugin)
+    {
+        if (plugin.State == PluginState.Invalid) return plugin;
+        try
+        {
+            configurationStore.Initialize(Path.Combine(plugin.DataDirectory, "plugin.json"),
+                () => JsonSerializer.SerializeToNode(new PluginLifecycleState(), LifecycleJsonOptions)!.AsObject());
+            var settingsUi = plugin.Manifest!.SettingsUi;
+            if (!string.IsNullOrWhiteSpace(settingsUi))
+                configurationStore.Initialize(Path.Combine(plugin.DataDirectory, "config.json"),
+                    () =>
+                    {
+                        var definition = File.ReadAllText(ResolveDeclarationPath(plugin.Directory, settingsUi));
+                        PluginSettingsSchema.ValidateDefinition(definition);
+                        return PluginSettingsSchema.ApplyDefaults(definition, new JsonObject());
+                    });
+            return plugin;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            logger.LogWarning(exception, "插件 {PluginId} 配置初始化失败", plugin.Id);
+            return plugin with
+            {
+                State = PluginState.Invalid,
+                CanChangeEnabled = false,
+                Errors = [.. plugin.Errors, "插件配置初始化失败，请检查数据目录权限和配置声明"]
+            };
+        }
     }
 
     private static bool IsVersionIncompatible(PluginManifest manifest) =>
@@ -738,26 +832,21 @@ public sealed class PluginManager : IDisposable
     private void SetEnabledCore(string id, bool enabled)
     {
         var plugin = GetPlugin(id);
-        if (plugin.State == PluginState.Invalid)
-        {
-            if (!plugin.CanChangeEnabled) throw new InvalidOperationException("无效插件不能修改启用状态");
-            WriteLifecycleEnabled(plugin, enabled);
-            UpdatePlugin(plugin with { Enabled = enabled });
-            logger.LogInformation("插件 {PluginId} 的启用设置已{Action}，因插件不兼容，仍不会运行", plugin.Id, enabled ? "开启" : "关闭");
-            return;
-        }
-        if (!enabled) StopCore(id);
-        WriteLifecycleEnabled(plugin, enabled);
+        if (!plugin.CanChangeEnabled)
+            throw new InvalidOperationException(string.Join("；", plugin.Errors));
         if (enabled)
         {
-            UpdatePlugin(plugin with { Enabled = true, State = PluginState.Discovered, Errors = [] });
-            StartCore(plugin.Id);
+            StartCore(plugin.Id, enable: true);
+            plugin = GetPlugin(id);
+            if (!plugin.Enabled) return;
         }
         else
         {
+            WriteLifecycleEnabled(plugin, false);
+            StopCore(id);
             UpdatePlugin(plugin with { Enabled = false, State = PluginState.Disabled });
         }
-        logger.LogInformation("插件 {PluginId} 已{Action}", plugin.Id, enabled ? "启用" : "禁用");
+        logger.LogInformation("插件「{PluginName}」已{Action}", plugin.Manifest?.Name ?? plugin.Id, enabled ? "启用" : "禁用");
     }
 
     public void Dispose()
@@ -818,6 +907,15 @@ public sealed class PluginManager : IDisposable
     private void WriteLifecycleEnabled(PluginInfo plugin, bool enabled)
     {
         UpdateLifecycleState(plugin, lifecycle => lifecycle with { Enabled = enabled });
+    }
+
+    private void TryWriteDisabledSetting(PluginInfo plugin)
+    {
+        try { WriteLifecycleEnabled(plugin, false); }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "插件「{PluginName}」禁用设置保存失败", plugin.Manifest?.Name ?? plugin.Id);
+        }
     }
 
     private void UpdateLifecycleState(PluginInfo plugin, Func<PluginLifecycleState, PluginLifecycleState> update)

@@ -15,7 +15,7 @@ public static class PluginSettingsSchema
             var name = setting.GetProperty("name").GetString()!;
             if (!IsCollection(setting))
             {
-                if (!content.ContainsKey(name)) content[name] = DefaultValue(setting);
+                ApplyFieldDefault(setting, content);
                 continue;
             }
             if (setting.GetProperty("mode").GetString() == "dynamic")
@@ -42,10 +42,15 @@ public static class PluginSettingsSchema
     private static void ApplyFieldDefaults(JsonElement fields, JsonObject content)
     {
         foreach (var field in fields.EnumerateArray())
-        {
-            var name = field.GetProperty("name").GetString()!;
-            if (!content.ContainsKey(name)) content[name] = DefaultValue(field);
-        }
+            ApplyFieldDefault(field, content);
+    }
+
+    private static void ApplyFieldDefault(JsonElement field, JsonObject content)
+    {
+        var name = field.GetProperty("name").GetString()!;
+        if (!content.ContainsKey(name) || field.GetProperty("type").GetString() == "number"
+            && content[name] is JsonValue value && value.TryGetValue<string>(out var text) && text == "")
+            content[name] = DefaultValue(field);
     }
 
     private static JsonNode? DefaultValue(JsonElement field)
@@ -73,7 +78,7 @@ public static class PluginSettingsSchema
             var name = RequiredString(setting, "name", "配置项缺少 name");
             ValidateMasked(setting, type, name);
             ValidateOptionsSource(setting, type, name);
-            if (type != "collection") ValidateDefault(setting, type, name);
+            if (type != "collection") ValidateFieldDefinition(setting, type, name);
             if (!names.Add(name)) throw new InvalidOperationException($"配置项名称重复：{name}");
             if (type == "collection") ValidateCollectionDefinition(setting);
         }
@@ -82,16 +87,16 @@ public static class PluginSettingsSchema
     public static void ValidateStorage(string definitionJson, string contentJson)
     {
         using var definition = JsonDocument.Parse(definitionJson); using var content = JsonDocument.Parse(contentJson);
-        if (content.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("插件配置必须是 JSON 对象");
+        if (content.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("插件配置格式无效，请重新打开配置");
         foreach (var setting in definition.RootElement.EnumerateArray())
         {
             if (!IsCollection(setting))
             {
-                ValidateFieldValue(setting, content.RootElement, "插件配置");
+                ValidateFieldValue(setting, content.RootElement);
                 continue;
             }
             ValidateCollectionDefinition(setting); var name = RequiredString(setting, "name", "Collection 缺少 name");
-            if (content.RootElement.TryGetProperty(name, out var value)) ValidateCollectionValue(name, setting, value);
+            if (content.RootElement.TryGetProperty(name, out var value)) ValidateCollectionValue(setting, value);
         }
     }
 
@@ -126,48 +131,89 @@ public static class PluginSettingsSchema
             if (!FieldTypes.Contains(type)) throw new InvalidOperationException($"Collection 字段 {name} 类型无效或不支持嵌套 Collection：{type}");
             ValidateMasked(field, type, name);
             ValidateOptionsSource(field, type, name);
-            ValidateDefault(field, type, name);
+            ValidateFieldDefinition(field, type, name);
         }
     }
 
-    private static void ValidateCollectionValue(string name, JsonElement definition, JsonElement value)
+    private static void ValidateCollectionValue(JsonElement definition, JsonElement value)
     {
+        var displayName = FieldDisplayName(definition);
         var mode = definition.GetProperty("mode").GetString();
         if (mode == "fixed")
         {
-            if (value.ValueKind != JsonValueKind.Object) throw new InvalidOperationException($"Fixed Collection {name} 必须是对象");
-            foreach (var item in definition.GetProperty("items").EnumerateArray()) { var itemName = item.GetProperty("name").GetString()!; if (value.TryGetProperty(itemName, out var itemValue)) ValidateFieldObject(name, item.GetProperty("fields"), itemValue); }
+            if (value.ValueKind != JsonValueKind.Object) throw new InvalidOperationException($"{displayName}格式无效，请重新打开配置");
+            foreach (var item in definition.GetProperty("items").EnumerateArray()) { var itemName = item.GetProperty("name").GetString()!; if (value.TryGetProperty(itemName, out var itemValue)) ValidateFieldObject(displayName, item.GetProperty("fields"), itemValue); }
         }
         else
         {
-            if (value.ValueKind != JsonValueKind.Array) throw new InvalidOperationException($"Dynamic Collection {name} 必须是数组");
+            if (value.ValueKind != JsonValueKind.Array) throw new InvalidOperationException($"{displayName}格式无效，请重新打开配置");
             var ids = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var item in value.EnumerateArray()) { if (item.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("Dynamic Item 必须是对象"); if (!item.TryGetProperty("__winpilot", out var metadata) || metadata.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("Dynamic Item 缺少 __winpilot 元数据"); var id = RequiredString(metadata, "id", "Dynamic Item 缺少 __winpilot.id"); if (!ids.Add(id)) throw new InvalidOperationException($"Dynamic Collection 存在重复 __winpilot.id：{id}"); RequiredString(metadata, "remark", "Dynamic Item 的 __winpilot.remark 不能为空"); ValidateFieldObject(name, definition.GetProperty("item").GetProperty("fields"), item); }
+            foreach (var item in value.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) throw new InvalidOperationException($"{displayName}包含无效条目，请重新添加");
+                if (!item.TryGetProperty("__winpilot", out var metadata) || metadata.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException($"{displayName}条目信息不完整，请重新添加");
+                var id = RequiredString(metadata, "id", $"{displayName}条目信息不完整，请重新添加");
+                if (!ids.Add(id)) throw new InvalidOperationException($"{displayName}包含重复条目，请删除后重新添加");
+                RequiredString(metadata, "remark", "备注不能为空");
+                ValidateFieldObject(displayName, definition.GetProperty("item").GetProperty("fields"), item);
+            }
         }
     }
 
-    private static void ValidateFieldObject(string collectionKey, JsonElement fields, JsonElement value)
+    private static void ValidateFieldObject(string collectionName, JsonElement fields, JsonElement value)
     {
-        if (value.ValueKind != JsonValueKind.Object) throw new InvalidOperationException($"Collection {collectionKey} Item 必须是对象");
-        foreach (var field in fields.EnumerateArray()) ValidateFieldValue(field, value, $"Collection {collectionKey}");
+        if (value.ValueKind != JsonValueKind.Object) throw new InvalidOperationException($"{collectionName}包含无效条目，请重新打开配置");
+        foreach (var field in fields.EnumerateArray()) ValidateFieldValue(field, value);
     }
 
-    private static void ValidateFieldValue(JsonElement field, JsonElement content, string owner)
+    private static void ValidateFieldValue(JsonElement field, JsonElement content)
     {
         var name = field.GetProperty("name").GetString()!;
+        var displayName = FieldDisplayName(field);
         if (!content.TryGetProperty(name, out var value))
         {
-            if (IsRequired(field)) throw new InvalidOperationException($"{owner} 的 {name} 不能为空");
+            if (IsRequired(field)) throw new InvalidOperationException($"{displayName}不能为空");
             return;
         }
-        if (!IsValidFieldValue(field.GetProperty("type").GetString(), value) || IsRequired(field) && IsEmpty(value))
-            throw new InvalidOperationException($"{owner} 的 {name} 类型无效或为空");
+        if (IsRequired(field) && IsEmpty(value)) throw new InvalidOperationException($"{displayName}不能为空");
+        if (!IsValidFieldValue(field.GetProperty("type").GetString(), value))
+            throw new InvalidOperationException($"{displayName}格式无效");
+        if (field.GetProperty("type").GetString() == "number") ValidateNumberValue(field, value, displayName);
     }
 
-    private static void ValidateDefault(JsonElement field, string type, string name)
+    private static void ValidateFieldDefinition(JsonElement field, string type, string name)
     {
         if (field.TryGetProperty("default", out var value) && !IsValidFieldValue(type, value))
             throw new InvalidOperationException($"配置项 {name} 的默认值类型无效");
+        foreach (var key in new[] { "min", "max", "step" })
+        {
+            if (!field.TryGetProperty(key, out var limit)) continue;
+            if (type != "number") throw new InvalidOperationException($"配置项 {name} 的 {key} 仅支持 number 类型");
+            if (key == "step" && limit.ValueKind == JsonValueKind.String && limit.GetString() == "any") continue;
+            if (limit.ValueKind != JsonValueKind.Number || !limit.TryGetDouble(out var number) || !double.IsFinite(number)
+                || key == "step" && number <= 0)
+                throw new InvalidOperationException($"配置项 {name} 的 {key} 无效");
+        }
+        if (type != "number") return;
+        if (field.TryGetProperty("min", out var min) && field.TryGetProperty("max", out var max) && min.GetDouble() > max.GetDouble())
+            throw new InvalidOperationException($"配置项 {name} 的 min 不能大于 max");
+        ValidateNumberValue(field, field.TryGetProperty("default", out value) ? value : JsonSerializer.SerializeToElement(0), name);
+    }
+
+    private static void ValidateNumberValue(JsonElement field, JsonElement value, string name)
+    {
+        if (!value.TryGetDouble(out var number) || !double.IsFinite(number))
+            throw new InvalidOperationException($"{name}必须是有效数字");
+        var minimum = field.TryGetProperty("min", out var min) ? min.GetDouble() : (double?)null;
+        if (minimum.HasValue && number < minimum.Value)
+            throw new InvalidOperationException($"{name}不能小于 {minimum.Value}");
+        if (field.TryGetProperty("max", out var max) && number > max.GetDouble())
+            throw new InvalidOperationException($"{name}不能大于 {max.GetDouble()}");
+        if (!field.TryGetProperty("step", out var step) || step.ValueKind == JsonValueKind.String) return;
+        var steps = (number - (minimum ?? 0)) / step.GetDouble();
+        if (!double.IsFinite(steps) || Math.Abs(steps - Math.Round(steps)) > 1e-7)
+            throw new InvalidOperationException($"{name}不符合步长 {step.GetDouble()}");
     }
 
     private static bool IsValidFieldValue(string? type, JsonElement value) => type switch
@@ -180,6 +226,9 @@ public static class PluginSettingsSchema
     };
 
     private static bool IsCollection(JsonElement value) => value.TryGetProperty("type", out var type) && type.GetString() == "collection";
+    private static string FieldDisplayName(JsonElement field) => field.TryGetProperty("label", out var label)
+        && label.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(label.GetString())
+            ? label.GetString()! : field.GetProperty("name").GetString()!;
     private static void ValidateMasked(JsonElement field, string type, string name)
     {
         if (!field.TryGetProperty("masked", out var masked)) return;

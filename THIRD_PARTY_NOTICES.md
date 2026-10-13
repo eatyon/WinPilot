@@ -35,7 +35,10 @@ WinPilot 使用或参考以下第三方项目，各组件保留原有许可证�
 
 | 组件 | 用途 | 许可证 |
 | --- | --- | --- |
-| [argparse](https://github.com/nodeca/argparse) | markdown-it 命令行工具的参数解析 | [PSF-2.0](https://github.com/nodeca/argparse/blob/master/LICENSE) |
 | [entities](https://github.com/fb55/entities) | HTML 字符实体处理 | [BSD-2-Clause](https://github.com/fb55/entities/blob/main/LICENSE) |
+| [linkify-it](https://github.com/markdown-it/linkify-it) | 链接识别 | [MIT](https://github.com/markdown-it/linkify-it/blob/master/LICENSE) |
+| [mdurl](https://github.com/markdown-it/mdurl) | URL 解析与编码 | [MIT](https://github.com/markdown-it/mdurl/blob/master/LICENSE) |
+| [punycode.js](https://github.com/mathiasbynens/punycode.js) | 国际化域名转换 | [MIT](https://github.com/mathiasbynens/punycode.js/blob/main/LICENSE-MIT.txt) |
+| [uc.micro](https://github.com/markdown-it/uc.micro) | Unicode 字符分类 | [MIT](https://github.com/markdown-it/uc.micro/blob/master/LICENSE.txt) |
 
 分发第三方组件时，保留对应的许可文本、版权和附加 NOTICE。本清单不替代组件的原始声明

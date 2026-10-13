@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getPageScroller } from '../../ui/scrollLock';
-import { isAbortError, userErrorMessage } from '../../api/client';
+import { isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { createPluginRequests } from './PluginRequests';
 import { showToast } from '../../ui/toast';
 import AppModal from '../../components/AppModal.vue';
@@ -150,6 +150,7 @@ async function toggle() {
   const current = plugin.value;
   if (!current) return;
   if (!current.canChangeEnabled) return;
+  const failureMessage = current.enabled ? '插件禁用失败' : '插件启用失败';
   toggling.value = true;
   loadGeneration++;
   requests.cancelReads();
@@ -158,12 +159,18 @@ async function toggle() {
       `/api/plugins/${encodeURIComponent(id.value)}/${current.enabled ? 'disable' : 'enable'}`,
       { method: 'POST' },
     );
-    if (!response.ok) throw new Error('更新插件状态失败');
-    plugin.value = await requests.json<PluginInfo>(response);
+    if (!response.ok) throw new Error(failureMessage);
+    const updated = await requests.json<PluginInfo>(response);
+    if (!requests.active || id.value !== current.id) return;
+    plugin.value = updated;
     await load();
-    showToast(`插件已${plugin.value.enabled ? '启用' : '禁用'}`, 'success');
+    if (!requests.active || id.value !== current.id) return;
+    if (updated.state === 'Failed' || updated.state === 'Invalid')
+      showToast(failureMessage, 'error');
+    else showToast(`插件已${updated.enabled ? '启用' : '禁用'}`, 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '更新插件状态失败'), 'error');
+    if (requests.active && id.value === current.id && !isAbortError(cause) && !(cause instanceof WinPilotConnectionError))
+      showToast(failureMessage, 'error');
   }
   finally { toggling.value = false; }
 }
@@ -173,6 +180,7 @@ async function saveSettings() {
   const invalid = definitions.value.find(
     (setting) =>
       isDefinition(setting) &&
+      setting.type !== 'number' &&
       setting.required &&
       (config[setting.name] === '' || config[setting.name] === undefined),
   ) as SettingDefinition | undefined;
@@ -197,6 +205,7 @@ async function saveSettings() {
         .map((item: Record<string, any>) =>
           fields.find(
             (field) =>
+              field.type !== 'number' &&
               field.required &&
               (item[field.name] === undefined ||
                 item[field.name] === null ||
@@ -209,7 +218,7 @@ async function saveSettings() {
     .find(Boolean);
   if (invalidCollection) {
     showToast(
-      invalidCollection.name === '__winpilot.remark' ? '备注不能为空' : 'Collection 必填项不能为空',
+      invalidCollection.name === '__winpilot.remark' ? '备注不能为空' : `${invalidCollection.label || invalidCollection.name}不能为空`,
       'error',
     );
     return;
@@ -223,11 +232,17 @@ async function saveSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     });
-    if (!response.ok) throw new Error('保存配置失败');
+    if (!response.ok) {
+      const error = await requests.json<{ detail?: unknown }>(response).catch(cause => {
+        if (isAbortError(cause)) throw cause;
+        return { detail: undefined };
+      });
+      throw new Error(typeof error?.detail === 'string' && error.detail.trim() ? error.detail : '配置保存失败，请重试');
+    }
     showToast('配置已保存', 'success');
     await load();
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '保存配置失败'), 'error');
+    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '配置保存失败，请重试'), 'error');
   } finally {
     saving.value = false;
   }

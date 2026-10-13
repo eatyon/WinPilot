@@ -2,8 +2,13 @@
 import { RouterLink } from 'vue-router';
 import type { PluginInfo } from './PluginModels';
 
-defineProps<{ plugin: PluginInfo; changing?: boolean }>();
+const props = defineProps<{ plugin: PluginInfo; changing?: boolean }>();
 const emit = defineEmits<{ toggle: [] }>();
+
+function toggle(event: Event) {
+  (event.target as HTMLInputElement).checked = props.plugin.enabled;
+  emit('toggle');
+}
 </script>
 
 <template>
@@ -16,25 +21,14 @@ const emit = defineEmits<{ toggle: [] }>();
       <div class="plugin-card-actions">
         <label
           class="task-row-toggle"
-          :class="{ 'is-invalid-enabled': plugin.state === 'Invalid' && plugin.enabled }"
-          :title="
-            plugin.state === 'Invalid'
-              ? plugin.canChangeEnabled
-                ? plugin.enabled
-                  ? '关闭插件（当前版本不兼容）'
-                  : '启用插件（当前版本不兼容，不会加载）'
-                : '无效插件无法修改'
-              : plugin.enabled
-                ? '关闭插件'
-                : '开启插件'
-          "
+          :title="!plugin.canChangeEnabled ? '无法启用' : plugin.enabled ? '禁用插件' : '启用插件'"
         >
           <input
             type="checkbox"
-            :aria-label="plugin.enabled ? '关闭插件' : '开启插件'"
+            :aria-label="plugin.enabled ? '禁用插件' : '启用插件'"
             :checked="plugin.enabled"
             :disabled="!plugin.canChangeEnabled || changing"
-            @change="emit('toggle')"
+            @change="toggle"
           />
         </label>
         <RouterLink class="button button-secondary" :to="`/plugins/${encodeURIComponent(plugin.id)}/info`">

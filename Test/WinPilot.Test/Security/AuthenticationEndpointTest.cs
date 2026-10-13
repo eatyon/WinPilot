@@ -35,7 +35,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         builder.Services.AddResponseCompression(options =>
-            options.MimeTypes = ["text/html", "text/css", "text/javascript", "application/javascript", "application/json", "application/problem+json", "image/svg+xml"]);
+            options.MimeTypes = ["text/html", "text/plain", "text/css", "text/javascript", "application/javascript", "application/json", "application/problem+json", "image/svg+xml"]);
         var paths = PortableDataPaths.Create(root);
         logProvider = new RollingFileLoggerProvider(paths.LogsDirectory);
         builder.Logging.AddProvider(logProvider);
@@ -519,6 +519,8 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("/site.css", "br")]
     [InlineData("/site.js", "gzip")]
     [InlineData("/site.js", "br")]
+    [InlineData("/readme.txt", "gzip")]
+    [InlineData("/readme.txt", "br")]
     public async Task WebFacade_CompressesPagesAndTextResources(string path, string encoding)
     {
         var paths = app.Services.GetRequiredService<PortableDataPaths>();

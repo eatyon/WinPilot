@@ -65,6 +65,9 @@ export type PluginSettingField = {
   label?: string;
   description?: string;
   default?: unknown;
+  min?: number;
+  max?: number;
+  step?: number | 'any';
   options?: SelectOption[];
   optionsSource?: 'notificationChannels';
   required?: boolean;

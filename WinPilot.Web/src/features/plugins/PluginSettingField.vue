@@ -220,7 +220,11 @@ function confirmDelete() {
         :value="modelValue"
         class="text-input"
         type="number"
-        @input="emit('update:modelValue', Number(($event.target as HTMLInputElement).value))"
+        :min="field.min"
+        :max="field.max"
+        :step="field.step ?? 'any'"
+        title=""
+        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value))"
       />
       <template v-else-if="field.type === 'select'">
         <AppSelect

@@ -8,6 +8,454 @@ namespace WinPilot.Test;
 
 public sealed partial class PluginManagerTest
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StartingPluginReadsLatestManifestWithoutScanning(bool restart)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            if (!restart) manager.Disable("example");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"), """
+                { "id": "example", "name": "新版插件", "version": "2.0.0", "main": "new.dll" }
+                """);
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "new.dll"), "");
+            runtime.StartedPlugins.Clear();
+
+            if (restart) manager.Restart("example");
+            else manager.Enable("example");
+
+            var started = Assert.Single(runtime.StartedPlugins);
+            Assert.Equal("新版插件", started.Manifest!.Name);
+            Assert.Equal("2.0.0", started.Manifest.Version);
+            Assert.Equal("new.dll", started.Manifest.Main);
+            Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData("{\"id\":\"other\",\"name\":\"Other\",\"version\":\"1.0.0\",\"main\":\"plugin.dll\"}")]
+    [InlineData("{\"id\":\"example\",\"name\":\"Example\",\"version\":\"1.0.0\",\"main\":\"missing.dll\"}")]
+    [InlineData("{\"id\":\"example\",\"name\":\"Example\",\"version\":\"1.0.0\",\"main\":\"plugin.dll\",\"features_ui\":\"missing.json\"}")]
+    [InlineData("{\"id\":\"example\",\"name\":\"Example\",\"version\":\"1.0.0\",\"main\":\"plugin.dll\",\"winpilot_version\":\"999.0.0\"}")]
+    public void EnableRejectsChangedIdAndInvalidFilesBeforeStarting(string manifest)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            manager.Disable("example");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"), manifest);
+            runtime.StartedIds.Clear();
+
+            manager.Enable("example");
+
+            Assert.Empty(runtime.StartedIds);
+            var failed = manager.GetPlugin("example");
+            Assert.Equal(PluginState.Failed, failed.State);
+            Assert.NotEmpty(failed.Errors);
+            Assert.False(failed.Enabled);
+            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+                Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+            if (manifest.Contains("winpilot_version"))
+                Assert.Contains(failed.Errors, error => error.Contains("需要 WinPilot 999.0.0 或更高版本"));
+            Assert.False(Directory.Exists(Path.Combine(paths.PluginDataDirectory, "other")));
+            WritePlugin(paths, "example", "example", "");
+            manager.Reload();
+            manager.Enable("example");
+            Assert.Equal(["example"], runtime.StartedIds);
+            Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Reload_RefreshesInactivePluginMetadataWithoutStartingIt(bool enabled)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            if (enabled) manager.Stop("example");
+            else manager.Disable("example");
+            var original = manager.GetPlugin("example");
+            File.WriteAllText(Path.Combine(original.Directory, "manifest.json"), """
+                { "id": "example", "name": "新版插件", "version": "2.0.0", "main": "plugin.dll", "features_ui": "features.json" }
+                """);
+            File.WriteAllText(Path.Combine(original.Directory, "features.json"), """
+                { "features": [{ "id": "refresh", "name": "刷新", "mode": "action" }] }
+                """);
+            runtime.StartedIds.Clear();
+            runtime.DisposedIds.Clear();
+
+            manager.Reload();
+
+            var refreshed = Assert.Single(manager.GetPlugins());
+            Assert.Equal(original.Directory, refreshed.Directory);
+            Assert.Equal("新版插件", refreshed.Manifest!.Name);
+            Assert.Equal("2.0.0", refreshed.Manifest.Version);
+            Assert.Equal("features.json", refreshed.Manifest.FeaturesUi);
+            Assert.Equal(enabled ? PluginState.Stopped : PluginState.Disabled, refreshed.State);
+            Assert.Empty(runtime.StartedIds);
+            Assert.Empty(runtime.DisposedIds);
+
+            File.WriteAllText(Path.Combine(original.Directory, "features.json"), "invalid");
+            manager.Reload();
+            Assert.Empty(manager.GetPlugins());
+            Assert.Empty(runtime.StartedIds);
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void Reload_OnlyStartsNewEnabledPluginsAndStopsRemovedPlugins()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "existing", "existing", "");
+            WritePlugin(paths, "removed", "removed", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            var existing = manager.GetPlugin("existing");
+            File.WriteAllText(Path.Combine(existing.Directory, "manifest.json"), "invalid");
+            WritePlugin(paths, "new", "new", "");
+            WritePlugin(paths, "disabled", "disabled", "");
+            File.WriteAllText(Path.Combine(paths.PluginDataDirectory, "disabled", "plugin.json"), "{ \"enabled\": false }");
+            Directory.Delete(Path.Combine(paths.PluginsDirectory, "removed"), true);
+            runtime.StartedIds.Clear();
+            runtime.DisposedIds.Clear();
+
+            manager.Reload();
+
+            Assert.Same(existing, manager.GetPlugin("existing"));
+            Assert.Equal(["new"], runtime.StartedIds);
+            Assert.Equal(["removed"], runtime.DisposedIds);
+            Assert.Equal(PluginState.Running, manager.GetPlugin("new").State);
+            Assert.Equal(PluginState.Disabled, manager.GetPlugin("disabled").State);
+            Assert.Throws<FileNotFoundException>(() => manager.GetPlugin("removed"));
+            Assert.True(File.Exists(Path.Combine(paths.PluginDataDirectory, "removed", "plugin.json")));
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void Reload_KeepsOriginalForDuplicateIdAndReplacesItAfterDirectoryRemoval()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "original", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            var original = manager.GetPlugin("example");
+            WritePlugin(paths, "replacement", "example", "");
+            runtime.StartedIds.Clear();
+            runtime.DisposedIds.Clear();
+
+            manager.Reload();
+
+            Assert.Same(original, Assert.Single(manager.GetPlugins()));
+            Assert.Empty(runtime.StartedIds);
+            Assert.Empty(runtime.DisposedIds);
+            Directory.Delete(original.Directory, true);
+
+            manager.Reload();
+
+            Assert.Equal("replacement", Assert.Single(manager.GetPlugins()).DirectoryName);
+            Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
+            Assert.Equal(["example"], runtime.DisposedIds);
+            Assert.Equal(["example"], runtime.StartedIds);
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Reload_InvalidDuplicateCannotDisableOriginalPlugin(bool running)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "original", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            if (!running) manager.Stop("example");
+            WritePlugin(paths, "duplicate", "example", "");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "duplicate", "manifest.json"), """
+                { "id": "example", "name": "重复插件", "version": "1.0.0", "main": "plugin.dll", "winpilot_version": "999.0.0" }
+                """);
+
+            manager.Reload();
+
+            var plugin = Assert.Single(manager.GetPlugins());
+            Assert.Equal("original", plugin.DirectoryName);
+            Assert.True(plugin.Enabled);
+            Assert.Equal(running ? PluginState.Running : PluginState.Stopped, plugin.State);
+            Assert.Single(runtime.StartedIds);
+            using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void Reload_ScanFailurePreservesCurrentInstancesAndList()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            var logger = new CommandBotTestObserver<PluginManager>();
+            using var manager = CreatePluginManager(paths, runtime, logger);
+            var plugin = manager.GetPlugin("example");
+            Directory.Move(paths.PluginsDirectory, paths.PluginsDirectory + "-unavailable");
+            File.WriteAllText(paths.PluginsDirectory, "blocked");
+            runtime.StartedIds.Clear();
+            runtime.DisposedIds.Clear();
+
+            manager.Reload();
+
+            Assert.Same(plugin, Assert.Single(manager.GetPlugins()));
+            Assert.Empty(runtime.StartedIds);
+            Assert.Empty(runtime.DisposedIds);
+            Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error && entry.Message == "扫描插件目录失败");
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData("missing.dll", null, null)]
+    [InlineData("plugin.dll", "missing.json", null)]
+    [InlineData("plugin.dll", null, "999.0.0")]
+    public void InitialScan_InvalidDuplicateCannotChangeSharedEnabledSetting(string main, string? featuresUi, string? minimumVersion)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            foreach (var name in new[] { "valid", "invalid" })
+                WritePlugin(paths, name, "example", "");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "invalid", "manifest.json"),
+                JsonSerializer.Serialize(new { id = "example", name = "Invalid", version = "1.0.0", main, features_ui = featuresUi, winpilot_version = minimumVersion }));
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+
+            if (minimumVersion is null)
+            {
+                var plugin = Assert.Single(manager.GetPlugins());
+                Assert.Equal("valid", plugin.DirectoryName);
+                Assert.True(plugin.Enabled);
+                Assert.Equal(PluginState.Running, plugin.State);
+                Assert.Equal(["example"], runtime.StartedIds);
+            }
+            else
+            {
+                Assert.Empty(manager.GetPlugins());
+                Assert.Empty(runtime.StartedIds);
+            }
+            using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void InitialScan_RejectedDuplicatesCannotChangeSharedEnabledSetting()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            foreach (var name in new[] { "first", "second" })
+            {
+                WritePlugin(paths, name, "example", "");
+                File.Delete(Path.Combine(paths.PluginsDirectory, name, "plugin.dll"));
+            }
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+
+            Assert.Empty(manager.GetPlugins());
+            Assert.Empty(runtime.StartedIds);
+            using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InitialScan_InitializesConfigurationOnlyForSelectedPlugin(bool duplicate)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            foreach (var name in duplicate ? new[] { "first", "second" } : new[] { "first" })
+            {
+                WritePlugin(paths, name, "example", "");
+                File.WriteAllText(Path.Combine(paths.PluginsDirectory, name, "manifest.json"),
+                    """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
+                File.WriteAllText(Path.Combine(paths.PluginsDirectory, name, "settings.json"),
+                    JsonSerializer.Serialize(new[] { new { name = "value", type = "text", @default = name } }));
+            }
+            var lifecyclePath = Path.Combine(paths.PluginDataDirectory, "example", "plugin.json");
+            var configPath = Path.Combine(paths.PluginDataDirectory, "example", "config.json");
+            File.Delete(lifecyclePath);
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+
+            Assert.Empty(runtime.StartedIds);
+            Assert.Equal(!duplicate, File.Exists(lifecyclePath));
+            Assert.Equal(!duplicate, File.Exists(configPath));
+            if (duplicate) Assert.Empty(manager.GetPlugins());
+            else
+            {
+                Assert.Equal(PluginState.Disabled, Assert.Single(manager.GetPlugins()).State);
+                using var config = JsonDocument.Parse(File.ReadAllText(configPath));
+                Assert.Equal("first", config.RootElement.GetProperty("value").GetString());
+            }
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData("incompatible")]
+    [InlineData("declaration")]
+    [InlineData("configuration")]
+    public void Scan_DisabledSettingSaveFailureDoesNotDiscardOtherPlugins(string failure)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "broken", "broken", "");
+            WritePlugin(paths, "healthy", "healthy", "");
+            var brokenDirectory = Path.Combine(paths.PluginsDirectory, "broken");
+            var brokenData = Path.Combine(paths.PluginDataDirectory, "broken");
+            Directory.CreateDirectory(Path.Combine(brokenData, "plugin.json.tmp"));
+            if (failure == "incompatible")
+                File.WriteAllText(Path.Combine(brokenDirectory, "manifest.json"),
+                    """{"id":"broken","name":"Broken","version":"1.0.0","main":"plugin.dll","winpilot_version":"999.0.0"}""");
+            else if (failure == "declaration") File.Delete(Path.Combine(brokenDirectory, "plugin.dll"));
+            else
+            {
+                File.WriteAllText(Path.Combine(brokenDirectory, "manifest.json"),
+                    """{"id":"broken","name":"Broken","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
+                File.WriteAllText(Path.Combine(brokenDirectory, "settings.json"), "[]");
+                Directory.CreateDirectory(Path.Combine(brokenData, "config.json.tmp"));
+            }
+            var runtime = new RecordingPluginRuntime();
+            var logger = new CommandBotTestObserver<PluginManager>();
+            using var manager = CreatePluginManager(paths, runtime, logger);
+
+            foreach (var reload in new[] { false, true })
+            {
+                if (reload) manager.Reload();
+                Assert.Equal(PluginState.Running, manager.GetPlugin("healthy").State);
+                Assert.Equal(["healthy"], runtime.StartedIds);
+                if (failure == "declaration") Assert.Single(manager.GetPlugins());
+                else
+                {
+                    var broken = manager.GetPlugin("broken");
+                    Assert.Equal(PluginState.Invalid, broken.State);
+                    Assert.False(broken.Enabled);
+                    Assert.False(broken.CanChangeEnabled);
+                }
+                using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(brokenData, "plugin.json")));
+                Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+            }
+            Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error
+                && entry.Message.Contains("禁用设置保存失败"));
+            Assert.DoesNotContain(logger.Entries, entry => entry.Message == "扫描插件目录失败");
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void Disable_SettingSaveFailurePreservesRunningPlugin()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            var plugin = manager.GetPlugin("example");
+            var lifecyclePath = Path.Combine(plugin.DataDirectory, "plugin.json");
+            var savedSettings = File.ReadAllText(lifecyclePath);
+            var blockedTemporaryPath = lifecyclePath + ".tmp";
+            Directory.CreateDirectory(blockedTemporaryPath);
+
+            var exception = Record.Exception(() => manager.Disable("example"));
+            Assert.True(exception is IOException or UnauthorizedAccessException);
+
+            Assert.Same(plugin, manager.GetPlugin("example"));
+            Assert.Equal(PluginState.Running, plugin.State);
+            Assert.True(plugin.Enabled);
+            Assert.Equal(savedSettings, File.ReadAllText(lifecyclePath));
+            Assert.Empty(runtime.DisposedIds);
+            Assert.Single(runtime.StartedIds);
+
+            Directory.Delete(blockedTemporaryPath);
+            manager.Disable("example");
+
+            Assert.Equal(PluginState.Disabled, manager.GetPlugin("example").State);
+            Assert.False(manager.GetPlugin("example").Enabled);
+            Assert.Equal(["example"], runtime.DisposedIds);
+            using var lifecycle = JsonDocument.Parse(File.ReadAllText(lifecyclePath));
+            Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public void Enable_InitializesMissingConfigurationFromLatestDeclaration()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+            manager.Disable("example");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
+                """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "settings.json"),
+                """[{"name":"value","type":"text","default":"最新默认值"}]""");
+
+            manager.Enable("example");
+
+            Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
+            using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "config.json")));
+            Assert.Equal("最新默认值", config.RootElement.GetProperty("value").GetString());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
     [Fact]
     public void Disposal_StopsAllPluginsOnceWithoutChangingEnabledSettings()
     {
@@ -53,7 +501,12 @@ public sealed partial class PluginManagerTest
                 """);
             WritePlugin(paths, "other", "other", "");
             manager = CreatePluginManager(paths, runtime);
-            if (reload) manager.Enable("example");
+            if (reload)
+            {
+                Directory.CreateDirectory(Path.Combine(paths.PluginDataDirectory, "example"));
+                File.WriteAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"), "{ \"enabled\": true }");
+                Directory.Move(directory, directory + "-moved");
+            }
             runtime.BlockStart = true;
             operation = Task.Run(() => { if (reload) manager.Reload(); else manager.Enable("example"); });
             await runtime.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -321,8 +774,10 @@ public sealed partial class PluginManagerTest
         }
     }
 
-    [Fact]
-    public void Reload_KeepsEnabledPluginWithUnsupportedMinimumVersionInvalidAndStopped()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Reload_DisablesIncompatiblePluginAndRejectsToggle(bool enabled)
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -334,41 +789,108 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\", \"winpilot_version\": \"999.0.0\" }");
             var dataDirectory = Path.Combine(paths.PluginDataDirectory, "future-plugin");
             Directory.CreateDirectory(dataDirectory);
-            File.WriteAllText(Path.Combine(dataDirectory, "plugin.json"), "{ \"enabled\": true }");
+            File.WriteAllText(Path.Combine(dataDirectory, "plugin.json"), JsonSerializer.Serialize(new { enabled }));
             var runtime = new RecordingPluginRuntime();
-            var manager = CreatePluginManager(paths, runtime);
+            using var manager = CreatePluginManager(paths, runtime);
 
             var plugin = Assert.Single(manager.GetPlugins());
 
-            Assert.True(plugin.Enabled);
+            Assert.False(plugin.Enabled);
             Assert.Equal(PluginState.Invalid, plugin.State);
-            Assert.True(plugin.CanChangeEnabled);
+            Assert.False(plugin.CanChangeEnabled);
             Assert.Contains("需要 WinPilot 999.0.0 或更高版本", plugin.Errors);
             Assert.Empty(runtime.StartedIds);
 
-            manager.Disable("future-plugin");
+            var exception = Assert.Throws<InvalidOperationException>(() => manager.Enable("future-plugin"));
+            Assert.Equal("需要 WinPilot 999.0.0 或更高版本", exception.Message);
+            Assert.Throws<InvalidOperationException>(() => manager.Disable("future-plugin"));
             plugin = manager.GetPlugin("future-plugin");
             Assert.False(plugin.Enabled);
             Assert.Equal(PluginState.Invalid, plugin.State);
+            Assert.False(plugin.CanChangeEnabled);
+            Assert.Contains("需要 WinPilot 999.0.0 或更高版本", plugin.Errors);
             using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "plugin.json")))) Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
-
-            manager.Enable("future-plugin");
-            plugin = manager.GetPlugin("future-plugin");
-            Assert.True(plugin.Enabled);
-            Assert.Equal(PluginState.Invalid, plugin.State);
-            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "plugin.json")))) Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
-            Assert.Empty(runtime.StartedIds);
 
             manager.Reload();
             plugin = Assert.Single(manager.GetPlugins());
-            Assert.True(plugin.Enabled);
+            Assert.False(plugin.Enabled);
             Assert.Equal(PluginState.Invalid, plugin.State);
             Assert.Empty(runtime.StartedIds);
+
+            File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\" }");
+            manager.Reload();
+            Assert.Equal(PluginState.Disabled, manager.GetPlugin("future-plugin").State);
+            Assert.True(manager.GetPlugin("future-plugin").CanChangeEnabled);
+            manager.Enable("future-plugin");
+            Assert.Equal(PluginState.Running, manager.GetPlugin("future-plugin").State);
         }
         finally
         {
             TryDeleteDirectory(applicationDirectory);
         }
+    }
+
+    [Theory]
+    [InlineData("missing.dll", null)]
+    [InlineData("plugin.dll", "missing.json")]
+    public void InitialScan_DisablesPluginWhenDeclarationValidationFails(string main, string? featuresUi)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
+                JsonSerializer.Serialize(new { id = "example", name = "Example", version = "1.0.0", main, features_ui = featuresUi }));
+            var runtime = new RecordingPluginRuntime();
+            using var manager = CreatePluginManager(paths, runtime);
+
+            Assert.Empty(manager.GetPlugins());
+            Assert.Empty(runtime.StartedIds);
+            using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"plugin.dll\",\"winpilot_version\":\"999.0.0\"}", "需要 WinPilot 999.0.0 或更高版本")]
+    [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"missing.dll\"}", "main 必须是插件目录内存在的 DLL 文件")]
+    [InlineData("{", "manifest.json 不是有效 JSON")]
+    public void Reload_PreservesRunningPluginAndRestartDisablesItOnValidationFailure(string manifest, string errorMessage)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, "example", "example", "");
+            var runtime = new RecordingPluginRuntime();
+            var logger = new CommandBotTestObserver<PluginManager>();
+            using var manager = CreatePluginManager(paths, runtime, logger);
+            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"), manifest);
+
+            manager.Reload();
+
+            Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
+            Assert.True(manager.GetPlugin("example").Enabled);
+            Assert.Single(runtime.StartedIds);
+            Assert.Empty(runtime.DisposedIds);
+            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+                Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+
+            manager.Restart("example");
+
+            var plugin = manager.GetPlugin("example");
+            Assert.False(plugin.Enabled);
+            Assert.False(plugin.CanChangeEnabled);
+            Assert.Equal(PluginState.Failed, plugin.State);
+            Assert.Contains(plugin.Errors, error => error.Contains(errorMessage));
+            Assert.Single(runtime.DisposedIds);
+            Assert.Single(runtime.StartedIds);
+            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+                Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        finally { TryDeleteDirectory(directory); }
     }
 
     [Fact]
@@ -389,10 +911,10 @@ public sealed partial class PluginManagerTest
             second.Dispose();
             Assert.Equal([0, 1, 2, 1], runtime.Instances.Single().Counts);
             manager.Reload();
-            Assert.Equal(2, runtime.Instances.Count);
-            Assert.Equal([1], runtime.Instances[1].Counts);
+            Assert.Single(runtime.Instances);
+            Assert.Equal([0, 1, 2, 1], runtime.Instances.Single().Counts);
             first.Dispose();
-            Assert.Equal([1, 0], runtime.Instances[1].Counts);
+            Assert.Equal([0, 1, 2, 1, 0], runtime.Instances.Single().Counts);
         }
         finally
         {

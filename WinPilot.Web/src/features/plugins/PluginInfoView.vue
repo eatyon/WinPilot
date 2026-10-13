@@ -71,7 +71,6 @@ const settingsDefinitions = ref<Definition[]>([]);
 const settingsConfig = ref<Record<string, any>>({});
 const readmeAvailable = ref(false);
 const readmeOpen = ref(false);
-const readmeLoaded = ref(false);
 const readmeLoading = ref(false);
 const readmeHtml = ref('');
 const readmeError = ref('');
@@ -83,24 +82,26 @@ async function checkReadme(pluginId: string) {
       method: 'HEAD',
     });
     readmeAvailable.value = response.ok;
-  } catch {
-    readmeAvailable.value = false;
+  } catch (cause) {
+    if (requests.active && !isAbortError(cause)) readmeAvailable.value = false;
   }
 }
 
-async function toggleReadme() {
-  readmeOpen.value = !readmeOpen.value;
-  if (!readmeOpen.value) {
-    readmeController?.abort();
-    readmeController = undefined;
-    readmeLoading.value = false;
-    return;
-  }
-  if (readmeLoaded.value || readmeLoading.value) return;
+function closeReadme() {
+  readmeController?.abort();
+  readmeController = undefined;
+  readmeOpen.value = false;
+  readmeLoading.value = false;
+  readmeHtml.value = '';
+  readmeError.value = '';
+}
+
+async function openReadme() {
+  if (!requests.active || !readmeAvailable.value || readmeOpen.value) return;
+  readmeOpen.value = true;
   const controller = new AbortController();
   readmeController = controller;
   readmeLoading.value = true;
-  readmeError.value = '';
   try {
     const response = await requests.fetch(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/readme`,
@@ -108,10 +109,10 @@ async function toggleReadme() {
     );
     if (!response.ok) throw new Error('读取说明文档失败');
     const source = await requests.text(response);
+    if (controller.signal.aborted) return;
     const html = await renderMarkdown(source);
     if (controller.signal.aborted) return;
     readmeHtml.value = html;
-    readmeLoaded.value = true;
   } catch (cause) {
     if (!controller.signal.aborted && !isAbortError(cause)) readmeError.value = userErrorMessage(cause, '读取说明文档失败');
   } finally {
@@ -135,11 +136,8 @@ async function loadStatusSettings() {
     requests.fetch(`/api/plugins/${id}/status-display-settings`),
   ]);
   if (!statusResponse.ok || !settingsResponse.ok) throw new Error('读取状态展示设置失败');
-  if (statusResponse.ok)
-    statusKeys.value = Object.keys((await requests.json(statusResponse)) as Record<string, unknown>);
-  if (settingsResponse.ok) {
-    statusSettings.value = (await requests.json(settingsResponse)) as PluginStatusDisplaySettings;
-  }
+  statusKeys.value = Object.keys((await requests.json(statusResponse)) as Record<string, unknown>);
+  statusSettings.value = (await requests.json(settingsResponse)) as PluginStatusDisplaySettings;
 }
 
 async function openStatusSettings() {
@@ -180,12 +178,9 @@ async function loadFeatureSettings() {
     requests.fetch(`/api/plugins/${id}/feature-display-settings`),
   ]);
   if (!featuresResponse.ok || !settingsResponse.ok) throw new Error('读取功能展示设置失败');
-  if (featuresResponse.ok)
-    features.value =
-      ((await requests.json(featuresResponse)) as { features?: PluginFeatureDefinition[] }).features ?? [];
-  if (settingsResponse.ok) {
-    featureSettings.value = (await requests.json(settingsResponse)) as PluginFeatureDisplaySettings;
-  }
+  features.value =
+    ((await requests.json(featuresResponse)) as { features?: PluginFeatureDefinition[] }).features ?? [];
+  featureSettings.value = (await requests.json(settingsResponse)) as PluginFeatureDisplaySettings;
 }
 async function openFeatureSettings() {
   if (safeModeEnabled.value) return;
@@ -232,7 +227,13 @@ async function saveSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settingsConfig.value),
     });
-    if (!storageResponse.ok) throw new Error('保存配置失败');
+    if (!storageResponse.ok) {
+      const error = await requests.json<{ detail?: unknown }>(storageResponse).catch(cause => {
+        if (isAbortError(cause)) throw cause;
+        return { detail: undefined };
+      });
+      throw new Error(typeof error?.detail === 'string' && error.detail.trim() ? error.detail : '配置保存失败，请重试');
+    }
     configurationSaved = true;
     const settingsResponse = await requests.fetch(`/api/plugins/${id}/settings-display-settings`, {
       method: 'PUT',
@@ -243,7 +244,7 @@ async function saveSettings() {
     settingsOpen.value = false;
     showToast('配置展示设置已保存', 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(configurationSaved ? '插件配置已保存，展示设置保存失败' : userErrorMessage(cause, '保存插件配置失败'), 'error');
+    if (requests.active && !isAbortError(cause)) showToast(configurationSaved ? '配置已保存，展示设置保存失败，请重试' : userErrorMessage(cause, '配置保存失败，请重试'), 'error');
   } finally {
     savingSettings.value = false;
   }
@@ -290,10 +291,8 @@ async function deletePlugin(deleteData: boolean) {
 async function load() {
   const generation = ++loadGeneration;
   requests.cancelReads();
-  readmeController?.abort();
+  closeReadme();
   readmeAvailable.value = false;
-  readmeLoaded.value = false;
-  readmeOpen.value = false;
   statusSettingsOpen.value = featureSettingsOpen.value = settingsOpen.value = deleteOpen.value = false;
   plugin.value = undefined;
   error.value = '';
@@ -316,7 +315,7 @@ async function load() {
 }
 onMounted(load);
 watch(() => route.params.pluginId, () => { requests.cancelAll(); void load(); });
-onBeforeUnmount(() => { requests.dispose(); readmeController?.abort(); });
+onBeforeUnmount(() => { requests.dispose(); closeReadme(); });
 </script>
 
 <template>
@@ -426,26 +425,21 @@ onBeforeUnmount(() => { requests.dispose(); readmeController?.abort(); });
           </button>
         </div>
       </section>
-      <section v-if="readmeAvailable" class="plugin-detail-panel plugin-readme-panel">
-        <h3>
-          <button
-            class="plugin-readme-toggle"
-            type="button"
-            :aria-expanded="readmeOpen"
-            aria-controls="plugin-readme-content"
-            @click="toggleReadme"
-          >
-            <span>说明文档</span>
-            <span class="plugin-readme-chevron" aria-hidden="true"></span>
-          </button>
-        </h3>
-        <div v-if="readmeOpen" id="plugin-readme-content" class="plugin-readme-content">
-          <p v-if="readmeLoading" class="plugin-empty">正在读取说明文档…</p>
-          <p v-else-if="readmeError" class="status-message error">{{ readmeError }}</p>
-          <p v-else-if="readmeLoaded && !readmeHtml" class="plugin-empty">说明文档为空</p>
-          <div v-else-if="readmeLoaded" class="markdown-content" v-html="readmeHtml"></div>
+      <section v-if="readmeAvailable" class="plugin-detail-panel">
+        <div class="program-panel-header">
+          <h3>说明文档</h3>
+          <button class="button button-secondary" type="button" aria-label="查看说明文档" aria-haspopup="dialog" @click="openReadme">查看</button>
         </div>
       </section>
+      <AppModal v-if="readmeOpen" title="说明文档" size="medium" @close="closeReadme">
+        <p v-if="readmeLoading" class="plugin-empty loading-hint" role="status">正在读取说明文档…</p>
+        <p v-else-if="readmeError" class="status-message error" role="alert">{{ readmeError }}</p>
+        <div v-else-if="readmeHtml" class="markdown-content" v-html="readmeHtml"></div>
+        <p v-else class="plugin-empty">说明文档为空</p>
+        <template #actions>
+          <button class="button button-secondary" type="button" @click="closeReadme">关闭</button>
+        </template>
+      </AppModal>
       <AppModal v-if="statusSettingsOpen" :dismissible="!savingStatusSettings" title="状态展示设置" @close="statusSettingsOpen = false">
         <label class="toggle-control">
           <input v-model="statusSettings.registerOnHome" type="checkbox" />

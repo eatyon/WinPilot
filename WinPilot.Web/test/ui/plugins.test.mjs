@@ -14,10 +14,13 @@ function evaluate(path, require, members = '') {
 }
 
 function fixture(page = 'PluginInfoView.vue') {
-  const calls = [], toasts = [];
+  const calls = [], toasts = [], renders = [];
+  const safeModeEnabled = vue.ref(false);
   const route = vue.reactive({ params: { pluginId: 'first' }, fullPath: '/plugins/first' });
   let unmount;
+  let disposed = false;
   const client = {
+    WinPilotConnectionError: class extends Error {},
     apiFetch: (url, init) => new Promise((resolve, reject) => calls.push({ url, init, resolve, reject })),
     isAbortError: error => error?.name === 'AbortError',
     userErrorMessage: (error, fallback) => error.message || fallback,
@@ -31,19 +34,174 @@ function fixture(page = 'PluginInfoView.vue') {
     if (name.endsWith('/PluginModels')) return models;
     if (name.endsWith('/client')) return client;
     if (name.endsWith('/toast')) return { showToast: (text, type) => toasts.push({ text, type }) };
-    if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
+    if (name.endsWith('/markdown')) return { renderMarkdown: source => new Promise((resolve, reject) => renders.push({ source, resolve, reject })) };
+    if (name.endsWith('/safeMode')) return { safeModeEnabled };
     return {};
   };
   const members = page === 'PluginsView.vue'
-    ? 'load,toggle,plugins,changingIds,loading,requests'
-    : page === 'PluginDetailView.vue' ? 'load,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
-    : 'loadStatusSettings,loadFeatureSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests';
+    ? 'load,toggle,onToggle,plugins,changingIds,loading,requests'
+    : page === 'PluginDetailView.vue' ? 'load,toggle,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
+    : 'loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,checkReadme,openReadme,closeReadme,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
   const scope = vue.effectScope();
   let subject;
   scope.run(() => { subject = evaluate('../../src/features/plugins/' + page, imports, members); });
-  return { calls, toasts, subject, route, dispose() { unmount(); scope.stop(); } };
+  return { calls, toasts, renders, subject, route, safeModeEnabled, dispose() {
+    if (disposed) return;
+    disposed = true;
+    unmount();
+    scope.stop();
+  } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
+
+test('a cancelled readme availability check cannot hide the new page entry', async () => {
+  const f = fixture();
+  try {
+    const first = f.subject.checkReadme('old');
+    f.subject.requests.cancelAll();
+    const second = f.subject.checkReadme('new');
+    f.calls[1].resolve(response({}));
+    await second;
+    assert.equal(f.subject.readmeAvailable.value, true);
+    f.calls[0].resolve(response({}, false));
+    await first;
+    assert.equal(f.subject.readmeAvailable.value, true);
+  } finally { f.dispose(); }
+});
+
+test('readme loads only on opening, releases content on closing and reloads without caching', async () => {
+  const f = fixture();
+  try {
+    assert.equal(f.calls.length, 0);
+    f.subject.readmeAvailable.value = true;
+    const first = f.subject.openReadme();
+    await f.subject.openReadme();
+    assert.equal(f.calls.length, 1);
+    f.calls[0].resolve({ ok: true, text: async () => '# Document' });
+    await setImmediate();
+    f.renders[0].resolve('<h1>Document</h1>');
+    await first;
+    assert.equal(f.subject.readmeHtml.value, '<h1>Document</h1>');
+    f.subject.closeReadme();
+    assert.equal(f.subject.readmeOpen.value, false);
+    assert.equal(f.subject.readmeHtml.value, '');
+    const second = f.subject.openReadme();
+    assert.equal(f.calls.length, 2);
+    f.calls[1].resolve(response({}, false));
+    await second;
+    assert.equal(f.subject.readmeError.value, '读取说明文档失败');
+    f.subject.closeReadme();
+    assert.equal(f.subject.readmeError.value, '');
+  } finally { f.dispose(); }
+});
+
+test('closing or leaving a readme cancels work and late rendering cannot overwrite a reopened dialog', async () => {
+  const f = fixture();
+  try {
+    f.subject.readmeAvailable.value = true;
+    const first = f.subject.openReadme();
+    f.calls[0].resolve({ ok: true, text: async () => 'old' });
+    await setImmediate();
+    f.subject.closeReadme();
+    assert.equal(f.calls[0].init.signal.aborted, true);
+    const second = f.subject.openReadme();
+    f.renders[0].resolve('<p>old</p>');
+    await first;
+    assert.equal(f.subject.readmeHtml.value, '');
+    assert.equal(f.subject.readmeLoading.value, true);
+    f.dispose();
+    assert.equal(f.calls[1].init.signal.aborted, true);
+    f.calls[1].reject(new Error('late failure'));
+    await second;
+    assert.equal(f.subject.readmeError.value, '');
+    assert.equal(f.subject.readmeOpen.value, false);
+  } finally { f.dispose(); }
+});
+
+test('both configuration editors show backend validation details with a fallback for unreadable errors', async () => {
+  for (const page of ['PluginDetailView.vue', 'PluginInfoView.vue']) {
+    for (const body of [{ detail: '延迟秒数不能小于 1' }, {}, { detail: 1 }, { detail: ' ' }, null, undefined]) {
+      const f = fixture(page);
+      try {
+        if (page === 'PluginDetailView.vue') f.subject.settingsLoaded.value = true;
+        const saving = f.subject.saveSettings();
+        f.calls[0].resolve(body === undefined
+          ? { ok: false, json: async () => { throw new SyntaxError('invalid JSON'); } }
+          : response(body, false));
+        await saving;
+        assert.equal(f.toasts.length, 1);
+        assert.equal(f.toasts[0].type, 'error');
+        assert.equal(f.toasts[0].text, typeof body?.detail === 'string' && body.detail.trim() ? body.detail : '配置保存失败，请重试');
+        assert.equal(f.calls.length, 1);
+      } finally { f.dispose(); }
+    }
+  }
+});
+
+test('closing either configuration editor while reading an error suppresses late toasts', async () => {
+  for (const page of ['PluginDetailView.vue', 'PluginInfoView.vue']) {
+    const f = fixture(page);
+    if (page === 'PluginDetailView.vue') f.subject.settingsLoaded.value = true;
+    let releaseBody;
+    const saving = f.subject.saveSettings();
+    f.calls[0].resolve({ ok: false, json: () => new Promise(resolve => { releaseBody = resolve; }) });
+    await setImmediate();
+    f.dispose();
+    releaseBody({ detail: '延迟秒数不能小于 1' });
+    await saving;
+    assert.equal(f.toasts.length, 0);
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test('failed enabling restores the native checkbox before issuing the request', async () => {
+  const f = fixture('PluginsView.vue');
+  try {
+    const plugin = { id: 'first', enabled: false, state: 'Disabled', canChangeEnabled: true };
+    f.subject.plugins.value = [plugin];
+    const input = { checked: true };
+    const toggling = f.subject.onToggle({ target: input }, plugin);
+    assert.equal(input.checked, false);
+    f.calls[0].resolve(response({ ...plugin, state: 'Failed', canChangeEnabled: false, errors: ['校验失败'] }));
+    await toggling;
+    assert.equal(input.checked, false);
+    assert.equal(f.subject.plugins.value[0].enabled, false);
+    assert.equal(f.toasts[0].text, '插件启用失败');
+  } finally { f.dispose(); }
+});
+
+test('plugin home toggle reports its operation result rather than the reloaded state', async () => {
+  const f = fixture('PluginDetailView.vue');
+  try {
+    f.subject.plugin.value = { id: 'first', enabled: false, state: 'Disabled', canChangeEnabled: true };
+    const toggling = f.subject.toggle();
+    f.calls[0].resolve(response({ id: 'first', enabled: false, state: 'Failed', canChangeEnabled: false, errors: ['需要 WinPilot 2.0.0 或更高版本'] }));
+    await setImmediate();
+    f.calls[1].resolve(response({ id: 'first', enabled: false, state: 'Disabled', manifest: {} }));
+    await setImmediate();
+    for (const call of f.calls.slice(2))
+      call.resolve(response(call.url.endsWith('/settings-definition') ? [] : {}));
+    await toggling;
+    assert.equal(f.toasts.length, 1);
+    assert.equal(f.toasts[0].text, '插件启用失败');
+    assert.equal(f.toasts[0].type, 'error');
+  } finally { f.dispose(); }
+});
+
+test('leaving either plugin view suppresses late toggle results and toasts', async () => {
+  for (const page of ['PluginsView.vue', 'PluginDetailView.vue']) {
+    const f = fixture(page);
+    const plugin = { id: 'first', enabled: false, state: 'Disabled', canChangeEnabled: true };
+    if (page === 'PluginDetailView.vue') f.subject.plugin.value = plugin;
+    else f.subject.plugins.value = [plugin];
+    const toggling = f.subject.toggle(plugin);
+    f.dispose();
+    f.calls[0].resolve(response({ ...plugin, enabled: true, state: 'Running' }));
+    await toggling;
+    assert.equal(f.toasts.length, 0);
+    assert.equal(f.calls.length, 1);
+  }
+});
 
 test('details wait for lifecycle completion before loading status and features', async () => {
   const f = fixture('PluginDetailView.vue');

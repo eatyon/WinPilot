@@ -39,11 +39,13 @@ public sealed partial class PluginManagerTest
     private sealed class RecordingPluginRuntime : IPluginRuntime
     {
         public List<string> StartedIds { get; } = [];
+        public List<PluginInfo> StartedPlugins { get; } = [];
         public List<string> DisposedIds { get; } = [];
 
         public IPluginRuntimeInstance Start(PluginInfo plugin)
         {
             StartedIds.Add(plugin.Id);
+            StartedPlugins.Add(plugin);
             return new Instance(plugin.Id, DisposedIds);
         }
 

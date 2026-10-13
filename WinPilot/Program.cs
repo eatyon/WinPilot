@@ -67,7 +67,7 @@ internal static class Program
         {
             options.Providers.Add<BrotliCompressionProvider>();
             options.Providers.Add<GzipCompressionProvider>();
-            options.MimeTypes = ["text/html", "text/css", "text/javascript", "application/javascript", "application/json", "application/problem+json", "image/svg+xml"];
+            options.MimeTypes = ["text/html", "text/plain", "text/css", "text/javascript", "application/javascript", "application/json", "application/problem+json", "image/svg+xml"];
         });
         builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
             options.Level = System.IO.Compression.CompressionLevel.Fastest);
