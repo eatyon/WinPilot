@@ -257,15 +257,15 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
 .task-row-main { display: grid; min-width: 0; flex: 1 1 auto; align-content: start; gap: 5px; }
 .task-name-button { min-width: 0; overflow: hidden; border: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 16px; font-weight: 650; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .task-name-button:hover { color: var(--accent-text); }
-.task-row-title { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.task-row-controls { display: flex; flex: none; align-items: center; gap: 10px; }
 .task-warning { display: inline-flex; flex: none; color: var(--warning-text); }
 .task-warning .app-icon { width: 16px; height: 16px; stroke-width: 2; transform: translateY(1px); }
 .task-row-main strong { min-width: 0; overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-toggle, .task-row > label.toggle-control { display: block; width: 42px; min-width: 42px; height: 24px; min-height: 24px; flex: 0 0 42px; }
-.task-row-toggle input, .task-row > label.toggle-control input { display: block; position: relative; width: 42px; min-width: 42px; height: 24px; margin: 0; flex: 0 0 42px; appearance: none; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--border); cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
-.task-row-toggle input::after, .task-row > label.toggle-control input::after { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 18%); content: ''; transition: transform 150ms ease; }
-.task-row-toggle input:checked, .task-row > label.toggle-control input:checked { border-color: var(--accent-solid); background: var(--accent-solid); }
-.task-row-toggle input:checked::after, .task-row > label.toggle-control input:checked::after { transform: translateX(18px); }
+.task-row-toggle { display: block; width: 42px; min-width: 42px; height: 24px; min-height: 24px; flex: 0 0 42px; }
+.task-row-toggle input { display: block; position: relative; width: 42px; min-width: 42px; height: 24px; margin: 0; flex: 0 0 42px; appearance: none; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--border); cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
+.task-row-toggle input::after { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 18%); content: ''; transition: transform 150ms ease; }
+.task-row-toggle input:checked { border-color: var(--accent-solid); background: var(--accent-solid); }
+.task-row-toggle input:checked::after { transform: translateX(18px); }
 .task-row-main small { display: block; max-width: 100%; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .task-row-main small b { margin-right: 6px; color: var(--text-subtle); font-size: 11px; font-weight: 650; }
 .task-row > .program-actions { flex: 0 0 auto; }

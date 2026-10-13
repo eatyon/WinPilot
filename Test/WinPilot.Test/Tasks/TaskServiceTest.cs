@@ -125,6 +125,29 @@ public sealed class TaskServiceTest
     }
 
     [Theory]
+    [InlineData(1, true)]
+    [InlineData(86400, true)]
+    [InlineData(86401, false)]
+    [InlineData(int.MaxValue, false)]
+    public async Task DelayCannotExceedOneDay(int seconds, bool valid)
+    {
+        await using var fixture = new TaskServiceFixture();
+        var task = new WinPilotTask("Delay", false, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.Delay, DelaySeconds: seconds)]);
+        if (valid)
+        {
+            fixture.Tasks.Create(task);
+            Assert.Equal(seconds, Assert.Single(fixture.Tasks.GetAll()).Actions[0].DelaySeconds);
+        }
+        else
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(task));
+            Assert.Equal("延迟时间不能超过 86400 秒（24 小时）", error.Message);
+            Assert.Empty(fixture.Tasks.GetAll());
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CloseProcess_CurrentUserOnlyFiltersOwnerAndProcessName(bool force)

@@ -113,7 +113,7 @@ test('extension trigger errors use the declared parameter label and input type',
   } finally { f.dispose(); }
 });
 
-test('delay starts empty and requires a positive integer before saving', () => {
+test('delay starts empty and requires integer seconds from 1 to 86400 before saving', () => {
   const f = fixture();
   try {
     const action = f.subject.createAction();
@@ -126,6 +126,10 @@ test('delay starts empty and requires a positive integer before saving', () => {
     }
     action.delaySeconds = 1;
     assert.equal(Object.keys(f.subject.validate(task)).length, 0);
+    action.delaySeconds = 86400;
+    assert.equal(Object.keys(f.subject.validate(task)).length, 0);
+    action.delaySeconds = 86401;
+    assert.equal(f.subject.validate(task)['action-0'], '延迟时间不能超过 86400 秒（24 小时）');
   } finally { f.dispose(); }
 });
 

@@ -839,6 +839,8 @@ public sealed class TaskService : BackgroundService
                     throw new InvalidOperationException("请输入进程名");
                 case TaskActionType.Delay when action.DelaySeconds <= 0:
                     throw new InvalidOperationException("请输入有效的延迟秒数");
+                case TaskActionType.Delay when action.DelaySeconds > 86400:
+                    throw new InvalidOperationException("延迟时间不能超过 86400 秒（24 小时）");
                 case TaskActionType.Keyboard when action.Keys is null || action.Keys.Count == 0:
                     throw new InvalidOperationException("请选择至少一个按键");
                 case TaskActionType.Shell when !IsSupportedShell(action.Shell):

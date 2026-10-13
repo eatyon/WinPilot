@@ -568,6 +568,8 @@ function validate(value: Task) {
       result[`action-${index}`] = '请输入进程名';
     if (action.type === 'Delay' && (!Number.isInteger(action.delaySeconds) || Number(action.delaySeconds) <= 0))
       result[`action-${index}`] = '请输入有效的延迟秒数';
+    else if (action.type === 'Delay' && Number(action.delaySeconds) > 86400)
+      result[`action-${index}`] = '延迟时间不能超过 86400 秒（24 小时）';
     if (action.type === 'Keyboard' && !action.keys.length) result[`action-${index}`] = '请选择至少一个按键';
     if (action.type === 'Shell' && !action.command.trim()) result[`action-${index}`] = '请输入 Shell 命令';
     if (action.type === 'SendNotification' && !action.notificationContent.trim())
@@ -761,21 +763,18 @@ onBeforeUnmount(() => {
       </div>
       <article v-for="task in filteredTasks" :key="task.name" class="task-row" @click="detailTarget = task">
         <div class="task-row-main">
-          <div class="task-row-title">
-            <button class="task-name-button" type="button">
-              {{ task.name }}
-            </button>
-            <span v-if="taskWarningText(task)" class="task-warning" role="img" :title="taskWarningText(task)" :aria-label="taskWarningText(task)">
-              <AppIcon name="alert-circle" />
-            </span>
-          </div>
+          <button class="task-name-button" type="button">
+            {{ task.name }}
+          </button>
         </div>
-        <label
-          class="toggle-control"
-          @click.stop
-        >
-          <input type="checkbox" :checked="task.enabled" :disabled="pendingOperations.has(`toggle:${task.name}`)" @change="toggleTaskEnabled(task, $event)" />
-        </label>
+        <div class="task-row-controls">
+          <span v-if="taskWarningText(task)" class="task-warning" role="img" :title="taskWarningText(task)" :aria-label="taskWarningText(task)">
+            <AppIcon name="alert-circle" />
+          </span>
+          <label class="task-row-toggle" @click.stop>
+            <input type="checkbox" :checked="task.enabled" :disabled="pendingOperations.has(`toggle:${task.name}`)" @change="toggleTaskEnabled(task, $event)" />
+          </label>
+        </div>
       </article>
       <p v-if="!tasks.length" class="program-empty">暂无任务，点击“创建任务”开始</p>
     </section>
@@ -1130,6 +1129,7 @@ onBeforeUnmount(() => {
               v-model.number="action.delaySeconds"
               type="number"
               min="1"
+              max="86400"
               step="1"
               title=""
               placeholder="秒"
