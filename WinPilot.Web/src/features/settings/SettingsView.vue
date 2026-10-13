@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { createSettingsRequests } from './SettingsRequests';
 import { useRoute, useRouter } from 'vue-router';
-import { isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage } from '../../api/client';
 import { showToast } from '../../ui/toast';
 import GeneralSettings from './tabs/GeneralSettings.vue';
 import AppearanceSettings from './tabs/AppearanceSettings.vue';
@@ -59,8 +59,8 @@ async function loadSettings() {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const response = await requests.fetch('/api/settings');
-    if (!response.ok) throw new Error('无法读取当前设置');
+    const response = await requests.fetch('/api/settings/general');
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取当前设置', requests.json));
     const settings = (await requests.json(response)) as SettingsResponse;
     port.value = String(settings.port);
     lanAccessEnabled.value = settings.lanAccessEnabled;
@@ -80,12 +80,12 @@ async function saveLanAccess(enabled: boolean) {
   const previous = lanAccessEnabled.value;
   lanAccessEnabled.value = enabled;
   try {
-    const response = await requests.fetch('/api/settings/lan-access', {
+    const response = await requests.fetch('/api/settings/general/lan-access', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
     });
-    if (!response.ok) throw Error();
+    if (!response.ok) throw new Error(await readApiError(response, '无法更新局域网访问设置', requests.json));
     requests.ensureActive();
     errorMessage.value = '';
     showToast('局域网访问设置保存成功，重启 WinPilot 后生效', 'success');
@@ -106,12 +106,12 @@ async function savePort() {
   }
   isSaving.value = true;
   try {
-    const response = await requests.fetch('/api/settings/port', {
+    const response = await requests.fetch('/api/settings/general/port', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ port: parsedPort.value }),
     });
-    if (!response.ok) throw new Error('无法保存端口设置');
+    if (!response.ok) throw new Error(await readApiError(response, '无法保存端口设置', requests.json));
     const settings = (await requests.json(response)) as SettingsResponse;
     port.value = String(settings.port);
     showToast('端口保存成功，重启 WinPilot 后生效', 'success');
@@ -129,12 +129,12 @@ async function saveStartupMode(mode: string) {
   errorMessage.value = '';
   isSaving.value = true;
   try {
-    const response = await requests.fetch('/api/settings/startup-mode', {
+    const response = await requests.fetch('/api/settings/general/startup-mode', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ startupMode: mode }),
     });
-    if (!response.ok) throw new Error('无法保存开机启动设置');
+    if (!response.ok) throw new Error(await readApiError(response, '无法保存开机启动设置', requests.json));
     const settings = (await requests.json(response)) as SettingsResponse;
     startupMode.value = settings.startupMode;
     showToast('开机启动设置保存成功', 'success');
@@ -166,7 +166,7 @@ async function saveStartupMode(mode: string) {
     </p>
     <form class="settings-form" @submit.prevent>
       <div
-        :class="{ 'safe-mode-locked': settingsReadOnly, 'safe-mode-blocked': settingsReadOnly }"
+        :class="{ 'safe-mode-locked': settingsReadOnly }"
         :inert="settingsReadOnly"
       >
         <component

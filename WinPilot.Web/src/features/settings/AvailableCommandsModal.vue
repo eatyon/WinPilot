@@ -15,7 +15,7 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const response = await requests.fetch('/api/settings/command-bots/commands');
+    const response = await requests.fetch('/api/notifications/command-bots/commands');
     if (!response.ok) throw new Error('无法读取可用命令');
     groups.value = await requests.json(response);
   } catch (cause) {

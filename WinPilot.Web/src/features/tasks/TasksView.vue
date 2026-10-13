@@ -6,7 +6,7 @@ import AppSelect from '../../components/AppSelect.vue';
 import AppMultiSelect from '../../components/AppMultiSelect.vue';
 import KeyboardKeyPicker from '../desktop/KeyboardKeyPicker.vue';
 import CronEditor from './CronEditor.vue';
-import { apiFetch, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { readApiError, apiFetch, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { showToast } from '../../ui/toast';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
 type Trigger = {
@@ -120,18 +120,13 @@ async function fetchPageResource(url: string, init?: RequestInit): Promise<Respo
   }
 }
 
-async function responseError(response: Response) {
-  const problem = await response.json().catch(() => null) as { detail?: string } | null;
-  return problem?.detail || '操作失败';
-}
-
 async function performOperation(key: string, url: string, init: RequestInit, success: () => Promise<void> | void) {
   if (!isPageActive || pendingOperations.has(key)) return;
   const controller = new AbortController();
   pendingOperations.set(key, controller);
   try {
     const response = await apiFetch(url, { ...init, signal: controller.signal });
-    if (!response.ok) throw new Error(await responseError(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
     if (isPageActive && !controller.signal.aborted) await success();
   } catch (cause) {
     if (isPageActive && !controller.signal.aborted && !isAbortError(cause)) {
@@ -203,7 +198,7 @@ function fetchActionOptions(pluginId: string, actionId: string, parameterKey: st
   if (pending) return pending;
   const request = (async () => {
     const response = await fetchPageResource(
-      `/api/plugin-task-extensions/actions/${encodeURIComponent(pluginId)}/${encodeURIComponent(actionId)}/options/${encodeURIComponent(parameterKey)}`,
+      `/api/tasks/extensions/actions/${encodeURIComponent(pluginId)}/${encodeURIComponent(actionId)}/options/${encodeURIComponent(parameterKey)}`,
     );
     if (!response.ok) throw new Error('读取动作配置失败');
     const options = (await response.json()) as unknown;
@@ -460,10 +455,10 @@ async function loadTasks() {
   const controller = new AbortController();
   loadController = controller;
   try {
-    const urls = ['/api/tasks', '/api/programs/tags', '/api/plugin-task-extensions/triggers', '/api/plugin-task-extensions/actions', '/api/notification-channels'];
+    const urls = ['/api/tasks', '/api/programs/tags', '/api/tasks/extensions/triggers', '/api/tasks/extensions/actions', '/api/notifications/channels'];
     const values = await Promise.all(urls.map(async url => {
       const response = await apiFetch(url, { signal: controller.signal });
-      if (!response.ok) throw new Error(await responseError(response));
+      if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
       return response.json();
     }));
     if (!isPageActive || loadController !== controller || controller.signal.aborted) return;
@@ -663,7 +658,7 @@ async function openVariableHelp() {
   variableHelpLoading.value = true;
   variableHelpError.value = '';
   try {
-    const response = await apiFetch('/api/task-variables', { signal: controller.signal });
+    const response = await apiFetch('/api/tasks/variables', { signal: controller.signal });
     if (!response.ok) throw new Error('无法读取变量');
     const variables = await response.json();
     if (isPageActive && variableHelpOpen.value && variableHelpController === controller && !controller.signal.aborted)

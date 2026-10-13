@@ -5,6 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import { readFileSync } from 'node:fs';
 import * as vue from 'vue';
+import * as apiErrors from '../support/apiErrors.mjs';
 
 async function fixture() {
   const code = loadScriptModule(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url),
@@ -17,7 +18,7 @@ async function fixture() {
     exports: {}, AbortController,
     require: name => {
       if (name === 'vue') return { ...vue, onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
-      if (name.endsWith('/client')) return {
+      if (name.endsWith('/client')) return { ...apiErrors,
         apiFetch: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
         isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message,
       };

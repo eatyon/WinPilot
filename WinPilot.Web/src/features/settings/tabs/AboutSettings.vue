@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createSettingsRequests } from '../SettingsRequests';
-import { isAbortError, WinPilotConnectionError } from '../../../api/client';
+import { readApiError, isAbortError, WinPilotConnectionError } from '../../../api/client';
 import AppIcon from '../../../components/AppIcon.vue';
 import AppModal from '../../../components/AppModal.vue';
 import AppSelect from '../../../components/AppSelect.vue';
@@ -45,7 +45,7 @@ async function openUpdateSettings() {
   if (!requests.active || safeModeEnabled.value || loadingUpdateSettings.value || checkingUpdate.value || installingUpdate.value) return;
   loadingUpdateSettings.value = true;
   try {
-    const response = await requests.fetch('/api/update/settings');
+    const response = await requests.fetch('/api/settings/updates');
     if (!response.ok) throw new Error();
     const settings = await requests.json(response) as UpdateSettings;
     draftSource.value = settings.source;
@@ -61,14 +61,13 @@ async function saveUpdateSettings() {
   if (!requests.active || safeModeEnabled.value || savingUpdateSettings.value || checkingUpdate.value || installingUpdate.value) return;
   savingUpdateSettings.value = true;
   try {
-    const response = await requests.fetch('/api/update/settings', {
+    const response = await requests.fetch('/api/settings/updates', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: draftSource.value, channel: draftChannel.value }),
     });
     if (!response.ok) {
-      const error = await requests.json(response).catch(() => ({})) as { message?: string; detail?: string };
-      throw new Error(error.message ?? error.detail ?? '保存更新设置失败，请稍后重试');
+      throw new Error(await readApiError(response, '保存更新设置失败，请稍后重试', requests.json));
     }
     const settings = await requests.json(response) as UpdateSettings;
     draftSource.value = settings.source;
@@ -190,8 +189,7 @@ async function installUpdate() {
       body: JSON.stringify({ version: updateVersion.value, ...checkedUpdateSettings.value }),
     });
     if (!response.ok) {
-      const error = await requests.json(response).catch(() => ({})) as { message?: string };
-      throw new Error(error.message || '无法启动在线更新，请前往版本发布页面手动下载');
+      throw new Error(await readApiError(response, '无法启动在线更新，请前往版本发布页面手动下载', requests.json));
     }
     updateMessage.value = '正在准备更新…';
     await loadUpdateStatus();

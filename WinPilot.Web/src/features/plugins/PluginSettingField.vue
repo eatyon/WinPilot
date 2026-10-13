@@ -46,7 +46,7 @@ async function loadSelectOptions(): Promise<boolean> {
   selectError.value = '';
   try {
     const response = await requests.fetch(
-      `/api/plugin-setting-options/${encodeURIComponent(props.field.optionsSource)}`,
+      `/api/plugins/options/settings/${encodeURIComponent(props.field.optionsSource)}`,
     );
     if (!response.ok) throw new Error('读取通知渠道失败');
     const options = (await requests.json(response)) as unknown;

@@ -9,6 +9,7 @@ using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Tasks;
+using WinPilot.PluginContract;
 using WinPilot.Web;
 
 namespace WinPilot.Test;
@@ -67,6 +68,42 @@ public sealed class TaskServiceTest
         Assert.Equal("测试通知", sent.Message.Content);
         Assert.Equal(saved.NotificationChannel, sent.Channel);
         Assert.Equal(ignoreEnabled, sent.IgnoreEnabled);
+    }
+
+    [Fact]
+    public async Task TaskExtensionApiReturnsRegisteredDefinitionsAndDynamicOptions()
+    {
+        await using var fixture = new TaskServiceFixture();
+        using var scope = fixture.Extensions.CreateScope("example", "示例插件");
+        scope.Register([new PluginTriggerDefinition("ready", "准备完成")]);
+        ((IPluginTaskActionApi)scope).Register(
+            [new PluginTaskActionDefinition("run", "运行动作", [new("target", "目标", PluginActionParameterType.Select,
+                Options: [new("initial", "初始配置")])])],
+            (_, _, _) => Task.FromResult(PluginTaskActionResult.Success()),
+            (actionId, parameterKey, _) =>
+            {
+                Assert.Equal("run", actionId);
+                Assert.Equal("target", parameterKey);
+                return Task.FromResult<IReadOnlyList<PluginActionOption>>([new("saved", "已保存配置")]);
+            });
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var triggers = JsonDocument.Parse(await client.GetStringAsync("/api/tasks/extensions/triggers"));
+        Assert.Equal("ready", Assert.Single(triggers.RootElement.EnumerateArray()).GetProperty("triggerId").GetString());
+        using var actions = JsonDocument.Parse(await client.GetStringAsync("/api/tasks/extensions/actions"));
+        var action = Assert.Single(actions.RootElement.EnumerateArray());
+        Assert.Equal("run", action.GetProperty("actionId").GetString());
+        Assert.Equal("示例插件", action.GetProperty("pluginDisplayName").GetString());
+        Assert.True(action.GetProperty("dynamicOptions").GetBoolean());
+        var options = await client.GetFromJsonAsync<PluginActionOption[]>("/api/tasks/extensions/actions/example/run/options/target");
+        Assert.Equal(new PluginActionOption("saved", "已保存配置"), Assert.Single(options!));
     }
 
     [Fact]

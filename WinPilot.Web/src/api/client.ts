@@ -32,5 +32,26 @@ export function isAbortError(error: unknown): boolean
 export function userErrorMessage(error: unknown, fallback: string): string
 {
   if (error instanceof WinPilotConnectionError) return ''
-  return error instanceof Error ? error.message : fallback
+  return error instanceof Error && error.message.trim() ? error.message : fallback
+}
+
+export function apiErrorMessage(body: unknown, fallback: string): string
+{
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return fallback
+  const problem = body as Record<string, unknown>
+  const errors = problem.errors && typeof problem.errors === 'object' && !Array.isArray(problem.errors)
+    ? Object.values(problem.errors).flat() : []
+  for (const value of [problem.detail, ...errors, problem.message, problem.title])
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  return fallback
+}
+
+export async function readApiError(response: Response, fallback: string,
+  readJson: (response: Response) => Promise<unknown> = response => response.json()): Promise<string>
+{
+  try { return apiErrorMessage(await readJson(response), fallback) }
+  catch (error) {
+    if (isAbortError(error)) throw error
+    return fallback
+  }
 }

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import AppModal from '../../components/AppModal.vue';
 import AppSelect from '../../components/AppSelect.vue';
-import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import { showToast } from '../../ui/toast';
 import { safeModeEnabled } from '../security/safeMode';
 
@@ -113,7 +113,7 @@ async function runRequest<T>(
 async function fetchResponse(url: string, signal: AbortSignal, init?: RequestInit) {
   const response = await apiFetch(url, { ...init, signal });
   ensureRequestActive(signal);
-  if (!response.ok) throw new Error(await readProblem(response));
+  if (!response.ok) throw new Error(await readApiError(response, '文件操作失败'));
   return response;
 }
 async function readJson<T>(url: string, signal: AbortSignal) {
@@ -234,11 +234,6 @@ onBeforeUnmount(() => {
   editContent.value = '';
 });
 
-async function readProblem(response: Response) {
-  const value = (await response.json().catch(() => undefined)) as
-    { detail?: string; title?: string } | undefined;
-  return value?.detail ?? value?.title ?? '文件操作失败';
-}
 async function loadRoots() {
   await runRequest('roots', async (signal) => {
     roots.value = await readJson<Root[]>('/api/files/roots', signal);
@@ -501,7 +496,7 @@ function formatTime(value: string) {
 <template>
   <section
     class="files-view"
-    :class="{ 'safe-mode-locked': safeModeEnabled, 'safe-mode-blocked': safeModeEnabled }"
+    :class="{ 'safe-mode-locked': safeModeEnabled }"
     :inert="safeModeEnabled"
   >
     <p v-if="pageError" class="status-message error" role="alert">{{ pageError }}</p>

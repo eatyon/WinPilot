@@ -105,7 +105,7 @@ onMounted(async () => {
     Object.assign(form, await requests.json(response));
     Object.assign(savedSettings, form);
     settingsLoaded.value = true;
-    const botsResponse = await requests.fetch('/api/settings/command-bots');
+    const botsResponse = await requests.fetch('/api/settings/notifications/command-bots');
     if (!botsResponse.ok) throw new Error('无法读取命令机器人开关');
     Object.assign(botEnabled, await requests.json(botsResponse));
     botsLoaded.value = true;
@@ -156,7 +156,7 @@ async function test(channel: string) {
   if (!settingsLoaded.value || testing.value || saving.value || safeModeEnabled.value || !requests.active) return;
   testing.value = true;
   try {
-    const response = await requests.fetch('/api/settings/notifications/test', {
+    const response = await requests.fetch('/api/notifications/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '这是一条测试通知信息', content: '', channel }),
@@ -190,7 +190,7 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
   binding.value = target;
   qqbotOpenIdStatus[target] = { text: '正在连接 QQBot…', tone: 'info' };
   try {
-    const response = await apiFetch(`/api/settings/notifications/qqbot/bind-${target}`, {
+    const response = await apiFetch(`/api/notifications/qqbot/bind-${target}`, {
       method: 'POST',
       signal: controller.signal,
     });

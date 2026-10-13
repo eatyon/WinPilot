@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getPageScroller } from '../../ui/scrollLock';
-import { isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { createPluginRequests } from './PluginRequests';
 import { showToast } from '../../ui/toast';
 import AppModal from '../../components/AppModal.vue';
@@ -98,11 +98,11 @@ async function load() {
         isRunning && plugin.value.manifest?.status_ui
           ? requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/status`)
           : Promise.resolve(undefined),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/storage`),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/settings-definition`),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/settings-display-settings`),
+        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration`),
+        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration/schema`),
+        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/settings/display/configuration`),
         isRunning && plugin.value.manifest?.features_ui
-          ? requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/features-definition`)
+          ? requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/features`)
           : Promise.resolve(undefined),
       ]);
     if (!requests.active || generation !== loadGeneration) return;
@@ -133,7 +133,7 @@ async function load() {
 
 function connectStateEvents() {
   stateEvents?.close();
-  stateEvents = new EventSource(`/api/plugins/${encodeURIComponent(id.value)}/state-events`);
+  stateEvents = new EventSource(`/api/plugins/${encodeURIComponent(id.value)}/events`);
   const connection = stateEvents;
   stateEvents.onmessage = (event) => {
     if (!requests.active || connection !== stateEvents) return;
@@ -227,17 +227,13 @@ async function saveSettings() {
   loadGeneration++;
   requests.cancelReads();
   try {
-    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/storage`, {
+    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     });
     if (!response.ok) {
-      const error = await requests.json<{ detail?: unknown }>(response).catch(cause => {
-        if (isAbortError(cause)) throw cause;
-        return { detail: undefined };
-      });
-      throw new Error(typeof error?.detail === 'string' && error.detail.trim() ? error.detail : '配置保存失败，请重试');
+      throw new Error(await readApiError(response, '配置保存失败，请重试', requests.json));
     }
     showToast('配置已保存', 'success');
     await load();
@@ -360,6 +356,7 @@ onBeforeUnmount(() => {
         :class="{ 'safe-mode-locked': safeModeEnabled }"
       >
         <div class="plugin-module-heading">
+        :inert="safeModeEnabled"
           <h3>
             配置
             <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
@@ -375,7 +372,7 @@ onBeforeUnmount(() => {
             {{ saving ? '正在保存…' : '保存配置' }}
           </button>
         </div>
-        <div class="plugin-settings-fields" :class="{ 'safe-mode-blocked': safeModeEnabled }">
+        <div class="plugin-settings-fields">
           <template v-for="setting in definitions" :key="setting.name">
             <PluginSettingField
               v-if="isDefinition(setting)"

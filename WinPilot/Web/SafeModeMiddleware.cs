@@ -4,9 +4,47 @@ namespace WinPilot.Web;
 
 public sealed class SafeModeMiddleware(RequestDelegate next)
 {
+    private static readonly PathString[] BlockedPathPrefixes = ["/api/files", "/api/terminal"];
+    private static readonly PathString[] BlockedWritePathPrefixes = ["/api/settings"];
+    private static readonly Dictionary<string, string[]> BlockedRoutesByMethod = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [HttpMethods.Get] =
+        [
+            "/api/programs",
+            "/api/programs/users"
+        ],
+        [HttpMethods.Post] =
+        [
+            "/api/desktop/keyboard",
+            "/api/programs/usage",
+            "/api/programs/close",
+            "/api/programs/launch",
+            "/api/programs/tags",
+            "/api/tasks",
+            "/api/notifications/test",
+            "/api/notifications/qqbot/bind-user",
+            "/api/notifications/qqbot/bind-group"
+        ],
+        [HttpMethods.Put] =
+        [
+            "/api/programs/tags/{name}",
+            "/api/tasks/{name}",
+            "/api/plugins/{id}/configuration",
+            "/api/plugins/{id}/settings/display/status",
+            "/api/plugins/{id}/settings/display/features",
+            "/api/plugins/{id}/settings/display/configuration"
+        ],
+        [HttpMethods.Delete] =
+        [
+            "/api/programs/tags/{name}",
+            "/api/tasks/{name}",
+            "/api/plugins/{id}"
+        ]
+    };
+
     public async Task InvokeAsync(HttpContext context, SafeModeService safeMode)
     {
-        if (!safeMode.Enabled || IsAllowed(context.Request))
+        if (!safeMode.Enabled || !IsBlocked(context.Request))
         {
             await next(context);
             return;
@@ -20,42 +58,19 @@ public sealed class SafeModeMiddleware(RequestDelegate next)
         });
     }
 
-    private static bool IsAllowed(HttpRequest request)
+    private static bool IsBlocked(HttpRequest request)
     {
         var path = request.Path;
-        var method = request.Method;
-        if (!path.StartsWithSegments("/api")) return true;
-        if (HttpMethods.IsGet(method) && path == "/api/security/safe-mode") return true;
-        if (HttpMethods.IsGet(method) && path == "/api/security/safe-mode/events") return true;
-        if (HttpMethods.IsGet(method) && path == "/api/about") return true;
-        if (path.StartsWithSegments("/api/update")) return !(HttpMethods.IsPut(method) && path == "/api/update/settings");
-        if (HttpMethods.IsGet(method) && path == "/api/system/status") return true;
-        if (HttpMethods.IsGet(method) && path == "/api/desktop/screenshot") return true;
-        if (HttpMethods.IsGet(method) && path.StartsWithSegments("/api/logs")) return true;
-        if (HttpMethods.IsGet(method) && path.StartsWithSegments("/api/settings")) return true;
-        if (HttpMethods.IsGet(method) && (path == "/api/security/password" || path == "/api/security/notifications")) return true;
-        if (HttpMethods.IsGet(method) && path == "/api/programs/tags") return true;
-        if (HttpMethods.IsPost(method) && path.StartsWithSegments("/api/programs/tags") && path.Value!.EndsWith("/launch", StringComparison.OrdinalIgnoreCase)) return true;
-        if (HttpMethods.IsGet(method) && (path == "/api/tasks" || path == "/api/task-variables")) return true;
-        if (HttpMethods.IsGet(method) && path.StartsWithSegments("/api/plugin-task-extensions")) return true;
-        if ((HttpMethods.IsPost(method) || HttpMethods.IsPatch(method)) && path.StartsWithSegments("/api/tasks") &&
-            (path.Value!.EndsWith("/run", StringComparison.OrdinalIgnoreCase) || path.Value.EndsWith("/enabled", StringComparison.OrdinalIgnoreCase))) return true;
-        if (path.StartsWithSegments("/api/plugins") || path.StartsWithSegments("/api/plugin-page-sessions"))
-            return IsAllowedPluginRequest(request);
-        return false;
-    }
+        foreach (var prefix in BlockedPathPrefixes)
+            if (path.StartsWithSegments(prefix)) return true;
 
-    private static bool IsAllowedPluginRequest(HttpRequest request)
-    {
-        var path = request.Path.Value!;
-        if (HttpMethods.IsGet(request.Method)) return true;
-        if (HttpMethods.IsDelete(request.Method)) return path.StartsWith("/api/plugin-", StringComparison.OrdinalIgnoreCase);
-        if (!HttpMethods.IsPost(request.Method)) return false;
-        return path.Equals("/api/plugins/reload", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("/enable", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("/disable", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("/features/", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith("/api/plugin-page-sessions/", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith("/web/log", StringComparison.OrdinalIgnoreCase);
+        var method = HttpMethods.IsHead(request.Method) ? HttpMethods.Get : request.Method;
+        if (!HttpMethods.IsGet(method))
+            foreach (var prefix in BlockedWritePathPrefixes)
+                if (path.StartsWithSegments(prefix)) return true;
+
+        var route = (request.HttpContext.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
+        return route is not null && BlockedRoutesByMethod.TryGetValue(method, out var routes)
+            && routes.Contains(route, StringComparer.OrdinalIgnoreCase);
     }
 }

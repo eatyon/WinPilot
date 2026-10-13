@@ -33,7 +33,7 @@ public sealed class NotificationChannelTest
         app.MapNotificationEndpoints(paths.ConfigurationFile, notifications);
         await app.StartAsync();
         using var client = app.GetTestClient();
-        using var response = await client.GetAsync("/api/notification-channels");
+        using var response = await client.GetAsync("/api/notifications/channels");
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var options = json.RootElement.EnumerateArray().ToArray();

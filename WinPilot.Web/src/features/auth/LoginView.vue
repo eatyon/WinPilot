@@ -2,7 +2,7 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppIcon from '../../components/AppIcon.vue';
-import { apiFetch, userErrorMessage } from '../../api/client';
+import { readApiError, apiFetch, userErrorMessage } from '../../api/client';
 
 const router = useRouter();
 const password = ref('');
@@ -26,12 +26,8 @@ async function submit() {
       body: JSON.stringify({ password: password.value }),
     });
     if (!response.ok) {
-      const problem = (await response.json().catch(() => undefined)) as
-        { errors?: Record<string, string[]> } | undefined;
-      throw new Error(
-        problem?.errors?.password?.[0] ??
-          (response.status === 429 ? '登录尝试过多，请 5 分钟后重试' : '密码不正确或请求已失效'),
-      );
+      throw new Error(await readApiError(response,
+        response.status === 429 ? '登录尝试过多，请 5 分钟后重试' : '密码不正确或请求已失效'));
     }
     if (active && !request.signal.aborted) await router.replace('/home');
   } catch (cause) {

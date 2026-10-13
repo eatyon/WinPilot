@@ -386,8 +386,8 @@ public sealed class QQBotCommandBotTest
         app.MapCommandBotEndpoints();
         await app.StartAsync();
         using var client = app.GetTestClient();
-        const string route = "/api/settings/command-bots/qqbot";
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(route)).StatusCode);
+        const string route = "/api/settings/notifications/command-bots/qqbot";
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/qqbot/status")).StatusCode);
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync(route + "/reconnect", null)).StatusCode);

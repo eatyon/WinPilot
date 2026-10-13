@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { createPluginRequests } from './PluginRequests';
 import { showToast } from '../../ui/toast';
 import type { PluginInfo } from './PluginModels';
@@ -27,20 +27,16 @@ const filteredPlugins = computed(() => {
 });
 onMounted(load);
 onBeforeUnmount(requests.dispose);
-async function readProblem(response: Response) {
-  const body = (await requests.json(response).catch(() => null)) as { detail?: string } | null;
-  return body?.detail ?? '操作失败，请稍后重试';
-}
-async function load(reload = false) {
+async function load(scan = false) {
   const generation = ++loadGeneration;
   requests.cancelReads();
   loading.value = true;
   error.value = '';
   try {
-    const response = await requests.fetch(reload ? '/api/plugins/reload' : '/api/plugins', {
-      method: reload ? 'POST' : 'GET',
+    const response = await requests.fetch(scan ? '/api/plugins/scan' : '/api/plugins', {
+      method: scan ? 'POST' : 'GET',
     });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试', requests.json));
     const loaded = (await requests.json(response)) as PluginInfo[];
     if (generation === loadGeneration) plugins.value = loaded;
   } catch (cause) {

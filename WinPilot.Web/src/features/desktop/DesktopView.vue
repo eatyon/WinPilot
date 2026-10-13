@@ -441,6 +441,7 @@ onBeforeUnmount(() => {
     <section
       class="keyboard-panel"
       :class="{ 'safe-mode-locked': safeModeEnabled }"
+      :inert="safeModeEnabled"
       aria-labelledby="keyboard-title"
     >
       <div class="keyboard-panel-heading">

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { createSettingsRequests } from '../SettingsRequests';
-import { isAbortError, userErrorMessage } from '../../../api/client';
+import { readApiError, isAbortError, userErrorMessage } from '../../../api/client';
 import { showToast } from '../../../ui/toast';
 import { safeModeEnabled } from '../../security/safeMode';
 
@@ -14,8 +14,8 @@ const error = ref('');
 
 onMounted(async () => {
   try {
-    const response = await requests.fetch('/api/settings/unauthenticated-web-page');
-    if (!response.ok) throw new Error();
+    const response = await requests.fetch('/api/settings/advanced/unauthenticated-web-page');
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取设置', requests.json));
     enabled.value = ((await requests.json(response)) as { enabled: boolean }).enabled;
     settingsLoaded.value = true;
   } catch (cause) {
@@ -35,12 +35,12 @@ async function save(next: boolean) {
   saving.value = true;
   error.value = '';
   try {
-    const response = await requests.fetch('/api/settings/unauthenticated-web-page', {
+    const response = await requests.fetch('/api/settings/advanced/unauthenticated-web-page', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: next }),
     });
-    if (!response.ok) throw new Error();
+    if (!response.ok) throw new Error(await readApiError(response, '无法保存设置', requests.json));
     enabled.value = ((await requests.json(response)) as { enabled: boolean }).enabled;
     showToast(next ? 'Web 页面伪装已开启' : 'Web 页面伪装已关闭', 'success');
   } catch (cause) {

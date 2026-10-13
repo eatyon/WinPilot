@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as apiErrors from '../support/apiErrors.mjs';
 
 function evaluate(path, require, members = '', extra = {}) {
   const code = loadScriptModule(new URL(path, import.meta.url), members);
@@ -16,7 +17,8 @@ function fixture(page, members, props = {}, extra = {}) {
   const calls = [], toasts = [], events = [], emitted = [], renders = [], timers = new Map();
   let mounted, unmount, timerId = 0;
   const client = {
-    apiFetch: (url, init) => url === '/api/settings/command-bots'
+    ...apiErrors,
+    apiFetch: (url, init) => url === '/api/settings/notifications/command-bots'
       ? Promise.resolve({ ok: true, json: async () => ({ telegram: true, feishu: false, onebot: false, qqbot: false }) })
       : new Promise((resolve, reject) => calls.push({ url, init, resolve, reject })),
     isAbortError: error => error?.name === 'AbortError',
@@ -29,7 +31,7 @@ function fixture(page, members, props = {}, extra = {}) {
     if (name === 'vue-router') return { useRoute: () => ({ query: {} }), useRouter: () => ({ push() {} }) };
     if (name.endsWith('/SettingsRequests')) return requests;
     if (name.endsWith('/client')) return client;
-    if (name.endsWith('/toast')) return { showToast: (...args) => toasts.push(args) };
+    if (name.endsWith('/toast')) return { showToast: (message, type = 'error') => { if (message) toasts.push([message, type]); } };
     if (name.endsWith('/markdown')) return { renderMarkdown: source => new Promise((resolve, reject) => renders.push({ source, resolve, reject })) };
     if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
     return {};
@@ -69,7 +71,7 @@ for (const channel of ['telegram', 'feishu', 'onebot', 'qqbot']) {
     f.calls[0].resolve(response({ enabled: true, prefix: '' }));
     await loading;
     assert.equal(f.events.length, 1);
-    assert.equal(f.events[0].url, '/api/settings/command-bots/' + channel + '/events');
+    assert.equal(f.events[0].url, '/api/notifications/command-bots/' + channel + '/events');
     f.events[0].onmessage({ data: JSON.stringify({ enabled: true, state: 'connected' }) });
     assert.equal(f.subject.connectionStatus.value.tone, 'connected');
     f.subject.enabled.value = true;
@@ -170,11 +172,11 @@ test('security notifications use one channel selector and keep event selection u
   const f = fixture('tabs/SecuritySettings.vue', 'notifications,channelOptions,saveNotifications');
   try {
     const loading = f.mount();
-    f.calls.find(call => call.url === '/api/security/password').resolve(response({ configured: false }));
-    f.calls.find(call => call.url === '/api/security/notifications').resolve(response({
+    f.calls.find(call => call.url === '/api/settings/security/password').resolve(response({ configured: false }));
+    f.calls.find(call => call.url === '/api/settings/security/notifications').resolve(response({
       channel: '', events: ['LoginFailed'],
     }));
-    f.calls.find(call => call.url === '/api/notification-channels').resolve(response([
+    f.calls.find(call => call.url === '/api/notifications/channels').resolve(response([
       { value: '', label: '已启用渠道' }, { value: 'QQBot', label: 'QQBot' },
     ]));
     await loading;
@@ -303,6 +305,22 @@ test('closing about settings suppresses late modal opening and notifications', a
   await opening;
   assert.equal(f.subject.updateSettingsOpen.value, false);
   assert.equal(f.toasts.length, 0);
+});
+
+test('update settings show server errors or the page fallback for malformed error bodies', async () => {
+  for (const [body, expected] of [
+    [null, '保存更新设置失败，请稍后重试'],
+    [{ message: '安全模式下不可执行此操作' }, '安全模式下不可执行此操作'],
+    [{ errors: { source: ['请选择更新源'] } }, '请选择更新源'],
+  ]) {
+    const f = fixture('tabs/AboutSettings.vue', 'saveUpdateSettings');
+    try {
+      const saving = f.subject.saveUpdateSettings();
+      f.calls[0].resolve(response(body, false));
+      await saving;
+      assert.deepEqual(f.toasts, [[expected, 'error']]);
+    } finally { f.dispose(); }
+  }
 });
 
 test('closing about settings suppresses late save failures', async () => {

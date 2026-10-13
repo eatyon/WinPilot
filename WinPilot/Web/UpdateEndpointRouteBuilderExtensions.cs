@@ -7,8 +7,8 @@ public static class UpdateEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapUpdateEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/update/settings", (UpdateCheckService updates) => Results.Ok(updates.GetSettings()));
-        endpoints.MapPut("/api/update/settings", async (UpdateSettings settings, UpdateCheckService updates, HttpContext context) =>
+        endpoints.MapGet("/api/settings/updates", (UpdateCheckService updates) => Results.Ok(updates.GetSettings()));
+        endpoints.MapPut("/api/settings/updates", async (UpdateSettings settings, UpdateCheckService updates, HttpContext context) =>
         {
             try { return Results.Ok(await updates.SaveSettingsAsync(settings, context.RequestAborted)); }
             catch (ArgumentException) { return Results.BadRequest(new { message = "更新设置无效" }); }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WinPilot.Core.Tasks;
+using WinPilot.Features.Plugins;
 using WinPilot.Features.Tasks;
 
 namespace WinPilot.Web;
@@ -15,7 +16,15 @@ public static class TaskEndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapTaskEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/api/tasks", (TaskService tasks) => Results.Json(tasks.GetAll().Select(TaskPersistenceFile.From), JsonOptions));
-        endpoints.MapGet("/api/task-variables", (TaskVariableCatalog variables) => Results.Ok(variables.GetAll()));
+        endpoints.MapGet("/api/tasks/variables", (TaskVariableCatalog variables) => Results.Ok(variables.GetAll()));
+        endpoints.MapGet("/api/tasks/extensions/triggers", ([Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions) => Results.Ok(extensions.GetTriggers()));
+        endpoints.MapGet("/api/tasks/extensions/actions", ([Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions) => Results.Ok(extensions.GetActions().Select(action => new { action.PluginId, action.PluginDisplayName, action.ActionId, action.ActionName, action.Parameters, action.Available, DynamicOptions = action.OptionsResolver is not null })));
+        endpoints.MapGet("/api/tasks/extensions/actions/{pluginId}/{actionId}/options/{parameterKey}", async (string pluginId, string actionId, string parameterKey, [Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions, CancellationToken cancellationToken) =>
+        {
+            try { return Results.Ok(await extensions.GetActionOptionsAsync(pluginId, actionId, parameterKey, cancellationToken)); }
+            catch (FileNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
+            catch (InvalidOperationException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件操作失败", detail: exception.Message); }
+        });
         endpoints.MapPost("/api/tasks", (WinPilotTask task, TaskService tasks, HttpContext context) => Execute(() =>
         {
             tasks.Create(task);

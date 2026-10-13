@@ -28,7 +28,7 @@ public sealed class AvailableCommandsTest
         app.MapCommandBotEndpoints();
         await app.StartAsync();
         using var client = app.GetTestClient();
-        using var response = await client.GetAsync("/api/settings/command-bots/commands");
+        using var response = await client.GetAsync("/api/notifications/command-bots/commands");
         response.EnsureSuccessStatusCode();
         Assert.True(response.Headers.CacheControl?.NoStore);
         var groups = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -41,7 +41,7 @@ public sealed class AvailableCommandsTest
             groups[1].GetProperty("commands").EnumerateArray().Select(command => command.GetProperty("usage").GetString()));
         Assert.Equal("处理未匹配的命令", groups[1].GetProperty("commands")[2].GetProperty("description").GetString());
         plugin.Dispose();
-        var remaining = await client.GetFromJsonAsync<JsonElement>("/api/settings/command-bots/commands");
+        var remaining = await client.GetFromJsonAsync<JsonElement>("/api/notifications/command-bots/commands");
         Assert.Equal(1, remaining.GetArrayLength());
     }
 }

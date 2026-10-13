@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
-import { isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage } from '../../api/client';
 import { createPluginRequests } from './PluginRequests';
 import AppModal from '../../components/AppModal.vue';
 import AppIcon from '../../components/AppIcon.vue';
@@ -133,7 +133,7 @@ async function loadStatusSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [statusResponse, settingsResponse] = await Promise.all([
     requests.fetch(`/api/plugins/${id}/status`),
-    requests.fetch(`/api/plugins/${id}/status-display-settings`),
+    requests.fetch(`/api/plugins/${id}/settings/display/status`),
   ]);
   if (!statusResponse.ok || !settingsResponse.ok) throw new Error('读取状态展示设置失败');
   statusKeys.value = Object.keys((await requests.json(statusResponse)) as Record<string, unknown>);
@@ -154,7 +154,7 @@ async function saveStatusSettings() {
   savingStatusSettings.value = true;
   try {
     const response = await requests.fetch(
-      `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/status-display-settings`,
+      `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/settings/display/status`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -174,8 +174,8 @@ async function saveStatusSettings() {
 async function loadFeatureSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [featuresResponse, settingsResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/features-definition`),
-    requests.fetch(`/api/plugins/${id}/feature-display-settings`),
+    requests.fetch(`/api/plugins/${id}/features`),
+    requests.fetch(`/api/plugins/${id}/settings/display/features`),
   ]);
   if (!featuresResponse.ok || !settingsResponse.ok) throw new Error('读取功能展示设置失败');
   features.value =
@@ -194,9 +194,9 @@ async function openFeatureSettings() {
 async function loadSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [settingsResponse, definitionResponse, storageResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/settings-display-settings`),
-    requests.fetch(`/api/plugins/${id}/settings-definition`),
-    requests.fetch(`/api/plugins/${id}/storage`),
+    requests.fetch(`/api/plugins/${id}/settings/display/configuration`),
+    requests.fetch(`/api/plugins/${id}/configuration/schema`),
+    requests.fetch(`/api/plugins/${id}/configuration`),
   ]);
   if (settingsResponse.ok)
     settingsDisplay.value = (await requests.json(settingsResponse)) as PluginSettingsDisplaySettings;
@@ -222,20 +222,16 @@ async function saveSettings() {
   let configurationSaved = false;
   try {
     const id = encodeURIComponent(String(route.params.pluginId));
-    const storageResponse = await requests.fetch(`/api/plugins/${id}/storage`, {
+    const configurationResponse = await requests.fetch(`/api/plugins/${id}/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settingsConfig.value),
     });
-    if (!storageResponse.ok) {
-      const error = await requests.json<{ detail?: unknown }>(storageResponse).catch(cause => {
-        if (isAbortError(cause)) throw cause;
-        return { detail: undefined };
-      });
-      throw new Error(typeof error?.detail === 'string' && error.detail.trim() ? error.detail : '配置保存失败，请重试');
+    if (!configurationResponse.ok) {
+      throw new Error(await readApiError(configurationResponse, '配置保存失败，请重试', requests.json));
     }
     configurationSaved = true;
-    const settingsResponse = await requests.fetch(`/api/plugins/${id}/settings-display-settings`, {
+    const settingsResponse = await requests.fetch(`/api/plugins/${id}/settings/display/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settingsDisplay.value),
@@ -254,7 +250,7 @@ async function saveFeatureSettings() {
   savingFeatureSettings.value = true;
   try {
     const response = await requests.fetch(
-      `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/feature-display-settings`,
+      `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/settings/display/features`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

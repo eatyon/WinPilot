@@ -32,7 +32,6 @@ public sealed partial class PluginManagerTest
             builder.Logging.ClearProviders();
             builder.Services.AddSingleton(manager);
             builder.Services.AddSingleton(new PluginWebResourceService(manager));
-            builder.Services.AddSingleton<PluginTaskExtensionRegistry>();
             await using var app = builder.Build();
             app.MapPluginEndpoints();
             await app.StartAsync();
@@ -80,7 +79,6 @@ public sealed partial class PluginManagerTest
             builder.Logging.ClearProviders();
             builder.Services.AddSingleton(manager);
             builder.Services.AddSingleton(new PluginWebResourceService(manager));
-            builder.Services.AddSingleton<PluginTaskExtensionRegistry>();
             await using var app = builder.Build();
             app.MapPluginEndpoints();
             await app.StartAsync();
@@ -134,7 +132,6 @@ public sealed partial class PluginManagerTest
             builder.Logging.ClearProviders();
             builder.Services.AddSingleton(manager);
             builder.Services.AddSingleton(new PluginWebResourceService(manager));
-            builder.Services.AddSingleton<PluginTaskExtensionRegistry>();
             await using var app = builder.Build();
             app.MapPluginEndpoints();
             await app.StartAsync();
@@ -169,7 +166,6 @@ public sealed partial class PluginManagerTest
             builder.Logging.ClearProviders();
             builder.Services.AddSingleton(manager);
             builder.Services.AddSingleton(new PluginWebResourceService(manager));
-            builder.Services.AddSingleton<PluginTaskExtensionRegistry>();
             await using var app = builder.Build();
             app.MapPluginEndpoints();
             await app.StartAsync();

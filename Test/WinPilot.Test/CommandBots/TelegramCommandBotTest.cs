@@ -72,11 +72,11 @@ public sealed class TelegramCommandBotTest
         var safeMode = app.Services.GetRequiredService<SafeModeService>();
         using var removedRouteClient = app.GetTestClient();
         foreach (var channel in new[] { "telegram", "feishu", "qqbot", "onebot" })
-            Assert.Equal(HttpStatusCode.NotFound, (await removedRouteClient.PostAsync($"/api/settings/command-bots/{channel}/test-receive", null)).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await removedRouteClient.PostAsync($"/api/settings/notifications/command-bots/{channel}/test-receive", null)).StatusCode);
         safeMode.SetEnabled(true);
         using var client = app.GetTestClient();
-        const string route = "/api/settings/command-bots/telegram";
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(route)).StatusCode);
+        const string route = "/api/settings/notifications/command-bots/telegram";
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/telegram/status")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync(route + "/reconnect", null)).StatusCode);
         var reception = CommandBotTestObserver.NextCommandAsync(fixture.Logger);

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, w
 import AppModal from '../../components/AppModal.vue';
 import AppSelect from '../../components/AppSelect.vue';
 import HelpHint from '../../components/HelpHint.vue';
-import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import { showToast } from '../../ui/toast';
 import AppIcon from '../../components/AppIcon.vue';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
@@ -162,17 +162,13 @@ function releasePageResources() {
 function setListError(error: unknown) {
   if (isPageActive && !isAbortError(error)) pageError.value = userErrorMessage(error, '操作失败，请稍后重试');
 }
-async function readProblem(response: Response) {
-  const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-  return body?.detail ?? '操作失败，请稍后重试';
-}
 async function performAction(key: ProgramAction, url: string, init: RequestInit, success: () => void | Promise<void>, failure: (error: unknown) => void) {
   if (!isPageActive || pendingActions.has(key)) return;
   const controller = new AbortController();
   pendingActions.set(key, controller);
   try {
     const response = await apiFetch(url, { ...init, signal: controller.signal, headers: { 'Content-Type': 'application/json' } });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     if (isPageActive && !controller.signal.aborted) await success();
   } catch (error) {
     if (isPageActive && !controller.signal.aborted && !isAbortError(error)) failure(error);
@@ -193,7 +189,7 @@ async function loadTags() {
   tagsController = controller;
   try {
     const response = await apiFetch('/api/programs/tags', { signal: controller.signal });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     const nextTags = (await response.json()) as ProgramTag[];
     if (isPageActive && tagsController === controller) tags.value = nextTags;
   } catch (error) {
@@ -208,7 +204,7 @@ async function loadUsers() {
   usersController = controller;
   try {
     const response = await apiFetch('/api/programs/users', { signal: controller.signal });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     const nextUsers = (await response.json()) as InteractiveUser[];
     if (isPageActive && usersController === controller) {
       users.value = nextUsers;
@@ -237,7 +233,7 @@ async function queryPrograms() {
     const response = await apiFetch(`/api/programs?userName=${encodeURIComponent(selectedUserName.value)}`, {
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     const nextPrograms = (await response.json()) as RunningProgram[];
     if (isPageActive && programsController === controller) {
       programs.value = nextPrograms;
@@ -293,7 +289,7 @@ async function refreshUsage() {
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
     });
-    if (!response.ok) throw new Error(await readProblem(response));
+    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     const usage = (await response.json()) as ProgramUsage;
     if (isPageActive && usageController === controller) processUsage.value = usage;
   } catch (error) {
@@ -443,7 +439,7 @@ function formatMemory(bytes: number) {
   <section class="programs-view">
     <p v-if="pageError" class="status-message error" role="alert">{{ pageError }}</p>
     <p v-else-if="processMessage" class="status-message success" role="status">{{ processMessage }}</p>
-    <section class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }">
+    <section class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }" :inert="safeModeEnabled">
       <div class="program-panel-header">
         <div>
           <h2>
@@ -556,7 +552,7 @@ function formatMemory(bytes: number) {
       </template>
       <p v-else class="program-empty">请选择用户后查询进程</p>
     </section>
-    <section ref="launchPanel" class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }">
+    <section ref="launchPanel" class="program-panel" :class="{ 'safe-mode-locked': safeModeEnabled }" :inert="safeModeEnabled">
       <div class="program-panel-header">
         <div>
           <h2>

@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WinPilot.Features.Security;
 using WinPilot.Features.Notifications;
+using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Features.Plugins;
 using WinPilot.Features.Terminal;
 using WinPilot.Features.Updates;
@@ -44,6 +45,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         builder.Services.AddSingleton<SessionManager>();
         builder.Services.AddSingleton<LoginRateLimiter>();
         builder.Services.AddSingleton<INotificationService, TestNotificationService>();
+        builder.Services.AddSingleton<CommandBotConfiguration>();
         builder.Services.AddSingleton<SecurityEventNotifier>();
         builder.Services.AddSingleton<WebFacadeService>();
         builder.Services.AddSingleton<TerminalSessionManager>();
@@ -65,9 +67,24 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         app.MapAuthenticationEndpoints();
         app.MapSafeModeEndpoints();
         app.MapSettingsEndpoints(paths.ConfigurationFile, new StartupTaskService());
+        app.MapNotificationEndpoints(paths.ConfigurationFile, app.Services.GetRequiredService<INotificationService>());
         app.MapTerminalEndpoints();
         app.MapGet("/api/protected", () => Results.Ok(new { ok = true }));
         app.MapMethods("/api/protected/{name}", ["GET", "PUT", "DELETE"], () => Results.NoContent());
+        foreach (var route in new[]
+        {
+            "/api/desktop/keyboard", "/api/programs", "/api/programs/users", "/api/programs/usage",
+            "/api/programs/close", "/api/programs/launch", "/api/programs/tags", "/api/programs/tags/{name}",
+            "/api/programs/tags/{name}/launch", "/api/tasks", "/api/tasks/{name}", "/api/tasks/{name}/run",
+            "/api/tasks/{name}/enabled", "/api/plugins/{id}", "/api/plugins/{id}/readme",
+            "/api/plugins/{id}/configuration", "/api/plugins/{id}/settings/display/status",
+            "/api/plugins/{id}/settings/display/features", "/api/plugins/{id}/settings/display/configuration",
+            "/api/plugins/{id}/enable", "/api/plugins/scan", "/api/plugins/options/settings/{source}",
+            "/api/plugin-page-sessions/{sessionId}", "/api/plugin-page-sessions/{sessionId}/messages",
+            "/api/settings/test",
+            "/api/notifications/diagnostic",
+        })
+            app.MapMethods(route, ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], () => Results.NoContent());
         app.MapGet("/assets/diagnostic.js", () => Results.Text(new string('a', 4096), "text/javascript"));
         Directory.CreateDirectory(root);
         var pluginAssetPath = Path.Combine(root, "diagnostic.js");
@@ -226,7 +243,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         Assert.True(await safeModeStream.ReadAsync(new byte[64]) > 0);
 
         File.Delete(paths.AuthenticationFile);
-        using var trigger = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
+        using var trigger = new HttpRequestMessage(HttpMethod.Get, "/api/programs");
         trigger.Headers.Add("X-Test-Remote-IP", "192.168.1.10");
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(trigger)).StatusCode);
         Assert.True(app.Services.GetRequiredService<SafeModeService>().Enabled);
@@ -265,9 +282,19 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         allowedRequest.Headers.Add("Cookie", $"WinPilot.Session={session}");
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(allowedRequest)).StatusCode);
 
-        using var blockedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
-        blockedRequest.Headers.Add("Cookie", $"WinPilot.Session={session}");
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(blockedRequest)).StatusCode);
+        using var channelsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/notifications/channels");
+        channelsRequest.Headers.Add("Cookie", $"WinPilot.Session={session}");
+        using var channelsResponse = await client.SendAsync(channelsRequest);
+        Assert.Equal(HttpStatusCode.OK, channelsResponse.StatusCode);
+
+        using var settingsWrite = new HttpRequestMessage(HttpMethod.Patch, "/api/settings/notifications/telegram");
+        settingsWrite.Headers.Add("Cookie", $"WinPilot.Session={session}");
+        using var writeResponse = await client.SendAsync(settingsWrite);
+        Assert.Equal(HttpStatusCode.Forbidden, writeResponse.StatusCode);
+
+        using var unrestrictedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
+        unrestrictedRequest.Headers.Add("Cookie", $"WinPilot.Session={session}");
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(unrestrictedRequest)).StatusCode);
 
         using var upgradeRequest = new HttpRequestMessage(HttpMethod.Get, "/api/terminal/ws");
         upgradeRequest.Headers.Add("Cookie", $"WinPilot.Session={session}");
@@ -298,9 +325,9 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
             CommandBots = current.CommandBots with { TelegramEnabled = true, TelegramPrefix = "/" }
         });
         var responses = await Task.WhenAll(
-            client.PatchAsJsonAsync("/api/settings/port", new { port = 9456 }),
-            client.PatchAsJsonAsync("/api/settings/lan-access", new { enabled = true }),
-            client.PutAsJsonAsync("/api/security/notifications", new SecurityNotificationSettings
+            client.PatchAsJsonAsync("/api/settings/general/port", new { port = 9456 }),
+            client.PatchAsJsonAsync("/api/settings/general/lan-access", new { enabled = true }),
+            client.PutAsJsonAsync("/api/settings/security/notifications", new SecurityNotificationSettings
             { Events = [SecurityEventType.PasswordChanged] }));
         try { Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode)); }
         finally { foreach (var response in responses) response.Dispose(); }
@@ -318,7 +345,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     {
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/protected")).StatusCode);
-        var enableLan = await client.PatchAsJsonAsync("/api/settings/lan-access", new { enabled = true });
+        var enableLan = await client.PatchAsJsonAsync("/api/settings/general/lan-access", new { enabled = true });
         Assert.Equal(HttpStatusCode.OK, enableLan.StatusCode);
         Assert.True(WinPilotSettings.LoadAndInitialize(app.Services.GetRequiredService<PortableDataPaths>().ConfigurationFile).LanAccessEnabled);
 
@@ -329,7 +356,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
 
         client.DefaultRequestHeaders.Remove("X-Test-Remote-IP");
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
-        var setPassword = await client.PutAsJsonAsync("/api/security/password", new { currentPassword = "", newPassword = "a secure passphrase", confirmation = "a secure passphrase" });
+        var setPassword = await client.PutAsJsonAsync("/api/settings/security/password", new { currentPassword = "", newPassword = "a secure passphrase", confirmation = "a secure passphrase" });
         Assert.Equal(HttpStatusCode.NoContent, setPassword.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/login", new { password = "wrong password" })).StatusCode);
 
@@ -343,7 +370,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         var missingApiProblem = await missingApi.Content.ReadFromJsonAsync<ProblemDetails>();
         Assert.Equal("API 不存在", missingApiProblem?.Title);
 
-        var changed = await client.PutAsJsonAsync("/api/security/password", new { currentPassword = "a secure passphrase", newPassword = "another secure passphrase", confirmation = "another secure passphrase" });
+        var changed = await client.PutAsJsonAsync("/api/settings/security/password", new { currentPassword = "a secure passphrase", newPassword = "another secure passphrase", confirmation = "another secure passphrase" });
         Assert.Equal(HttpStatusCode.NoContent, changed.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/protected")).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync("/login", new { password = "another secure passphrase" })).StatusCode);
@@ -363,7 +390,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "192.168.1.10");
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/protected")).StatusCode);
         File.Delete(paths.AuthenticationFile);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/protected")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/programs")).StatusCode);
         Assert.True(safeMode.Enabled);
         Assert.Contains("密码配置缺失或损坏，已自动开启安全模式", ReadActiveLog(paths.LogsDirectory));
         safeMode.SetEnabled(false);
@@ -376,7 +403,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/protected")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/does-not-exist")).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync("/api/security/password", new { currentPassword = "", newPassword = "another secure passphrase", confirmation = "another secure passphrase" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync("/api/settings/security/password", new { currentPassword = "", newPassword = "another secure passphrase", confirmation = "another secure passphrase" })).StatusCode);
 
         var restoredSession = sessions.Create();
         using var restoredRequest = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
@@ -386,7 +413,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         File.WriteAllText(paths.AuthenticationFile, "{ invalid json }");
         client.DefaultRequestHeaders.Remove("X-Test-Remote-IP");
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "192.168.1.10");
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/protected")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/programs")).StatusCode);
         Assert.True(safeMode.Enabled);
         safeMode.SetEnabled(false);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/protected")).StatusCode);
@@ -396,7 +423,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         client.DefaultRequestHeaders.Remove("X-Test-Remote-IP");
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/protected")).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync("/api/security/password", new { currentPassword = "", newPassword = "a third secure passphrase", confirmation = "a third secure passphrase" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsJsonAsync("/api/settings/security/password", new { currentPassword = "", newPassword = "a third secure passphrase", confirmation = "a third secure passphrase" })).StatusCode);
     }
 
     [Fact]
@@ -408,7 +435,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         firstUse.Headers.Add("X-Test-Remote-IP", "127.0.0.1");
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(firstUse)).StatusCode);
 
-        using var setPassword = new HttpRequestMessage(HttpMethod.Put, "/api/security/password")
+        using var setPassword = new HttpRequestMessage(HttpMethod.Put, "/api/settings/security/password")
         {
             Content = JsonContent.Create(new { currentPassword = "", newPassword = "a secure passphrase", confirmation = "a secure passphrase" })
         };
@@ -417,7 +444,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
 
         var session = sessions.Create();
         File.Delete(paths.AuthenticationFile);
-        using var lanRequest = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
+        using var lanRequest = new HttpRequestMessage(HttpMethod.Get, "/api/programs");
         lanRequest.Headers.Add("X-Test-Remote-IP", "192.168.1.10");
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(lanRequest)).StatusCode);
         Assert.True(app.Services.GetRequiredService<SafeModeService>().Enabled);
@@ -428,15 +455,15 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     public async Task SecurityNotificationSettings_HaveDefaultsAndValidateOneChannel()
     {
         client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
-        using var defaultsResponse = await client.GetAsync("/api/security/notifications");
+        using var defaultsResponse = await client.GetAsync("/api/settings/security/notifications");
         defaultsResponse.EnsureSuccessStatusCode();
         using var defaults = System.Text.Json.JsonDocument.Parse(await defaultsResponse.Content.ReadAsStringAsync());
         Assert.Equal("", defaults.RootElement.GetProperty("channel").GetString());
         Assert.Equal(SecurityEventDefaults.Notified.Select(type => type.ToString()), defaults.RootElement.GetProperty("events").EnumerateArray().Select(item => item.GetString()));
 
-        using var invalid = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet" }, channel = "unknown" });
+        using var invalid = await client.PutAsJsonAsync("/api/settings/security/notifications", new { events = new[] { "PasswordSet" }, channel = "unknown" });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
-        using var saved = await client.PutAsJsonAsync("/api/security/notifications", new { events = new[] { "PasswordSet", "LoginSourceLocked" }, channel = "telegram" });
+        using var saved = await client.PutAsJsonAsync("/api/settings/security/notifications", new { events = new[] { "PasswordSet", "LoginSourceLocked" }, channel = "telegram" });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
         using var savedJson = System.Text.Json.JsonDocument.Parse(await saved.Content.ReadAsStringAsync());
         Assert.Equal("telegram", savedJson.RootElement.GetProperty("channel").GetString());

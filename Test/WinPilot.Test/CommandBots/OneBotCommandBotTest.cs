@@ -376,8 +376,8 @@ public sealed class OneBotCommandBotTest
         app.MapCommandBotEndpoints();
         await app.StartAsync();
         using var client = app.GetTestClient();
-        const string route = "/api/settings/command-bots/onebot";
-        var configuration = await client.GetAsync(route + "/configuration");
+        const string route = "/api/settings/notifications/command-bots/onebot";
+        var configuration = await client.GetAsync(route);
         Assert.Equal(HttpStatusCode.OK, configuration.StatusCode);
         Assert.True(configuration.Headers.CacheControl!.NoStore);
         var options = await configuration.Content.ReadFromJsonAsync<OneBotCommandBotOptions>();

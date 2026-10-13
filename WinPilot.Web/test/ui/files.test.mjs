@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as apiErrors from '../support/apiErrors.mjs';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/files/FilesView.vue', import.meta.url),
@@ -18,7 +19,7 @@ function fixture() {
     document: { createElement: () => anchor, body: { append() {} } },
     require: name => {
       if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
-      if (name.endsWith('/client')) return {
+      if (name.endsWith('/client')) return { ...apiErrors,
         apiFetch: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
         isAbortError: error => error?.name === 'AbortError',
         userErrorMessage: error => error.message,

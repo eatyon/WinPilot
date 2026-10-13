@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as apiErrors from '../support/apiErrors.mjs';
 import { combinePageSignal } from '../../src/features/plugins/page/PluginPageLifetime.ts';
 
 function evaluate(path, require, members = '') {
@@ -20,6 +21,7 @@ function fixture(page = 'PluginInfoView.vue') {
   let unmount;
   let disposed = false;
   const client = {
+    ...apiErrors,
     WinPilotConnectionError: class extends Error {},
     apiFetch: (url, init) => new Promise((resolve, reject) => calls.push({ url, init, resolve, reject })),
     isAbortError: error => error?.name === 'AbortError',
@@ -180,7 +182,7 @@ test('plugin home toggle reports its operation result rather than the reloaded s
     f.calls[1].resolve(response({ id: 'first', enabled: false, state: 'Disabled', manifest: {} }));
     await setImmediate();
     for (const call of f.calls.slice(2))
-      call.resolve(response(call.url.endsWith('/settings-definition') ? [] : {}));
+      call.resolve(response(call.url.endsWith('/configuration/schema') ? [] : {}));
     await toggling;
     assert.equal(f.toasts.length, 1);
     assert.equal(f.toasts[0].text, '插件启用失败');
@@ -216,9 +218,9 @@ test('details wait for lifecycle completion before loading status and features',
     f.calls[0].resolve(response({ id: 'first', enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true } }));
     await setImmediate();
     for (const call of f.calls.slice(1)) {
-      const body = call.url.endsWith('/features-definition') ? { features: [{ id: 'page' }] }
+      const body = call.url.endsWith('/features') ? { features: [{ id: 'page' }] }
         : call.url.endsWith('/status') ? { ready: true }
-        : call.url.endsWith('/settings-definition') ? [] : {};
+        : call.url.endsWith('/configuration/schema') ? [] : {};
       call.resolve(response(body));
     }
     await loading;
@@ -440,7 +442,7 @@ test('saving display settings cannot proceed after failed configuration save', a
     f.calls[0].resolve(response({}, false));
     await saving;
     assert.equal(f.calls.length, 1);
-    assert.match(f.calls[0].url, /\/storage$/);
+    assert.match(f.calls[0].url, /\/configuration$/);
     assert.equal(f.toasts.length, 1);
   } finally { f.dispose(); }
 });

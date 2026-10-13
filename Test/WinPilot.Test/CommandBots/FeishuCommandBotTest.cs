@@ -167,8 +167,8 @@ public sealed class FeishuCommandBotTest
         await app.StartAsync();
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
         using var client = app.GetTestClient();
-        const string route = "/api/settings/command-bots/feishu";
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(route)).StatusCode);
+        const string route = "/api/settings/notifications/command-bots/feishu";
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/feishu/status")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync(route + "/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);

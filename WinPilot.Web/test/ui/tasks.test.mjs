@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as apiErrors from '../support/apiErrors.mjs';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
@@ -15,7 +16,7 @@ function fixture() {
     exports: {}, AbortController, HTMLInputElement: class {},
     require: name => {
       if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
-      if (name.endsWith('/client')) return { apiFetch: (url, init) => new Promise(resolve => requests.push({ url, init, resolve })), isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message, WinPilotConnectionError: class extends Error {} };
+      if (name.endsWith('/client')) return { ...apiErrors, apiFetch: (url, init) => new Promise(resolve => requests.push({ url, init, resolve })), isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message, WinPilotConnectionError: class extends Error {} };
       if (name.endsWith('/toast')) return { showToast: text => toasts.push(text) };
       if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
       return {};
@@ -55,9 +56,9 @@ test('notification channel options are read from the host rather than declared b
   try {
     const loading = f.subject.loadTasks();
     const options = [{ value: '', label: '已启用渠道' }, { value: 'Windows', label: 'Windows 通知' }];
-    assert.equal(f.requests.filter(request => request.url === '/api/notification-channels').length, 1);
+    assert.equal(f.requests.filter(request => request.url === '/api/notifications/channels').length, 1);
     for (const request of f.requests)
-      request.resolve({ ok: true, json: async () => request.url === '/api/notification-channels' ? options : [] });
+      request.resolve({ ok: true, json: async () => request.url === '/api/notifications/channels' ? options : [] });
     await loading;
     assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify(options));
   } finally { f.dispose(); }
@@ -231,7 +232,7 @@ test('an older page loadTasks cannot overwrite a newer result', async () => {
     const channels = [{ value: 'QQBot', label: 'QQBot' }];
     assert.ok(oldRequests.every(request => request.init.signal.aborted));
     for (const request of f.requests.slice(oldRequests.length))
-      request.resolve({ ok: true, json: async () => request.url === '/api/notification-channels' ? channels : [{ name: 'new' }] });
+      request.resolve({ ok: true, json: async () => request.url === '/api/notifications/channels' ? channels : [{ name: 'new' }] });
     await latest;
     for (const request of oldRequests) request.resolve({ ok: true, json: async () => [{ name: 'old' }] });
     await old;

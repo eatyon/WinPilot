@@ -10,13 +10,13 @@ public static class CommandBotEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapCommandBotEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/settings/command-bots", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] WinPilot.Core.PortableDataPaths paths) =>
+        endpoints.MapGet("/api/settings/notifications/command-bots", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] WinPilot.Core.PortableDataPaths paths) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = WinPilot.Core.WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).CommandBots;
             return Results.Ok(new { telegram = settings.TelegramEnabled, feishu = settings.FeishuEnabled, onebot = settings.OneBotEnabled, qqbot = settings.QQBotEnabled });
         });
-        endpoints.MapGet("/api/settings/command-bots/commands", (HttpContext context,
+        endpoints.MapGet("/api/notifications/command-bots/commands", (HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] PluginCommandRegistry registry) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -29,33 +29,39 @@ public static class CommandBotEndpointRouteBuilderExtensions
                     group.Select(command => new CommandItem(command.Definition.Usage, command.Definition.Description)).ToArray())));
             return Results.Ok(groups);
         });
-        MapBotEndpoints<TelegramCommandBotService>(endpoints, "/api/settings/command-bots/telegram");
-        MapBotEndpoints<FeishuCommandBotService>(endpoints, "/api/settings/command-bots/feishu");
-        MapBotEndpoints<QQBotCommandBotService>(endpoints, "/api/settings/command-bots/qqbot");
-        MapBotEndpoints<OneBotCommandBotService>(endpoints, "/api/settings/command-bots/onebot");
-        endpoints.MapGet("/api/settings/command-bots/onebot/configuration", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot) =>
+        MapBotEndpoints<TelegramCommandBotService>(endpoints, "telegram");
+        MapBotEndpoints<FeishuCommandBotService>(endpoints, "feishu");
+        MapBotEndpoints<QQBotCommandBotService>(endpoints, "qqbot");
+        MapBotEndpoints<OneBotCommandBotService>(endpoints, "onebot");
+        endpoints.MapGet("/api/settings/notifications/command-bots/onebot", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
         {
             context.Response.Headers.CacheControl = "no-store";
-            return Results.Ok(bot.GetOptions());
+            var settings = bot.GetOptions();
+            return Results.Ok(settings);
         });
-        endpoints.MapPut("/api/settings/command-bots/onebot/configuration", (OneBotCommandBotOptions options, HttpContext context,
+        endpoints.MapPut("/api/settings/notifications/command-bots/onebot", (OneBotCommandBotOptions options, HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
             ExecuteAsync(() => bot.SaveAsync(options, context.RequestAborted), bot, safeMode));
         return endpoints;
     }
 
-    private static void MapBotEndpoints<T>(IEndpointRouteBuilder endpoints, string route) where T : CommandBotService
+    private static void MapBotEndpoints<T>(IEndpointRouteBuilder endpoints, string channel) where T : CommandBotService
     {
-        endpoints.MapGet(route, ([Microsoft.AspNetCore.Mvc.FromServices] T bot) => Results.Ok(bot.Status));
+        var configurationRoute = $"/api/settings/notifications/command-bots/{channel}";
+        var route = $"/api/notifications/command-bots/{channel}";
+        endpoints.MapGet(route + "/status", ([Microsoft.AspNetCore.Mvc.FromServices] T bot) => Results.Ok(bot.Status));
         if (typeof(T) != typeof(OneBotCommandBotService))
-            endpoints.MapGet(route + "/configuration", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot) =>
+        {
+            endpoints.MapGet(configurationRoute, (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
             {
                 context.Response.Headers.CacheControl = "no-store";
-                return Results.Ok(bot.GetSettings());
+                var settings = bot.GetSettings();
+                return Results.Ok(settings);
             });
-        endpoints.MapPut(route, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
-            ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)
-                : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted), bot, safeMode));
+            endpoints.MapPut(configurationRoute, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
+                ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)
+                    : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted), bot, safeMode));
+        }
         endpoints.MapPost(route + "/reconnect", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
             ExecuteAsync(() => bot.ReconnectAsync(context.RequestAborted), bot, safeMode));
         endpoints.MapGet(route + "/events", async (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot) =>

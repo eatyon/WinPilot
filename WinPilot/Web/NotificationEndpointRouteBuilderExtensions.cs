@@ -2,6 +2,7 @@ using WinPilot.Core;
 using WinPilot.Core.Notifications;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
+using WinPilot.Features.Security;
 
 namespace WinPilot.Web;
 
@@ -9,23 +10,14 @@ public static class NotificationEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapNotificationEndpoints(this IEndpointRouteBuilder endpoints, string configurationFile, INotificationService notifications)
     {
-        endpoints.MapGet("/api/notification-channels", () => Results.Ok(NotificationChannelCatalog.All
+        endpoints.MapGet("/api/notifications/channels", () => Results.Ok(NotificationChannelCatalog.All
             .Select(channel => new { value = channel.Id, label = channel.DisplayName })
             .Prepend(new { value = "", label = NotificationChannelCatalog.EnabledDisplayName })));
-        endpoints.MapGet("/api/settings/notifications", () => Results.Ok(WinPilotSettings.LoadAndInitialize(configurationFile).Notifications));
-        endpoints.MapPut("/api/settings/notifications", async (NotificationSettings settings, ILoggerFactory loggerFactory, CommandBotConfiguration bots, HttpContext context) =>
+        endpoints.MapGet("/api/settings/notifications", ([Microsoft.AspNetCore.Mvc.FromServices] SafeModeService safeMode, HttpContext context) =>
         {
-            var logger = loggerFactory.CreateLogger("WinPilot.Notifications");
-            try
-            {
-                ValidateSendTarget("onebot", settings);
-                ValidateSendTarget("qqbot", settings);
-                await bots.SaveNotificationsAsync(configurationFile, _ => settings, context.RequestAborted);
-                logger.LogInformation("通知设置已保存");
-                return Results.Ok(settings);
-            }
-            catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
-            catch (Exception exception) { logger.LogError(exception, "通知设置保存失败"); return Results.Problem(statusCode: 500, title: "通知设置保存失败", detail: "无法保存通知设置"); }
+            context.Response.Headers.CacheControl = "no-store";
+            var settings = WinPilotSettings.LoadAndInitialize(configurationFile).Notifications;
+            return Results.Ok(settings);
         });
         endpoints.MapPatch("/api/settings/notifications/{channel}", async (string channel, NotificationSettings settings, ILoggerFactory loggerFactory, CommandBotConfiguration bots, HttpContext context) =>
         {
@@ -51,7 +43,7 @@ public static class NotificationEndpointRouteBuilderExtensions
             catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
             catch (Exception exception) { logger.LogError(exception, "通知设置保存失败，渠道：{Channel}", NotificationChannelCatalog.GetDisplayName(channel)); return Results.Problem(statusCode: 500, title: "通知设置保存失败", detail: "无法保存通知设置"); }
         });
-        endpoints.MapPost("/api/settings/notifications/test", async (NotificationTestRequest request, HttpContext context) =>
+        endpoints.MapPost("/api/notifications/test", async (NotificationTestRequest request, HttpContext context) =>
         {
             if (string.IsNullOrWhiteSpace(request.Channel)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["channel"] = ["请选择通知渠道"] });
             if (string.IsNullOrWhiteSpace(request.Content) && string.IsNullOrWhiteSpace(request.Title)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["content"] = ["请输入测试内容"] });
@@ -59,8 +51,8 @@ public static class NotificationEndpointRouteBuilderExtensions
             if (results.Count == 0) return Results.BadRequest(new { message = "没有启用的通知渠道" });
             return Results.Ok(results);
         });
-        endpoints.MapPost("/api/settings/notifications/qqbot/bind-user", (HttpContext context) => BindQQBot(context, configurationFile, false));
-        endpoints.MapPost("/api/settings/notifications/qqbot/bind-group", (HttpContext context) => BindQQBot(context, configurationFile, true));
+        endpoints.MapPost("/api/notifications/qqbot/bind-user", (HttpContext context) => BindQQBot(context, configurationFile, false));
+        endpoints.MapPost("/api/notifications/qqbot/bind-group", (HttpContext context) => BindQQBot(context, configurationFile, true));
         return endpoints;
     }
     private static void ValidateSendTarget(string channel, NotificationSettings settings)

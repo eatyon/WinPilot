@@ -624,7 +624,6 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
 .login-password-toggle:hover { background: var(--surface-hover); color: var(--text); }
 .login-password-toggle:focus-visible { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
 .safe-mode-locked { position: relative; opacity: .56; }
-.safe-mode-blocked { pointer-events: none; }
 .safe-mode-button, .safe-mode-button:disabled { border-color: var(--border) !important; background: var(--surface-subtle) !important; color: var(--text-subtle) !important; opacity: .72; cursor: default; }
 .safe-mode-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .safe-mode-button .app-icon { order: -1; width: 14px; height: 14px; flex: 0 0 14px; }

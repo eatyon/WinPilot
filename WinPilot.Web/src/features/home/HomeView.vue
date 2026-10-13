@@ -171,7 +171,7 @@ async function refreshPlugins() {
           const encodedId = encodeURIComponent(plugin.id);
           const [result, settingsResult] = await Promise.all([
             apiFetch(`/api/plugins/${encodedId}/status`, { cache: 'no-store', signal: controller.signal }),
-            apiFetch(`/api/plugins/${encodedId}/status-display-settings`, {
+            apiFetch(`/api/plugins/${encodedId}/settings/display/status`, {
               cache: 'no-store',
               signal: controller.signal,
             }),
@@ -201,7 +201,7 @@ async function refreshPlugins() {
     pluginSummaries.value = summaries.filter((item): item is PluginSummary => item !== undefined);
     for (const plugin of pluginSummaries.value) {
       const statusKeys = statusKeysByPlugin.get(plugin.id) ?? [];
-      const source = new EventSource(`/api/plugins/${encodeURIComponent(plugin.id)}/state-events`);
+      const source = new EventSource(`/api/plugins/${encodeURIComponent(plugin.id)}/events`);
       source.onmessage = (event) => {
         if (!isPageActive || controller.signal.aborted) return;
         try {
@@ -223,11 +223,11 @@ async function refreshPlugins() {
         .map(async (plugin) => {
           const encodedId = encodeURIComponent(plugin.id);
           const [definitionResult, settingsResult] = await Promise.all([
-            apiFetch(`/api/plugins/${encodedId}/features-definition`, {
+            apiFetch(`/api/plugins/${encodedId}/features`, {
               cache: 'no-store',
               signal: controller.signal,
             }),
-            apiFetch(`/api/plugins/${encodedId}/feature-display-settings`, {
+            apiFetch(`/api/plugins/${encodedId}/settings/display/features`, {
               cache: 'no-store',
               signal: controller.signal,
             }),

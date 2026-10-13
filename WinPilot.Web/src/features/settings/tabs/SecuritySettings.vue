@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { createSettingsRequests } from '../SettingsRequests';
-import { isAbortError, userErrorMessage } from '../../../api/client';
+import { readApiError, isAbortError, userErrorMessage } from '../../../api/client';
 import AppIcon from '../../../components/AppIcon.vue';
 import AppSelect from '../../../components/AppSelect.vue';
 import AppMultiSelect from '../../../components/AppMultiSelect.vue';
@@ -55,9 +55,9 @@ function eventSelected(value: string) {
 onMounted(async () => {
   try {
     const [passwordResponse, notificationsResponse, channelsResponse] = await Promise.all([
-      requests.fetch('/api/security/password'),
-      requests.fetch('/api/security/notifications'),
-      requests.fetch('/api/notification-channels'),
+      requests.fetch('/api/settings/security/password'),
+      requests.fetch('/api/settings/security/notifications'),
+      requests.fetch('/api/notifications/channels'),
     ]);
     if (!passwordResponse.ok || !notificationsResponse.ok || !channelsResponse.ok) throw new Error('无法读取安全设置');
     const [password, settings, channels] = await Promise.all([
@@ -95,7 +95,7 @@ async function savePassword() {
   error.value = '';
   saving.value = true;
   try {
-    const response = await requests.fetch('/api/security/password', {
+    const response = await requests.fetch('/api/settings/security/password', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -105,9 +105,7 @@ async function savePassword() {
       }),
     });
     if (!response.ok) {
-      const problem = (await requests.json(response).catch(() => undefined)) as
-        { errors?: Record<string, string[]> } | undefined;
-      throw new Error(problem?.errors?.password?.[0] ?? '无法修改密码');
+      throw new Error(await readApiError(response, '无法修改密码', requests.json));
     }
     requests.ensureActive();
     currentPassword.value = '';
@@ -126,19 +124,14 @@ async function saveNotifications() {
   notificationError.value = '';
   notificationSaving.value = true;
   try {
-    const response = await requests.fetch('/api/security/notifications', {
+    const response = await requests.fetch('/api/settings/security/notifications', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(notifications),
     });
-    const result = (await requests.json(response).catch(() => undefined)) as
-      SecurityNotificationSettings | { errors?: Record<string, string[]> } | undefined;
-    requests.ensureActive();
-    if (!response.ok) {
-      const problem = result as { errors?: Record<string, string[]> } | undefined;
-      throw new Error(problem?.errors?.notifications?.[0] ?? '无法保存安全通知设置');
-    }
-    Object.assign(notifications, result as SecurityNotificationSettings);
+    if (!response.ok) throw new Error(await readApiError(response, '无法保存安全通知设置', requests.json));
+    const result = await requests.json<SecurityNotificationSettings>(response);
+    Object.assign(notifications, result);
     showToast('安全事件通知设置已保存', 'success');
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;

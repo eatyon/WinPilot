@@ -4,7 +4,7 @@ import { createSettingsRequests } from './SettingsRequests';
 import AppModal from '../../components/AppModal.vue';
 import AppIcon from '../../components/AppIcon.vue';
 import AvailableCommandsModal from './AvailableCommandsModal.vue';
-import { isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage } from '../../api/client';
 import { safeModeEnabled } from '../security/safeMode';
 import { showToast } from '../../ui/toast';
 
@@ -28,14 +28,12 @@ const connectionStatus = computed(() => {
   return { tone: 'connecting', label: '正在连接' };
 });
 const saving = ref(false);
-const route = `/api/settings/command-bots/${props.channel}`;
+const route = `/api/settings/notifications/command-bots/${props.channel}`;
 type CommandBotConfiguration = {
   enabled: boolean;
   prefix?: string;
   webSocketUrl?: string;
   token?: string;
-  message?: string;
-  detail?: string;
 };
 const configurationReady = ref(false);
 const prefix = ref('');
@@ -45,9 +43,9 @@ const tokenVisible = ref(false);
 const showCommands = ref(false);
 onMounted(async () => {
   try {
-    const response = await requests.fetch(`${route}/configuration`);
+    const response = await requests.fetch(route);
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取命令机器人设置', requests.json));
     const result = await requests.json<CommandBotConfiguration>(response);
-    if (!response.ok) throw new Error(result.message || '无法读取命令机器人设置');
     webSocketUrl.value = result.webSocketUrl ?? '';
     token.value = result.token ?? '';
     enabled.value = result.enabled;
@@ -68,7 +66,7 @@ function applyStatus(next: CommandBotStatus) {
     return;
   }
   if (events || !requests.active) return;
-  const stream = new EventSource(`${route}/events`);
+  const stream = new EventSource(`/api/notifications/command-bots/${props.channel}/events`);
   events = stream;
   stream.onmessage = (event) => {
     if (!requests.active || events !== stream) return;
@@ -90,15 +88,15 @@ async function update() {
   }
   saving.value = true;
   try {
-    const response = await requests.fetch(props.channel === 'onebot' ? `${route}/configuration` : route, {
+    const response = await requests.fetch(route, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(props.channel === 'onebot'
         ? { enabled: enabled.value, webSocketUrl: webSocketUrl.value, token: token.value, prefix: prefix.value }
         : { enabled: enabled.value, prefix: prefix.value }),
     });
-    const result = await requests.json<CommandBotStatus & { message?: string; detail?: string }>(response);
-    if (!response.ok) throw new Error(result.message || result.detail || '命令机器人设置保存失败');
+    if (!response.ok) throw new Error(await readApiError(response, '命令机器人设置保存失败', requests.json));
+    const result = await requests.json<CommandBotStatus>(response);
     applyStatus(result);
     showToast('命令机器人设置已保存', 'success');
   } catch (cause) {

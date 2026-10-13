@@ -333,7 +333,7 @@ watch(safeModeEnabled, (enabled) => { if (enabled) disconnect(); }, { flush: 'sy
 <template>
   <section
     class="terminal-view"
-    :class="{ 'safe-mode-locked': safeModeEnabled, 'safe-mode-blocked': safeModeEnabled }"
+    :class="{ 'safe-mode-locked': safeModeEnabled }"
     :inert="safeModeEnabled"
   >
     <div class="terminal-toolbar">

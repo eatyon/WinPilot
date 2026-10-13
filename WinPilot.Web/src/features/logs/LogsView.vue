@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
+import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import AppSelect from '../../components/AppSelect.vue';
 import AppMultiSelect from '../../components/AppMultiSelect.vue';
 
@@ -62,8 +62,7 @@ function ensureActive(signal: AbortSignal) {
 async function readJson<T>(url: string, signal: AbortSignal): Promise<T> {
   const response = await apiFetch(url, { signal });
   if (!response.ok) {
-    const problem = await response.json().catch(() => undefined) as { detail?: string; title?: string; errors?: Record<string, string[]> } | undefined;
-    throw new Error(problem?.detail ?? Object.values(problem?.errors ?? {}).flat()[0] ?? problem?.title ?? '无法读取日志，请稍后重试');
+    throw new Error(await readApiError(response, '无法读取日志，请稍后重试'));
   }
   const result = await response.json() as T;
   ensureActive(signal);

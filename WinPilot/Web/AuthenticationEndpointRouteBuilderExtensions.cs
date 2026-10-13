@@ -30,7 +30,7 @@ public static class AuthenticationEndpointRouteBuilderExtensions
             if (!auth.IsConfigured || !facade.IsEnabled() || !facade.GrantManagementEntry(context)) return Results.NotFound();
             return Results.NoContent();
         });
-        endpoints.MapPut("/api/security/password", (PasswordChangeRequest request, AuthStore auth, SessionManager sessions, SecurityEventNotifier securityEvents) =>
+        endpoints.MapPut("/api/settings/security/password", (PasswordChangeRequest request, AuthStore auth, SessionManager sessions, SecurityEventNotifier securityEvents) =>
         {
             try
             {
@@ -46,9 +46,9 @@ public static class AuthenticationEndpointRouteBuilderExtensions
             }
             catch (InvalidOperationException exception) { return Results.ValidationProblem(new Dictionary<string, string[]> { ["password"] = [exception.Message] }); }
         });
-        endpoints.MapGet("/api/security/password", (AuthStore auth) => Results.Ok(new { configured = auth.IsConfigured }));
-        endpoints.MapGet("/api/security/notifications", (WinPilot.Core.PortableDataPaths paths) => Results.Ok(WinPilot.Core.WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).SecurityNotifications));
-        endpoints.MapPut("/api/security/notifications", (WinPilot.Core.SecurityNotificationSettings settings, WinPilot.Core.PortableDataPaths paths, SecurityEventNotifier securityEvents) =>
+        endpoints.MapGet("/api/settings/security/password", (AuthStore auth) => Results.Ok(new { configured = auth.IsConfigured }));
+        endpoints.MapGet("/api/settings/security/notifications", (WinPilot.Core.PortableDataPaths paths) => Results.Ok(WinPilot.Core.WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).SecurityNotifications));
+        endpoints.MapPut("/api/settings/security/notifications", (WinPilot.Core.SecurityNotificationSettings settings, WinPilot.Core.PortableDataPaths paths, SecurityEventNotifier securityEvents) =>
         {
             try
             {

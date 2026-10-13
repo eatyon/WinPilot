@@ -9,9 +9,9 @@ public static class SettingsEndpointRouteBuilderExtensions
     private static readonly object startupSettingsGate = new();
     public static IEndpointRouteBuilder MapSettingsEndpoints(this IEndpointRouteBuilder endpoints, string configurationFile, StartupTaskService startupTasks)
     {
-        endpoints.MapGet("/api/settings/unauthenticated-web-page", () =>
+        endpoints.MapGet("/api/settings/advanced/unauthenticated-web-page", () =>
             Results.Ok(new { enabled = WinPilotSettings.LoadAndInitialize(configurationFile).UnauthenticatedWebPageEnabled }));
-        endpoints.MapPut("/api/settings/unauthenticated-web-page", (UnauthenticatedWebPageRequest request, WebFacadeService facade, ILoggerFactory loggerFactory) =>
+        endpoints.MapPut("/api/settings/advanced/unauthenticated-web-page", (UnauthenticatedWebPageRequest request, WebFacadeService facade, ILoggerFactory loggerFactory) =>
         {
             try
             {
@@ -26,13 +26,13 @@ public static class SettingsEndpointRouteBuilderExtensions
             }
         });
 
-        endpoints.MapGet("/api/settings", () =>
+        endpoints.MapGet("/api/settings/general", () =>
         {
             var settings = WinPilotSettings.LoadAndInitialize(configurationFile);
             return Results.Ok(ToResponse(settings));
         });
 
-        endpoints.MapPatch("/api/settings/lan-access", (LanAccessRequest request, SecurityEventNotifier securityEvents, ILoggerFactory loggerFactory) =>
+        endpoints.MapPatch("/api/settings/general/lan-access", (LanAccessRequest request, SecurityEventNotifier securityEvents, ILoggerFactory loggerFactory) =>
         {
             try
             {
@@ -53,7 +53,7 @@ public static class SettingsEndpointRouteBuilderExtensions
             }
         });
 
-        endpoints.MapPatch("/api/settings/port", (PortRequest request, ILoggerFactory loggerFactory) =>
+        endpoints.MapPatch("/api/settings/general/port", (PortRequest request, ILoggerFactory loggerFactory) =>
         {
             if (request.Port is < 1 or > 65535) return Results.ValidationProblem(new Dictionary<string, string[]> { ["port"] = ["端口必须在 1 到 65535 之间"] });
             try
@@ -68,7 +68,7 @@ public static class SettingsEndpointRouteBuilderExtensions
             }
         });
 
-        endpoints.MapPatch("/api/settings/startup-mode", (StartupModeRequest request, ILoggerFactory loggerFactory) =>
+        endpoints.MapPatch("/api/settings/general/startup-mode", (StartupModeRequest request, ILoggerFactory loggerFactory) =>
         {
             if (!Enum.IsDefined(request.StartupMode)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["startupMode"] = ["开机启动模式无效"] });
             try
@@ -81,38 +81,6 @@ public static class SettingsEndpointRouteBuilderExtensions
             {
                 loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!).LogError(exception, "更新开机启动设置失败");
                 return Results.Problem(statusCode: 500, title: "开机启动设置失败", detail: "无法保存配置或更新 Windows 计划任务，请检查目录权限和程序日志");
-            }
-        });
-
-        endpoints.MapPut("/api/settings", (SettingsRequest request, SecurityEventNotifier securityEvents, ILoggerFactory loggerFactory) =>
-        {
-            if (request.Port is < 1 or > 65535)
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["port"] = ["端口必须在 1 到 65535 之间"]
-                });
-            }
-            if (!Enum.IsDefined(request.StartupMode)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["startupMode"] = ["开机启动模式无效"] });
-            try
-            {
-                var changed = false;
-                var settings = UpdateStartupSettings(configurationFile, current =>
-                {
-                    changed = current.LanAccessEnabled != request.LanAccessEnabled;
-                    return current with { Port = request.Port, LanAccessEnabled = request.LanAccessEnabled, StartupMode = request.StartupMode };
-                }, startupTasks.Apply, loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!));
-                if (changed) securityEvents.Record(SecurityEventType.LanAccessChanged, enabled: request.LanAccessEnabled);
-                loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!)
-                    .LogInformation("设置已保存，重启 WinPilot 后生效");
-
-                return Results.Ok(ToResponse(settings));
-            }
-            catch (Exception exception)
-            {
-                loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!)
-                    .LogError(exception, "保存设置失败");
-                return Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "保存设置失败", detail: "无法保存配置或更新 Windows 计划任务，请检查目录权限和程序日志");
             }
         });
 
@@ -158,7 +126,6 @@ public static class SettingsEndpointRouteBuilderExtensions
         startupMode = settings.StartupMode
     };
 
-    private sealed record SettingsRequest(int Port, bool LanAccessEnabled, StartupMode StartupMode);
     private sealed record LanAccessRequest(bool Enabled);
     private sealed record PortRequest(int Port);
     private sealed record StartupModeRequest(StartupMode StartupMode);
