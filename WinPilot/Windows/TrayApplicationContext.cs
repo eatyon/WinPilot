@@ -8,6 +8,7 @@ namespace WinPilot.Windows;
 
 public sealed class TrayApplicationContext : ApplicationContext
 {
+    private const int AllowDark = 1;
     private bool resourcesDisposed;
     private readonly ILogger<TrayApplicationContext> logger;
     private readonly NotifyIcon notifyIcon;
@@ -19,6 +20,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         this.webAddress = webAddress;
         this.logger = logger;
+        SetPreferredAppMode(AllowDark);
         trayMenu = new NativeTrayMenu(
             OpenWebPage,
             () => safeMode.Enabled,
@@ -103,6 +105,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr hIcon);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("uxtheme.dll", EntryPoint = "#135")]
+    private static extern int SetPreferredAppMode(int appMode);
 }
 
 internal sealed class NativeTrayMenu(
