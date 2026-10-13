@@ -30,7 +30,6 @@ onBeforeUnmount(() => runtime?.dispose());
 
 <template>
   <div ref="container" class="plugin-surface" :class="{ 'is-loading': loading }" />
-  <p v-if="loading" class="plugin-empty">正在加载…</p>
 </template>
 
 <style scoped>

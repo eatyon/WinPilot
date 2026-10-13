@@ -8,6 +8,8 @@ import type { PluginInfo } from './PluginModels';
 
 const plugins = ref<PluginInfo[]>([]);
 const loading = ref(false);
+const scanning = ref(false);
+const hasLoaded = ref(false);
 const error = ref('');
 const changingIds = ref(new Set<string>());
 const search = ref('');
@@ -31,6 +33,7 @@ async function load(scan = false) {
   const generation = ++loadGeneration;
   requests.cancelReads();
   loading.value = true;
+  scanning.value = scan;
   error.value = '';
   try {
     const response = await requests.fetch(scan ? '/api/plugins/scan' : '/api/plugins', {
@@ -38,11 +41,17 @@ async function load(scan = false) {
     });
     if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试', requests.json));
     const loaded = (await requests.json(response)) as PluginInfo[];
-    if (generation === loadGeneration) plugins.value = loaded;
+    if (generation === loadGeneration) {
+      plugins.value = loaded;
+      hasLoaded.value = true;
+    }
   } catch (cause) {
     if (requests.active && generation === loadGeneration && !isAbortError(cause)) error.value = userErrorMessage(cause, '无法加载插件');
   } finally {
-    if (generation === loadGeneration) loading.value = false;
+    if (generation === loadGeneration) {
+      loading.value = false;
+      scanning.value = false;
+    }
   }
 }
 function onToggle(event: Event, plugin: PluginInfo) {
@@ -85,7 +94,7 @@ async function toggle(plugin: PluginInfo) {
         <div class="plugins-heading-actions">
           <RouterLink class="button button-secondary" to="/plugins/market">插件市场</RouterLink>
           <button class="button button-secondary" type="button" :disabled="loading || changingIds.size > 0" @click="load(true)">
-            {{ loading ? '正在扫描…' : '重新扫描' }}
+            {{ scanning ? '正在扫描…' : '重新扫描' }}
           </button>
         </div>
       </header>
@@ -110,7 +119,7 @@ async function toggle(plugin: PluginInfo) {
       </div>
     </section>
     <p v-if="error" class="status-message error" role="alert">{{ error }}</p>
-    <p v-else-if="loading && !plugins.length" class="plugin-empty">正在读取插件目录…</p>
+    <p v-if="loading && !hasLoaded" class="plugin-empty loading-hint">正在读取插件目录…</p>
     <template v-else-if="plugins.length">
       <div v-if="filteredPlugins.length" class="plugin-list">
         <article v-for="plugin in filteredPlugins" :key="plugin.directory" class="plugin-card">
@@ -158,7 +167,7 @@ async function toggle(plugin: PluginInfo) {
         <p>尝试搜索插件名称、ID 或作者</p>
       </div>
     </template>
-    <div v-else class="plugin-empty">
+    <div v-else-if="hasLoaded && !error && !loading" class="plugin-empty">
       <strong>暂无插件</strong>
       <p>
         插件文件夹

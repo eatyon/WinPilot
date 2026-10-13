@@ -88,6 +88,7 @@ type Task = {
   actions: Action[];
 };
 const tasks = ref<Task[]>([]),
+  tasksLoaded = ref(false),
   tags = ref<{ name: string }[]>([]),
   registeredTriggers = ref<RegisteredTrigger[]>([]),
   registeredActions = ref<RegisteredAction[]>([]),
@@ -463,6 +464,7 @@ async function loadTasks() {
     }));
     if (!isPageActive || loadController !== controller || controller.signal.aborted) return;
     [tasks.value, tags.value, registeredTriggers.value, registeredActions.value, channelOptions.value] = values;
+    tasksLoaded.value = true;
     pageError.value = '';
   } catch (cause) {
     if (isPageActive && loadController === controller && !controller.signal.aborted && !isAbortError(cause))
@@ -771,7 +773,7 @@ onBeforeUnmount(() => {
           </label>
         </div>
       </article>
-      <p v-if="!tasks.length" class="program-empty">暂无任务，点击“创建任务”开始</p>
+      <p v-if="tasksLoaded && !tasks.length && !pageError" class="program-empty">暂无任务，点击“创建任务”开始</p>
     </section>
     <AppModal
       v-if="editor"
@@ -1194,7 +1196,7 @@ onBeforeUnmount(() => {
     >
       <div class="variable-help-content">
         <p class="field-hint">变量来自当前已启用并完成注册的插件</p>
-        <p v-if="variableHelpLoading">正在读取变量…</p>
+        <p v-if="variableHelpLoading" class="loading-hint">正在读取变量…</p>
         <p v-else-if="variableHelpError" class="status-message error">{{ variableHelpError }}</p>
         <p v-else-if="!registeredVariables.length">暂无可用变量</p>
         <div v-else class="variable-help-list">

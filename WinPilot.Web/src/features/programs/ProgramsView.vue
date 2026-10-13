@@ -47,6 +47,7 @@ const programs = ref<RunningProgram[]>([]);
 const users = ref<InteractiveUser[]>([]);
 const selectedUserName = ref('');
 const tags = ref<ProgramTag[]>([]);
+const tagsLoaded = ref(false);
 const programSearch = ref('');
 const pageSize = ref(10);
 const currentPage = ref(1);
@@ -191,7 +192,10 @@ async function loadTags() {
     const response = await apiFetch('/api/programs/tags', { signal: controller.signal });
     if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
     const nextTags = (await response.json()) as ProgramTag[];
-    if (isPageActive && tagsController === controller) tags.value = nextTags;
+    if (isPageActive && tagsController === controller) {
+      tags.value = nextTags;
+      tagsLoaded.value = true;
+    }
   } catch (error) {
     if (tagsController === controller) setListError(error);
   } finally {
@@ -664,7 +668,7 @@ function formatMemory(bytes: number) {
         </article>
       </div>
       <p v-else-if="tags.length" class="program-empty">没有符合搜索条件的标签</p>
-      <p v-else class="program-empty">暂无快捷标签</p>
+      <p v-else-if="tagsLoaded && !pageError" class="program-empty">{{ tags.length ? '没有匹配的快捷标签' : '暂无快捷标签' }}</p>
     </section>
     <AppModal v-if="processUsageTarget" title="进程占用情况" @close="closeUsage">
       <p class="modal-program-name">

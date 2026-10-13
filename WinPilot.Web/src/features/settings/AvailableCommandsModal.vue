@@ -32,7 +32,7 @@ onBeforeUnmount(() => requests.dispose());
 <template>
   <AppModal title="可用命令" :dismiss-on-backdrop="false" @close="emit('close')">
     <div class="available-commands">
-      <p v-if="loading" class="field-hint" role="status">加载中…</p>
+      <p v-if="loading" class="field-hint loading-hint" role="status">加载中…</p>
       <div v-else-if="error">
         <p class="status-message error" role="alert">{{ error }}</p>
         <button type="button" class="button button-secondary" @click="load">重试</button>

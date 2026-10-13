@@ -370,7 +370,7 @@ onBeforeUnmount(() => { closeUpdateNotes(); requests.dispose(); window.clearTime
       </div>
     </section>
     <AppModal v-if="updateNotesOpen" :title="`更新说明 v${updateVersion}`" size="medium" @close="closeUpdateNotes">
-      <p v-if="updateNotesLoading">正在加载…</p>
+      <p v-if="updateNotesLoading" class="loading-hint">正在加载…</p>
       <div v-else-if="updateNotesHtml" class="markdown-content" v-html="updateNotesHtml"></div>
       <p v-else>此版本暂无发布说明</p>
       <template #actions>

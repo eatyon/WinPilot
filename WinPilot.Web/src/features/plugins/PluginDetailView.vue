@@ -81,11 +81,8 @@ async function load() {
   stateEvents?.close();
   stateEvents = undefined;
   requests.cancelReads();
-  settingsLoaded.value = false;
   loading.value = true;
   error.value = '';
-  features.value = [];
-  Object.keys(status).forEach((key) => delete status[key]);
   try {
     const response = await requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}?waitForLifecycle=true`, { cache: 'no-store' });
     if (!response.ok) throw new Error('无法加载插件');
@@ -116,6 +113,7 @@ async function load() {
       featuresResponse?.ok ? requests.json<{ features?: PluginFeatureDefinition[] }>(featuresResponse) : undefined,
     ]);
     if (!requests.active || generation !== loadGeneration) return;
+    Object.keys(status).forEach((key) => delete status[key]);
     if (state) Object.assign(status, state);
     Object.keys(config).forEach(key => delete config[key]);
     Object.assign(config, savedConfig);
@@ -176,7 +174,7 @@ async function toggle() {
 }
 
 async function saveSettings() {
-  if (safeModeEnabled.value || saving.value || !settingsLoaded.value) return;
+  if (safeModeEnabled.value || saving.value || loading.value || !settingsLoaded.value) return;
   const invalid = definitions.value.find(
     (setting) =>
       isDefinition(setting) &&
@@ -298,6 +296,10 @@ onMounted(async () => {
 watch(id, async () => {
   requests.cancelAll();
   plugin.value = undefined;
+  settingsLoaded.value = false;
+  features.value = [];
+  Object.keys(status).forEach((key) => delete status[key]);
+  definitions.value = [];
   confirmingFeature.value = undefined;
   await load();
 });
@@ -318,7 +320,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="plugin-home-view" :style="restoringScroll ? { visibility: 'hidden' } : undefined">
     <p v-if="error" class="status-message error">{{ error }}</p>
-    <p v-else-if="loading && !plugin" class="plugin-empty">正在加载插件…</p>
+    <p v-if="loading && !plugin" class="plugin-empty loading-hint">正在加载插件…</p>
     <template v-else-if="plugin">
       <PluginHeader :plugin="plugin" :changing="toggling" @toggle="toggle" />
       <section v-if="plugin.manifest?.status_ui" class="plugin-module">
@@ -330,7 +332,7 @@ onBeforeUnmount(() => {
             <dd>{{ displayStatusValue(value, String(key)) }}</dd>
           </div>
         </dl>
-        <p v-else class="plugin-empty">暂无状态数据</p>
+        <p v-else-if="settingsLoaded" class="plugin-empty">暂无状态数据</p>
       </section>
       <section v-if="plugin.manifest?.features_ui" class="plugin-module">
         <div class="plugin-module-heading"><h3>功能</h3></div>
@@ -354,15 +356,15 @@ onBeforeUnmount(() => {
             </div>
           </article>
         </div>
-        <p v-else class="plugin-empty">暂无功能声明</p>
+        <p v-else-if="settingsLoaded" class="plugin-empty">暂无功能声明</p>
       </section>
       <section
         v-if="plugin.manifest?.settings_ui && settingsDisplay.registerOnHome && definitions.length"
         class="plugin-module"
         :class="{ 'safe-mode-locked': safeModeEnabled }"
+        :inert="safeModeEnabled"
       >
         <div class="plugin-module-heading">
-        :inert="safeModeEnabled"
           <h3>
             配置
             <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
@@ -372,7 +374,7 @@ onBeforeUnmount(() => {
           <button
             class="button button-primary"
             type="button"
-            :disabled="saving || !settingsLoaded || safeModeEnabled"
+            :disabled="saving || loading || !settingsLoaded || safeModeEnabled"
             @click="saveSettings"
           >
             {{ saving ? '正在保存…' : '保存配置' }}

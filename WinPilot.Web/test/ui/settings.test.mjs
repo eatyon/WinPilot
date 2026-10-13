@@ -303,6 +303,26 @@ test('general settings serialize saves and suppress late success notifications',
   assert.equal(f.toasts.length, 0);
 });
 
+test('general settings become loaded only after a successful read and retain saved values on refresh failure', async () => {
+  const f = fixture('SettingsView.vue', 'loadSettings,settingsLoaded,port,lanAccessEnabled,startupMode');
+  try {
+    const initial = f.subject.loadSettings();
+    assert.equal(f.subject.settingsLoaded.value, false);
+    f.calls[0].resolve(response({ port: 12345, lanAccessEnabled: true, startupMode: 'Delayed' }));
+    await initial;
+    assert.equal(f.subject.settingsLoaded.value, true);
+    assert.equal(f.subject.port.value, '12345');
+    const refresh = f.subject.loadSettings();
+    assert.equal(f.subject.settingsLoaded.value, true);
+    f.calls[1].reject(new Error('Read failed'));
+    await refresh;
+    assert.equal(f.subject.settingsLoaded.value, true);
+    assert.equal(f.subject.port.value, '12345');
+    assert.equal(f.subject.lanAccessEnabled.value, true);
+    assert.equal(f.subject.startupMode.value, 'Delayed');
+  } finally { f.dispose(); }
+});
+
 test('late update installation response cannot restart polling after unmount', async () => {
   const f = fixture('tabs/AboutSettings.vue', 'canInstallUpdate,installUpdate');
   f.subject.canInstallUpdate.value = true;

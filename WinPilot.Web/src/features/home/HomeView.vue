@@ -161,8 +161,6 @@ async function refreshPlugins() {
       enabled: boolean;
     }>;
     if (!isPageActive || pluginController !== controller) return;
-    pluginStateEvents.forEach((source) => source.close());
-    pluginStateEvents.clear();
     const statusKeysByPlugin = new Map<string, string[]>();
     const summaries = await Promise.all(
       plugins
@@ -198,25 +196,6 @@ async function refreshPlugins() {
         }),
     );
     if (!isPageActive || pluginController !== controller || controller.signal.aborted) return;
-    pluginSummaries.value = summaries.filter((item): item is PluginSummary => item !== undefined);
-    for (const plugin of pluginSummaries.value) {
-      const statusKeys = statusKeysByPlugin.get(plugin.id) ?? [];
-      const source = new EventSource(`/api/plugins/${encodeURIComponent(plugin.id)}/events`);
-      source.onmessage = (event) => {
-        if (!isPageActive || controller.signal.aborted) return;
-        try {
-          const next = JSON.parse(event.data) as Record<string, unknown>;
-          const filtered = Object.fromEntries(
-            Object.entries(next).filter(([key]) => statusKeys.includes(key)),
-          );
-          pluginSummaries.value = pluginSummaries.value.map((item) =>
-            item.id === plugin.id ? { ...item, status: filtered } : item,
-          );
-        } catch {
-        }
-      };
-      pluginStateEvents.set(plugin.id, source);
-    }
     const featureSummaries = await Promise.all(
       plugins
         .filter((plugin) => plugin.enabled && plugin.manifest?.features_ui)
@@ -254,15 +233,34 @@ async function refreshPlugins() {
         }),
     );
     if (!isPageActive || pluginController !== controller || controller.signal.aborted) return;
+    pluginSummaries.value = summaries.filter((item): item is PluginSummary => item !== undefined);
     pluginFeatureSummaries.value = featureSummaries.filter(
       (item): item is PluginFeatureSummary => item !== undefined,
     );
+    pluginStateEvents.forEach((source) => source.close());
+    pluginStateEvents.clear();
+    for (const plugin of pluginSummaries.value) {
+      const statusKeys = statusKeysByPlugin.get(plugin.id) ?? [];
+      const source = new EventSource(`/api/plugins/${encodeURIComponent(plugin.id)}/events`);
+      source.onmessage = (event) => {
+        if (!isPageActive || controller.signal.aborted) return;
+        try {
+          const next = JSON.parse(event.data) as Record<string, unknown>;
+          const filtered = Object.fromEntries(
+            Object.entries(next).filter(([key]) => statusKeys.includes(key)),
+          );
+          pluginSummaries.value = pluginSummaries.value.map((item) =>
+            item.id === plugin.id ? { ...item, status: filtered } : item,
+          );
+        } catch {
+        }
+      };
+      pluginStateEvents.set(plugin.id, source);
+    }
   } catch (error) {
     if (isPageActive && pluginController === controller && !isAbortError(error)) {
       pluginStateEvents.forEach((source) => source.close());
       pluginStateEvents.clear();
-      pluginSummaries.value = [];
-      pluginFeatureSummaries.value = [];
     }
   } finally {
     if (pluginController === controller) pluginController = undefined;

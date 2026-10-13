@@ -178,6 +178,7 @@ async function saveStartupMode(mode: string) {
           @save-port="savePort"
           @update:startup-mode="saveStartupMode"
           :is-loading="isLoading || !settingsLoaded"
+          :is-loaded="settingsLoaded"
           :is-saving="isSaving"
           :is-port-valid="isPortValid"
           :error-message="activeKey === 'general' ? errorMessage : ''"

@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png?v=7" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      try {
+        const mode = localStorage.getItem('winpilot.theme')
+        if (mode === 'light' || mode === 'dark') document.documentElement.dataset.theme = mode
+      } catch {}
+    </script>
+    <style>
+      html { color-scheme: light dark; background: light-dark(#f5f6f8, #171b21); }
+      html[data-theme="light"] { color-scheme: light; }
+      html[data-theme="dark"] { color-scheme: dark; }
+    </style>
     <title>WinPilot</title>
   </head>
   <body>

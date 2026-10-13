@@ -22,6 +22,7 @@ const loading = ref(props.modal.kind === 'content');
   >
     <p v-if="modal.kind === 'confirmation'">{{ modal.options.message }}</p>
     <PluginPageRenderer v-else :view="modal.options" :signal="modal.controller.signal" @ready="loading = false" @failed="cause => emit('failed', cause)" />
+    <p v-if="loading" class="plugin-empty loading-hint">正在加载…</p>
     <template v-if="modal.kind === 'confirmation' || !modal.options.actions || modal.options.actions.length" #actions>
       <template v-if="modal.kind === 'confirmation'">
         <button class="button button-secondary" type="button" autofocus @click="emit('dismiss')">取消</button>

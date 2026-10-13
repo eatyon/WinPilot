@@ -6,6 +6,7 @@ const props = defineProps<{
   lanAccessEnabled: boolean;
   startupMode: string;
   isLoading: boolean;
+  isLoaded: boolean;
   isSaving: boolean;
   isPortValid: boolean;
   errorMessage: string;
@@ -33,7 +34,7 @@ function selectStartupMode(mode: string) {
         <h3>端口</h3>
         <p>用于在浏览器中访问 WinPilot Web 页面</p>
       </div>
-      <div class="settings-port-control">
+      <div class="settings-port-control" :class="{ 'settings-data-pending': !isLoaded }">
         <label class="field-control settings-port-field">
           <span>Web 服务端口</span>
           <input
@@ -57,7 +58,7 @@ function selectStartupMode(mode: string) {
           保存
         </button>
       </div>
-      <p v-if="!isPortValid && port.length > 0" class="field-error">端口必须是 1 到 65535 之间的整数</p>
+      <p v-if="isLoaded && !isPortValid && port.length > 0" class="field-error">端口必须是 1 到 65535 之间的整数</p>
       <p class="settings-help">
         默认端口为
         <code>9123</code>
@@ -69,7 +70,7 @@ function selectStartupMode(mode: string) {
         <h3>局域网访问</h3>
         <p>默认只允许当前电脑访问</p>
       </div>
-      <label class="toggle-control settings-toggle">
+      <label class="toggle-control settings-toggle" :class="{ 'settings-data-pending': !isLoaded }">
         <input
           :checked="lanAccessEnabled"
           type="checkbox"
@@ -87,7 +88,7 @@ function selectStartupMode(mode: string) {
         <h3>开机启动</h3>
         <p>通过 Windows 计划任务在当前用户登录时启动 WinPilot</p>
       </div>
-      <div class="field-control settings-startup-field">
+      <div class="field-control settings-startup-field" :class="{ 'settings-data-pending': !isLoaded }">
         <span>启动模式</span>
         <AppSelect
           :model-value="startupMode"

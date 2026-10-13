@@ -5,4 +5,6 @@ import { router } from './router'
 import { initializeTheme } from './ui/theme'
 
 initializeTheme()
-createApp(App).use(router).mount('#app')
+const app = createApp(App).use(router)
+const mount = () => { app.mount('#app') }
+void router.isReady().then(mount, mount)

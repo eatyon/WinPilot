@@ -64,7 +64,7 @@ async function save(next: boolean) {
           自定义页面
         </p>
       </div>
-      <label class="toggle-control settings-toggle">
+      <label class="toggle-control settings-toggle" :class="{ 'settings-data-pending': !settingsLoaded }">
         <input
           :checked="enabled"
           type="checkbox"

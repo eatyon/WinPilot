@@ -13,7 +13,7 @@ import { createPluginPageScroll } from './PluginPageScroll';
 import { PluginPageSessionExpiredError, readPluginResponse } from './PluginPageResponse';
 
 const props = defineProps<{ pluginId: string; entry: string; version: string; sessionId: string }>();
-const emit = defineEmits<{ sessionExpired: []; failed: [sessionId: string, message: string] }>();
+const emit = defineEmits<{ sessionExpired: []; failed: [sessionId: string, message: string]; ready: [sessionId: string] }>();
 const view = shallowRef<PluginView>();
 const modals = shallowRef<PluginModalEntry[]>([]);
 const lifetime = createPluginPageLifetime(cause => console.error('插件页面清理失败', cause));
@@ -102,8 +102,7 @@ onBeforeUnmount(lifetime.dispose);
 </script>
 
 <template>
-  <PluginPageRenderer v-if="view" :view="view" :signal="lifetime.signal" @failed="handleFailure" />
-  <p v-else class="plugin-empty">正在加载插件模块…</p>
+  <PluginPageRenderer v-if="view" :view="view" :signal="lifetime.signal" @ready="emit('ready', props.sessionId)" @failed="handleFailure" />
   <PluginPageModal
     v-for="(modal, index) in modals"
     :key="modal.id"

@@ -284,7 +284,7 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
           <strong>{{ channel.title }}</strong>
           <small>{{ channel.desc }}</small>
         </span>
-        <label class="notification-switch" @click.stop>
+        <label class="notification-switch" :class="{ 'settings-data-pending': !settingsLoaded }" @click.stop>
           <input
             v-model="form[channel.enabled]"
             type="checkbox"
@@ -295,7 +295,7 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
         </label>
         <span class="notification-chevron" :class="{ open: expanded[channel.key] }" aria-hidden="true" />
       </div>
-      <div v-if="expanded[channel.key]" class="notification-channel-body">
+      <div v-if="expanded[channel.key]" class="notification-channel-body" :class="{ 'settings-data-pending': !settingsLoaded }">
         <template v-if="channel.key === 'webhook'">
           <label class="field-control">
             <span>Webhook 端点</span>

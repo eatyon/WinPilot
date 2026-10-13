@@ -14,6 +14,7 @@ const pluginName = ref('');
 const pageSessionId = ref('');
 const webVersion = ref('');
 const error = ref('');
+const pageReady = ref(false);
 let heartbeatTimer: number | undefined;
 let heartbeatController: AbortController | undefined;
 let loadController: AbortController | undefined;
@@ -72,6 +73,7 @@ async function load() {
     webVersion.value = '';
   }
   feature.value = undefined;
+  pageReady.value = false;
   error.value = '';
   try {
     const sessionResponse = await apiFetch(
@@ -120,17 +122,22 @@ function handleSessionExpired(id: string) {
   void load();
 }
 
+function handlePageReady(id: string) {
+  if (!disposed && pageSessionId.value === id) pageReady.value = true;
+}
+
 function handlePageFailed(id: string, message: string) {
   if (disposed || pageSessionId.value !== id) return;
   stopHeartbeat();
   closeSession(id);
   pageSessionId.value = '';
+  pageReady.value = false;
   error.value = message || '无法加载插件页面';
 }
 
 
 const pageTitle = computed(() =>
-  feature.value && pluginName.value ? `${pluginName.value} - ${feature.value.name}` : '正在加载…',
+  feature.value && pluginName.value ? `${pluginName.value} - ${feature.value.name}` : '',
 );
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -180,8 +187,9 @@ onBeforeUnmount(() => {
       :session-id="pageSessionId"
       @session-expired="handleSessionExpired(pageSessionId)"
       @failed="handlePageFailed"
+      @ready="handlePageReady"
     />
-    <p v-else class="plugin-empty">正在加载功能页…</p>
+    <p v-if="!error && !pageReady" class="plugin-empty loading-hint" role="status">正在加载功能页…</p>
   </section>
 </template>
 

@@ -220,7 +220,7 @@ async function saveNotifications() {
         <h3>安全事件通知</h3>
         <p>发生安全事件发送通知提醒</p>
       </div>
-      <div class="security-notification-form">
+      <div class="security-notification-form" :class="{ 'settings-data-pending': !settingsLoaded }">
         <label class="field-control">
           <span>通知渠道</span>
           <AppSelect

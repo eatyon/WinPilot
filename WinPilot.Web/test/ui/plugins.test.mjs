@@ -41,7 +41,7 @@ function fixture(page = 'PluginInfoView.vue') {
     return {};
   };
   const members = page === 'PluginsView.vue'
-    ? 'load,toggle,onToggle,plugins,changingIds,loading,requests'
+    ? 'load,toggle,onToggle,plugins,changingIds,loading,scanning,requests'
     : page === 'PluginDetailView.vue' ? 'load,toggle,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
     : 'loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,checkReadme,openReadme,closeReadme,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
   const scope = vue.effectScope();
@@ -154,6 +154,27 @@ test('closing or leaving a readme cancels work and late rendering cannot overwri
     await second;
     assert.equal(f.subject.readmeError.value, '');
     assert.equal(f.subject.readmeOpen.value, false);
+  } finally { f.dispose(); }
+});
+
+test('plugin home retains loaded content during refresh and on failure without allowing a concurrent save', async () => {
+  const f = fixture('PluginDetailView.vue');
+  try {
+    f.subject.plugin.value = { id: 'first', enabled: true, state: 'Running', manifest: {} };
+    f.subject.status.state = 'ready';
+    f.subject.features.value = [{ id: 'page' }];
+    f.subject.settingsLoaded.value = true;
+    const pending = f.subject.load();
+    assert.equal(f.subject.status.state, 'ready');
+    assert.equal(f.subject.features.value.length, 1);
+    await f.subject.saveSettings();
+    assert.equal(f.calls.length, 1);
+    f.calls[0].reject(new Error('refresh failed'));
+    await pending;
+    assert.equal(f.subject.status.state, 'ready');
+    assert.equal(f.subject.features.value.length, 1);
+    assert.equal(f.subject.settingsLoaded.value, true);
+    assert.equal(f.subject.error.value, 'refresh failed');
   } finally { f.dispose(); }
 });
 
@@ -384,13 +405,16 @@ test('an old rescan cannot replace a newer read and toggles wait for scans', asy
   try {
     let releaseBody;
     const first = f.subject.load(true);
+    assert.equal(f.subject.scanning.value, true);
     await f.subject.toggle({ id: 'a', enabled: false, canChangeEnabled: true });
     assert.equal(f.calls.length, 1);
     f.calls[0].resolve({ ok: true, json: () => new Promise(resolve => { releaseBody = resolve; }) });
     await setImmediate();
     const second = f.subject.load();
+    assert.equal(f.subject.scanning.value, false);
     f.calls[1].resolve(response([{ id: 'new' }]));
     await second;
+    assert.equal(f.subject.scanning.value, false);
     releaseBody([{ id: 'old' }]);
     await first;
     assert.equal(f.subject.plugins.value[0].id, 'new');

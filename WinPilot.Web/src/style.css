@@ -58,6 +58,9 @@
 * { box-sizing: border-box; }
 html { scrollbar-gutter: stable; --wp-page-bottom-inset: 0px; }
 body { min-width: 320px; margin: 0; background: var(--canvas); color: var(--text); }
+.settings-data-pending { visibility: hidden; }
+.loading-hint { visibility: hidden; animation: show-loading-hint 0s 200ms forwards; }
+@keyframes show-loading-hint { to { visibility: visible; } }
 button, input, select { font: inherit; }
 :where(:focus-visible) { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
 button { cursor: pointer; }

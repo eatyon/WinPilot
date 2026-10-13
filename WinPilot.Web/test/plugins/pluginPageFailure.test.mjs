@@ -31,7 +31,7 @@ function setup(file, bindings, exposed) {
   return { subject: context.subject, mounted, unmounted };
 }
 
-test('initialization failure stops heartbeat, cancels its request and closes the current session once', async () => {
+test('page readiness rejects stale sessions and failure resets readiness and releases the current session', async () => {
   const intervals = new Map();
   const requests = [];
   let heartbeatSignal;
@@ -56,8 +56,13 @@ test('initialization failure stops heartbeat, cancels its request and closes the
     },
     userErrorMessage: (error, fallback) => error.message || fallback,
     isAbortError: error => error.name === 'AbortError',
-  }, ['load', 'handlePageFailed', 'pageSessionId', 'error']);
+  }, ['load', 'handlePageFailed', 'handlePageReady', 'pageReady', 'pageSessionId', 'error']);
   await subject.load();
+  assert.equal(subject.pageReady.value, false);
+  subject.handlePageReady('old-session');
+  assert.equal(subject.pageReady.value, false);
+  subject.handlePageReady('session');
+  assert.equal(subject.pageReady.value, true);
   assert.equal(intervals.size, 1);
   intervals.values().next().value();
   subject.handlePageFailed('session', '初始化失败');
@@ -66,6 +71,7 @@ test('initialization failure stops heartbeat, cancels its request and closes the
   assert.equal(heartbeatSignal.aborted, true);
   assert.equal(subject.pageSessionId.value, '');
   assert.equal(subject.error.value, '初始化失败');
+  assert.equal(subject.pageReady.value, false);
   assert.equal(requests.filter(request => request.options.method === 'DELETE').length, 1);
 });
 

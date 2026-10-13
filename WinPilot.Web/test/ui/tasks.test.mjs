@@ -8,7 +8,7 @@ import * as apiErrors from '../support/apiErrors.mjs';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions');
+    'tasks, tasksLoaded, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions');
   const requests = [];
   const toasts = [];
   let unmount;
@@ -51,15 +51,17 @@ test('notification action defaults to enabled channels and preserves explicit ch
   } finally { f.dispose(); }
 });
 
-test('notification channel options are read from the host rather than declared by the task page', async () => {
+test('task initialization waits for host data and uses the returned notification channels', async () => {
   const f = fixture();
   try {
     const loading = f.subject.loadTasks();
+    assert.equal(f.subject.tasksLoaded.value, false);
     const options = [{ value: '', label: '已启用渠道' }, { value: 'Windows', label: 'Windows 通知' }];
     assert.equal(f.requests.filter(request => request.url === '/api/notifications/channels').length, 1);
     for (const request of f.requests)
       request.resolve({ ok: true, json: async () => request.url === '/api/notifications/channels' ? options : [] });
     await loading;
+    assert.equal(f.subject.tasksLoaded.value, true);
     assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify(options));
   } finally { f.dispose(); }
 });
