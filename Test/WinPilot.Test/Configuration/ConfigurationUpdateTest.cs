@@ -9,6 +9,20 @@ public sealed class ConfigurationUpdateTest : IDisposable
     private string FilePath => Path.Combine(directory, "config.json");
 
     [Fact]
+    public void SavedChineseRemainsReadableAndSpecialCharactersRoundTrip()
+    {
+        const string value = "中文\"引号\"\\路径\n换行<标签>";
+        WinPilotSettings.Update(FilePath, current => current with
+        {
+            Notifications = current.Notifications with { WebhookSendTo = value }
+        });
+        var content = File.ReadAllText(FilePath);
+        Assert.Contains("中文", content);
+        Assert.DoesNotContain("\\u", content);
+        Assert.Equal(value, WinPilotSettings.LoadAndInitialize(FilePath).Notifications.WebhookSendTo);
+    }
+
+    [Fact]
     public void UpdatePersistsNetworkSettingsAndPreservesUnknownConfiguration()
     {
         Directory.CreateDirectory(directory);

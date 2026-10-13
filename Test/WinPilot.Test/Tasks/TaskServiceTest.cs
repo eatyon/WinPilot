@@ -53,6 +53,7 @@ public sealed class TaskServiceTest
         await using var fixture = new TaskServiceFixture(notifications);
         fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.SendNotification, NotificationContent: "测试通知", NotificationChannel: channel)]));
+        Assert.Contains("测试通知", File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Notification.json")));
         var saved = Assert.Single(fixture.Tasks.GetAll()).Actions.Single();
         Assert.Equal(TaskActionType.SendNotification, saved.Type);
         Assert.Equal(channel ?? "", saved.NotificationChannel);

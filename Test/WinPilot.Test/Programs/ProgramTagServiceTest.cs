@@ -102,6 +102,7 @@ public sealed class ProgramTagServiceTest
             Assert.False(File.Exists(Path.Combine(paths.TagsDirectory, "测试.json")));
             var tagFile = Path.Combine(paths.TagsDirectory, "测试二.json");
             Assert.True(File.Exists(tagFile));
+            Assert.Contains("测试二", File.ReadAllText(tagFile));
             var tag = Assert.Single(service.GetAll());
             Assert.Equal("测试二", tag.Name);
             Assert.True(tag.RunElevated);

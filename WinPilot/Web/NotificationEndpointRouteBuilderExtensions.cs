@@ -49,7 +49,7 @@ public static class NotificationEndpointRouteBuilderExtensions
                 return Results.Ok(merged);
             }
             catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
-            catch (Exception exception) { logger.LogError(exception, "通知设置保存失败，渠道：{Channel}", channel); return Results.Problem(statusCode: 500, title: "通知设置保存失败", detail: "无法保存通知设置"); }
+            catch (Exception exception) { logger.LogError(exception, "通知设置保存失败，渠道：{Channel}", NotificationChannelCatalog.GetDisplayName(channel)); return Results.Problem(statusCode: 500, title: "通知设置保存失败", detail: "无法保存通知设置"); }
         });
         endpoints.MapPost("/api/settings/notifications/test", async (NotificationTestRequest request, HttpContext context) =>
         {

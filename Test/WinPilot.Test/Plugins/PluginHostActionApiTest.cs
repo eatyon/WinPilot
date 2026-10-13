@@ -13,6 +13,34 @@ namespace WinPilot.Test;
 
 public sealed class PluginHostActionApiTest
 {
+    [Theory]
+    [InlineData(PluginHostActionType.StartProgram, "启动程序", false)]
+    [InlineData(PluginHostActionType.Delay, "延迟", true)]
+    [InlineData(PluginHostActionType.Keyboard, "发送按键", true)]
+    [InlineData(PluginHostActionType.SendNotification, "发送通知", true)]
+    public async Task OperationLogsUseChineseNames(PluginHostActionType type, string name, bool succeeds)
+    {
+        var logger = new CommandBotTestObserver<PluginHostActionApi>();
+        await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
+        var api = new PluginHostActionApi(new RecordingProgramManager(), new KeyboardInputService(new NoOpKeyboardInputSimulator()),
+            terminals, new RecordingNotificationService(), logger);
+
+        var result = await api.ExecuteAsync(new(type, new Dictionary<string, object?> { ["content"] = "测试", ["keys"] = new[] { "F11" } }));
+
+        Assert.Equal(succeeds, result.Succeeded);
+        Assert.Collection(logger.Entries,
+            entry =>
+            {
+                Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Debug, entry.Level);
+                Assert.Equal($"开始执行插件请求的主程序操作，操作类型：{name}", entry.Message);
+            },
+            entry =>
+            {
+                Assert.Equal(succeeds ? Microsoft.Extensions.Logging.LogLevel.Debug : Microsoft.Extensions.Logging.LogLevel.Error, entry.Level);
+                Assert.Equal($"{(succeeds ? "插件请求的主程序操作已完成" : "执行插件请求的主程序操作失败")}，操作类型：{name}", entry.Message);
+            });
+    }
+
     [Fact]
     public async Task StartProgram_HonorsElevationAndSilentParameters()
     {

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cronos;
@@ -21,6 +22,7 @@ public sealed class TaskService : BackgroundService
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull

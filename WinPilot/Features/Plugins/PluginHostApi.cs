@@ -13,10 +13,19 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
 {
     public async Task<PluginHostActionResult> ExecuteAsync(PluginHostActionStep step, CancellationToken cancellationToken = default)
     {
+        var actionName = step.Type switch
+        {
+            PluginHostActionType.StartProgram => "启动程序",
+            PluginHostActionType.Delay => "延迟",
+            PluginHostActionType.Keyboard => "发送按键",
+            PluginHostActionType.Shell => "执行终端命令",
+            PluginHostActionType.SendNotification => "发送通知",
+            _ => step.Type.ToString()
+        };
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            logger.LogDebug("开始执行插件请求的主程序操作，操作类型：{ActionType}", step.Type);
+            logger.LogDebug("开始执行插件请求的主程序操作，操作类型：{ActionName}", actionName);
             var values = step.Parameters;
             switch (step.Type)
             {
@@ -35,13 +44,13 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
                         GetString(values, "channel"), cancellationToken); break;
                 default: throw new InvalidOperationException("Host Action 类型不支持");
             }
-            logger.LogDebug("插件请求的主程序操作已完成，操作类型：{ActionType}", step.Type);
+            logger.LogDebug("插件请求的主程序操作已完成，操作类型：{ActionName}", actionName);
             return new(true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            logger.LogError(exception, "执行插件请求的主程序操作失败，操作类型：{ActionType}", step.Type);
+            logger.LogError(exception, "执行插件请求的主程序操作失败，操作类型：{ActionName}", actionName);
             return new(false, exception.Message);
         }
     }

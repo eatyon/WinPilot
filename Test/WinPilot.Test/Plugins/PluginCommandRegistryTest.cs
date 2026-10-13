@@ -12,6 +12,23 @@ public sealed class PluginCommandRegistryTest
 {
     private static PluginCommandRegistry Registry() => new(CommandProcessor.IsSupportedCommand);
 
+    [Theory]
+    [InlineData("查询", "插件「插件名称」命令「查询」处理失败，异常类型：IOException")]
+    [InlineData("*", "插件「插件名称」通配命令处理失败，异常类型：IOException")]
+    public async Task FailureLogsUsePluginDisplayName(string name, string expected)
+    {
+        var logger = new CommandBotTestObserver<PluginCommandRegistry>();
+        var registry = new PluginCommandRegistry(CommandProcessor.IsSupportedCommand, logger);
+        using var scope = registry.CreateScope("plugin-id", "插件名称");
+        using var registration = scope.Register(new(name, "说明"), (_, _) => throw new IOException());
+        var execution = registry.ExecuteAsync("查询", _ => new RecordingReply(), CancellationToken.None);
+        if (name == "*") Assert.True(await execution);
+        else await Assert.ThrowsAsync<IOException>(() => execution);
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, entry.Level);
+        Assert.Equal(expected, entry.Message);
+    }
+
     [Fact]
     public void WildcardsArePerPluginAndShownWithHostDescriptionAndPrefix()
     {

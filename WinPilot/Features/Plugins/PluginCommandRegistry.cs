@@ -79,8 +79,8 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                logger.LogWarning("插件 {PluginId} 命令「{Name}」处理失败，异常类型：{ErrorType}",
-                    entry.Command.PluginId, entry.Command.Definition.Name, exception.GetType().Name);
+                logger.LogWarning("插件「{PluginName}」命令「{Name}」处理失败，异常类型：{ErrorType}",
+                    entry.Command.PluginDisplayName, entry.Command.Definition.Name, exception.GetType().Name);
                 throw;
             }
             finally { (reply as IDisposable)?.Dispose(); }
@@ -106,18 +106,18 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
                 if (!callerToken.IsCancellationRequested && !entry.Cancellation.IsCancellationRequested)
-                    logger.LogWarning("插件 {PluginId} 通配命令处理或发送回复超时", entry.Command.PluginId);
+                    logger.LogWarning("插件「{PluginName}」通配命令处理或发送回复超时", entry.Command.PluginDisplayName);
             }
             catch (Exception exception)
             {
-                logger.LogWarning("插件 {PluginId} 通配命令处理失败，异常类型：{ErrorType}", entry.Command.PluginId, exception.GetType().Name);
+                logger.LogWarning("插件「{PluginName}」通配命令处理失败，异常类型：{ErrorType}", entry.Command.PluginDisplayName, exception.GetType().Name);
             }
             finally
             {
                 try { (reply as IDisposable)?.Dispose(); }
                 catch (Exception exception)
                 {
-                    logger.LogWarning("插件 {PluginId} 通配命令回复清理失败，异常类型：{ErrorType}", entry.Command.PluginId, exception.GetType().Name);
+                    logger.LogWarning("插件「{PluginName}」通配命令回复清理失败，异常类型：{ErrorType}", entry.Command.PluginDisplayName, exception.GetType().Name);
                 }
             }
         }
@@ -202,7 +202,7 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
     private void Cancel(Entry entry)
     {
         try { entry.Cancellation.Cancel(); }
-        catch (AggregateException) { logger.LogWarning("插件 {PluginId} 命令取消回调异常，命令：{Name}", entry.Command.PluginId, entry.Command.Definition.Name); }
+        catch (AggregateException) { logger.LogWarning("插件「{PluginName}」命令取消回调异常，命令：{Name}", entry.Command.PluginDisplayName, entry.Command.Definition.Name); }
         finally { entry.Cancellation.Dispose(); }
     }
 
