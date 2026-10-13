@@ -46,5 +46,14 @@ jobs:
         run: npm test
 
       - name: 运行 C# 测试
+        id: dotnet_tests
         shell: pwsh
         run: dotnet test ./Test/WinPilot.Test/WinPilot.Test.csproj -c Release --no-build --logger "trx" --results-directory ./artifacts/TestResults --blame-hang-timeout 2m
+
+      - name: 保存失败测试报告
+        if: ${{ failure() && steps.dotnet_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: artifacts/TestResults/
+          retention-days: 7
