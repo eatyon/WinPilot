@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -312,6 +313,121 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
 
         pageSessions.Touch(pageId);
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/files/roots")]
+    [InlineData("HEAD", "/api/files/roots")]
+    [InlineData("POST", "/api/files/upload")]
+    [InlineData("GET", "/api/terminal/ws")]
+    [InlineData("POST", "/api/desktop/keyboard")]
+    [InlineData("GET", "/api/programs")]
+    [InlineData("GET", "/API/PROGRAMS/")]
+    [InlineData("GET", "/api/programs/users")]
+    [InlineData("HEAD", "/api/programs/users")]
+    [InlineData("POST", "/api/programs/usage")]
+    [InlineData("POST", "/api/programs/close")]
+    [InlineData("POST", "/api/programs/launch")]
+    [InlineData("POST", "/api/programs/tags")]
+    [InlineData("PUT", "/api/programs/tags/test")]
+    [InlineData("DELETE", "/api/programs/tags/test")]
+    [InlineData("POST", "/api/tasks")]
+    [InlineData("PUT", "/api/tasks/test")]
+    [InlineData("DELETE", "/api/tasks/test")]
+    [InlineData("PATCH", "/api/settings/general/port")]
+    [InlineData("PATCH", "/api/settings/notifications/telegram")]
+    [InlineData("POST", "/api/notifications/test")]
+    [InlineData("POST", "/api/notifications/qqbot/bind-user")]
+    [InlineData("POST", "/api/notifications/qqbot/bind-group")]
+    [InlineData("PUT", "/api/settings/security/password")]
+    [InlineData("PUT", "/api/settings/security/notifications")]
+    [InlineData("PUT", "/api/settings/updates")]
+    [InlineData("DELETE", "/api/plugins/test")]
+    [InlineData("PUT", "/api/plugins/test/configuration")]
+    [InlineData("PUT", "/api/plugins/test/settings/display/status")]
+    [InlineData("PUT", "/api/plugins/test/settings/display/features")]
+    [InlineData("PUT", "/api/plugins/test/settings/display/configuration")]
+    public async Task SafeMode_BlocksRestrictedFeatures(string method, string path)
+    {
+        app.Services.GetRequiredService<AuthStore>().SetInitialPassword("a secure passphrase");
+        var session = app.Services.GetRequiredService<SessionManager>().Create();
+        app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
+        using var request = new HttpRequestMessage(new HttpMethod(method), path);
+        if (method is "POST" or "PUT" or "PATCH") request.Content = JsonContent.Create(new { });
+        request.Headers.Add("Cookie", $"WinPilot.Session={session}");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/settings/test")]
+    [InlineData("HEAD", "/api/settings/test")]
+    [InlineData("POST", "/api/notifications/diagnostic")]
+    [InlineData("HEAD", "/api/plugins/test/readme")]
+    [InlineData("GET", "/api/plugins/options/settings/notificationChannels")]
+    [InlineData("GET", "/api/programs/tags")]
+    [InlineData("POST", "/api/programs/tags/test/launch")]
+    [InlineData("GET", "/api/tasks")]
+    [InlineData("POST", "/api/tasks/test/run")]
+    [InlineData("PATCH", "/api/tasks/test/enabled")]
+    [InlineData("GET", "/api/plugins/test/configuration")]
+    [InlineData("POST", "/api/plugins/test/enable")]
+    [InlineData("POST", "/api/plugins/scan")]
+    [InlineData("POST", "/api/plugin-page-sessions/test/messages")]
+    [InlineData("DELETE", "/api/plugin-page-sessions/test")]
+    [InlineData("PUT", "/api/protected/test")]
+    public async Task SafeMode_AllowsOtherAuthenticatedOperations(string method, string path)
+    {
+        app.Services.GetRequiredService<AuthStore>().SetInitialPassword("a secure passphrase");
+        var session = app.Services.GetRequiredService<SessionManager>().Create();
+        app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
+        using var request = new HttpRequestMessage(new HttpMethod(method), path);
+        request.Headers.Add("Cookie", $"WinPilot.Session={session}");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using var anonymousResponse = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), path));
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task SafeNotificationReadsReturnOnlyChannelSwitchesAndRestoreFullSettings()
+    {
+        var paths = app.Services.GetRequiredService<PortableDataPaths>();
+        WinPilotSettings.Update(paths.ConfigurationFile, current => current with
+        {
+            Notifications = current.Notifications with
+            {
+                TelegramEnabled = true, TelegramBotToken = "private-token", TelegramChatId = "private-chat",
+                QQBotEnabled = true, QQBotClientSecret = "private-secret"
+            }
+        });
+        var safeMode = app.Services.GetRequiredService<SafeModeService>();
+        safeMode.SetEnabled(true);
+        using var response = await client.GetAsync("/api/settings/notifications");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "feishuEnabled", "oneBotEnabled", "qqBotEnabled", "telegramEnabled", "webhookEnabled", "windowsEnabled", "workWeixinEnabled" },
+            json.RootElement.EnumerateObject().Select(property => property.Name).Order().ToArray());
+        Assert.True(json.RootElement.GetProperty("telegramEnabled").GetBoolean());
+        Assert.True(json.RootElement.GetProperty("qqBotEnabled").GetBoolean());
+        safeMode.SetEnabled(false);
+        using var restored = await client.GetAsync("/api/settings/notifications");
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        Assert.Contains("private-token", await restored.Content.ReadAsStringAsync());
+        Assert.Contains("private-secret", await restored.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData("general")]
+    [InlineData("notifications")]
+    public void WholeSettingsWritesAreNotAvailable(string group)
+    {
+        var routes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>()
+            .Where(endpoint => endpoint.RoutePattern.RawText == $"/api/settings/{group}").ToArray();
+        Assert.Contains(routes, endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains("GET"));
+        Assert.DoesNotContain(routes, endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains("PUT"));
     }
 
     [Fact]

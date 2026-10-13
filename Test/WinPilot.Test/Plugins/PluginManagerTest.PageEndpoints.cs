@@ -11,6 +11,62 @@ namespace WinPilot.Test;
 
 public sealed partial class PluginManagerTest
 {
+    [Fact]
+    public async Task SafeConfigurationReadsHideSecretsAndRestoreThemWithoutChangingStorage()
+    {
+        const string id = "example";
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            WritePlugin(paths, id, id, "");
+            var pluginDirectory = Path.Combine(paths.PluginsDirectory, id);
+            File.WriteAllText(Path.Combine(pluginDirectory, "manifest.json"),
+                $$"""{"id":"{{id}}","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
+            File.WriteAllText(Path.Combine(pluginDirectory, "settings.json"),
+                """[{"name":"secret","type":"text","masked":true,"default":"private-default"},{"name":"plain","type":"text","label":"中文配置"}]""");
+            var storagePath = Path.Combine(paths.PluginDataDirectory, id, "config.json");
+            const string original = """{"secret":"private-value","plain":"中文内容"}""";
+            File.WriteAllText(storagePath, original);
+            var manager = CreatePluginManager(paths, new RecordingPluginRuntime());
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Logging.ClearProviders();
+            builder.Services.AddSingleton(paths);
+            builder.Services.AddSingleton<WinPilot.Features.Terminal.TerminalSessionManager>();
+            builder.Services.AddSingleton<WinPilot.Features.Security.SafeModeService>();
+            builder.Services.AddSingleton(manager);
+            builder.Services.AddSingleton(new PluginWebResourceService(manager));
+            await using var app = builder.Build();
+            app.MapPluginEndpoints();
+            await app.StartAsync();
+            using var client = app.GetTestClient();
+            var safeMode = app.Services.GetRequiredService<WinPilot.Features.Security.SafeModeService>();
+            var route = $"/api/plugins/{id}";
+            Assert.Contains("all-enabled", await client.GetStringAsync("/api/plugins/options/settings/notificationChannels"));
+            Assert.Contains("private-value", await client.GetStringAsync(route + "/configuration"));
+            safeMode.SetEnabled(true);
+            foreach (var path in new[] { "configuration", "configuration/schema" })
+            {
+                using var response = await client.GetAsync($"{route}/{path}");
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+                var content = await response.Content.ReadAsStringAsync();
+                Assert.DoesNotContain("private-", content);
+                Assert.Contains(path == "configuration" ? "中文内容" : "中文配置", content);
+                Assert.DoesNotContain("\\u", content);
+                if (path == "configuration") Assert.Contains(new string('•', "private-value".Length), content);
+            }
+            Assert.Contains("中文内容", await client.GetStringAsync(route + "/configuration"));
+            Assert.Equal(original, File.ReadAllText(storagePath));
+            safeMode.SetEnabled(false);
+            Assert.Contains("private-value", await client.GetStringAsync(route + "/configuration"));
+            Assert.Contains("private-default", await client.GetStringAsync(route + "/configuration/schema"));
+            manager.Disable(id);
+        }
+        finally { TryDeleteDirectory(directory); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

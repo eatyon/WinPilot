@@ -15,6 +15,7 @@ function evaluate(path, require, members = '', extra = {}) {
 
 function fixture(page, members, props = {}, extra = {}) {
   const calls = [], toasts = [], events = [], emitted = [], renders = [], timers = new Map();
+  const safeModeEnabled = vue.ref(false);
   let mounted, unmount, timerId = 0;
   const client = {
     ...apiErrors,
@@ -33,7 +34,7 @@ function fixture(page, members, props = {}, extra = {}) {
     if (name.endsWith('/client')) return client;
     if (name.endsWith('/toast')) return { showToast: (message, type = 'error') => { if (message) toasts.push([message, type]); } };
     if (name.endsWith('/markdown')) return { renderMarkdown: source => new Promise((resolve, reject) => renders.push({ source, resolve, reject })) };
-    if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
+    if (name.endsWith('/safeMode')) return { safeModeEnabled };
     return {};
   };
   const scope = vue.effectScope();
@@ -45,7 +46,7 @@ function fixture(page, members, props = {}, extra = {}) {
     EventSource: class { constructor(url) { events.push(this); this.url = url; this.closed = false; } close() { this.closed = true; } },
     ...extra,
   }); });
-  return { subject, calls, toasts, events, emitted, renders, timers, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted(), dispose() { unmount(); scope.stop(); } };
+  return { subject, calls, toasts, events, emitted, renders, timers, safeModeEnabled, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted(), dispose() { unmount(); scope.stop(); } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
 async function loadNotifications(f) {
@@ -61,6 +62,80 @@ test('notification page reads enabled flags without opening status streams', asy
     assert.equal(f.subject.botEnabled.telegram, true);
     assert.equal(f.subject.botsLoaded.value, true);
     assert.equal(f.events.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('notification mode changes clear private settings and restore full settings without opening streams', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form,savedSettings,expanded,botDialog,passwordVisible,loading');
+  try {
+    await loadNotifications(f);
+    f.subject.form.telegramBotToken = 'private-token';
+    f.subject.savedSettings.telegramBotToken = 'private-token';
+    f.subject.expanded.telegram = true;
+    f.subject.botDialog.value = 'telegram';
+    f.subject.passwordVisible.telegramBotToken = true;
+    f.safeModeEnabled.value = true;
+    assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.subject.savedSettings.telegramBotToken, undefined);
+    assert.equal(f.subject.expanded.telegram, false);
+    assert.equal(f.subject.botDialog.value, undefined);
+    assert.equal(f.subject.passwordVisible.telegramBotToken, false);
+    f.calls[1].resolve(response({ telegramEnabled: true }));
+    await setImmediate();
+    assert.equal(f.subject.form.telegramEnabled, true);
+    assert.equal(f.subject.form.telegramChatId, '');
+    f.safeModeEnabled.value = false;
+    f.calls[2].resolve(response({ telegramEnabled: true, telegramBotToken: 'restored', telegramChatId: 'saved' }));
+    await setImmediate();
+    assert.equal(f.subject.form.telegramBotToken, 'restored');
+    assert.equal(f.subject.form.telegramChatId, 'saved');
+    assert.equal(f.events.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('notification mode changes reject late reads and late save responses containing private settings', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form,save,loading');
+  try {
+    const first = f.mount();
+    f.safeModeEnabled.value = true;
+    assert.equal(f.calls[0].init.signal.aborted, true);
+    f.calls[0].resolve(response({ telegramBotToken: 'late-read' }));
+    await first;
+    assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.subject.loading.value, true);
+    f.calls[1].resolve(response({ telegramEnabled: true }));
+    await setImmediate();
+    f.safeModeEnabled.value = false;
+    f.calls[2].resolve(response({ telegramEnabled: true, telegramBotToken: 'original' }));
+    await setImmediate();
+    const saving = f.subject.save('telegram');
+    f.safeModeEnabled.value = true;
+    f.calls[3].resolve(response({ telegramBotToken: 'late-save' }));
+    await saving;
+    assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.toasts.length, 0);
+    f.calls[4].resolve(response({ telegramEnabled: true }));
+    await setImmediate();
+    assert.equal(f.subject.loading.value, false);
+  } finally { f.dispose(); }
+});
+
+test('safe mode cancels OpenID acquisition and ignores its late failure', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'bindQQBot,binding,qqbotOpenIdStatus');
+  try {
+    await loadNotifications(f);
+    const binding = f.subject.bindQQBot('user');
+    assert.equal(f.calls[1].url, '/api/notifications/qqbot/bind-user');
+    f.safeModeEnabled.value = true;
+    assert.equal(f.calls[1].init.signal.aborted, true);
+    assert.equal(f.subject.binding.value, '');
+    assert.equal(f.subject.qqbotOpenIdStatus.user, null);
+    f.calls[1].reject(new Error('late connection failure'));
+    await binding;
+    assert.equal(f.subject.qqbotOpenIdStatus.user, null);
+    f.calls[2].resolve(response({ telegramEnabled: true }));
+    await setImmediate();
+    assert.equal(f.toasts.length, 0);
   } finally { f.dispose(); }
 });
 

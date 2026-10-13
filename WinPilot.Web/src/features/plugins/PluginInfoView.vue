@@ -75,6 +75,7 @@ const readmeLoading = ref(false);
 const readmeHtml = ref('');
 const readmeError = ref('');
 let readmeController: AbortController | undefined;
+let settingsController: AbortController | undefined;
 
 async function checkReadme(pluginId: string) {
   try {
@@ -123,12 +124,15 @@ async function openReadme() {
   }
 }
 watch(safeModeEnabled, (enabled) => {
+  settingsController?.abort();
+  settingsConfig.value = {};
+  settingsDefinitions.value = [];
   if (!enabled) return;
   statusSettingsOpen.value = false;
   featureSettingsOpen.value = false;
   settingsOpen.value = false;
   deleteOpen.value = false;
-});
+}, { flush: 'sync' });
 async function loadStatusSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [statusResponse, settingsResponse] = await Promise.all([
@@ -192,20 +196,22 @@ async function openFeatureSettings() {
   }
 }
 async function loadSettings() {
+  settingsController?.abort();
+  settingsController = new AbortController();
+  const signal = settingsController.signal;
   const id = encodeURIComponent(String(route.params.pluginId));
-  const [settingsResponse, definitionResponse, storageResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/settings/display/configuration`),
-    requests.fetch(`/api/plugins/${id}/configuration/schema`),
-    requests.fetch(`/api/plugins/${id}/configuration`),
+  const [settingsResponse, definitionResponse, configurationResponse] = await Promise.all([
+    requests.fetch(`/api/plugins/${id}/settings/display/configuration`, { signal }),
+    requests.fetch(`/api/plugins/${id}/configuration/schema`, { signal }),
+    requests.fetch(`/api/plugins/${id}/configuration`, { signal }),
   ]);
   if (settingsResponse.ok)
     settingsDisplay.value = (await requests.json(settingsResponse)) as PluginSettingsDisplaySettings;
-  if (!settingsResponse.ok || !definitionResponse.ok || !storageResponse.ok)
+  if (!settingsResponse.ok || !definitionResponse.ok || !configurationResponse.ok)
     throw new Error('读取插件设置失败');
   settingsDefinitions.value = ((await requests.json(definitionResponse)) as unknown[])
     .filter(value => isDefinition(value) || isCollection(value));
-  settingsConfig.value = (await requests.json(storageResponse)) as Record<string, any>;
-
+  settingsConfig.value = (await requests.json(configurationResponse)) as Record<string, any>;
 }
 async function openSettings() {
   if (safeModeEnabled.value) return;

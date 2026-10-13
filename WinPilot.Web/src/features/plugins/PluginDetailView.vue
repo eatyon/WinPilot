@@ -301,6 +301,12 @@ watch(id, async () => {
   confirmingFeature.value = undefined;
   await load();
 });
+watch(safeModeEnabled, () => {
+  Object.keys(config).forEach(key => delete config[key]);
+  definitions.value = [];
+  settingsLoaded.value = false;
+  void load();
+}, { flush: 'sync' });
 onBeforeUnmount(() => {
   requests.dispose();
   loadGeneration++;

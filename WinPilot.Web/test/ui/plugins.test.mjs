@@ -56,6 +56,43 @@ function fixture(page = 'PluginInfoView.vue') {
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
 
+test('safe mode clears modal configuration and cancels late configuration reads', async () => {
+  const f = fixture();
+  try {
+    f.subject.settingsConfig.value = { secret: 'private' };
+    f.subject.settingsOpen.value = true;
+    const loading = f.subject.loadSettings();
+    f.safeModeEnabled.value = true;
+    assert.equal(f.subject.settingsOpen.value, false);
+    assert.equal(Object.keys(f.subject.settingsConfig.value).length, 0);
+    for (const call of f.calls) call.resolve(response({ secret: 'late-private' }));
+    await assert.rejects(loading, { name: 'AbortError' });
+    assert.equal(Object.keys(f.subject.settingsConfig.value).length, 0);
+  } finally { f.dispose(); }
+});
+
+test('safe mode clears plugin home configuration and reloads without accepting late private values', async () => {
+  const f = fixture('PluginDetailView.vue');
+  try {
+    f.subject.config.secret = 'private';
+    const first = f.subject.load();
+    f.safeModeEnabled.value = true;
+    assert.equal(Object.keys(f.subject.config).length, 0);
+    f.calls[0].resolve(response({ id: 'first', enabled: false, state: 'Loaded', manifest: {} }));
+    await first;
+    f.calls[1].resolve(response({ id: 'first', enabled: false, state: 'Loaded', manifest: {} }));
+    await setImmediate();
+    for (const call of f.calls.slice(2)) call.resolve(response(
+      call.url.endsWith('/configuration') ? { plain: 'visible', secret: '••••' }
+        : call.url.endsWith('/configuration/schema') ? [{ name: 'secret', type: 'text', masked: true }]
+          : { registerOnHome: true }));
+    await setImmediate();
+    assert.equal(f.subject.config.secret, '••••');
+    assert.equal(f.subject.config.plain, 'visible');
+    assert.equal(f.subject.error.value, '');
+  } finally { f.dispose(); }
+});
+
 test('a cancelled readme availability check cannot hide the new page entry', async () => {
   const f = fixture();
   try {

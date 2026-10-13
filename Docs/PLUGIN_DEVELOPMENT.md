@@ -221,7 +221,7 @@ User/Plugin/ExamplePlugin/
 | `multi-checkbox` | 字符串数组 |
 | `collection` | 按 fixed 或 dynamic 模式存储 |
 
-普通字段使用 `name`、`type`、`label`、`description`、`default` 和 `required`。同一层的 `name` 不能重复，默认值必须匹配字段类型。`text` 可以声明 `masked: true`，只控制界面遮挡，不加密存储
+普通字段使用 `name`、`type`、`label`、`description`、`default` 和 `required`。同一层的 `name` 不能重复，默认值必须匹配字段类型。`text` 可以声明 `masked: true`，界面隐藏内容，安全模式下返回等长圆点，不返回默认值
 
 `number` 支持可选的 `min`、`max` 和 `step`，配置组内同样适用。`step` 为正数或 `"any"`，未设置则不限步长，以 `min` 或 0 为基准。默认值（未设置时为 0）须符合约束，保存时由宿主统一校验
 

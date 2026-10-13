@@ -37,7 +37,7 @@ public static class CommandBotEndpointRouteBuilderExtensions
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = bot.GetOptions();
-            return Results.Ok(settings);
+            return safeMode.Enabled ? Results.Ok(new { settings.Enabled }) : Results.Ok(settings);
         });
         endpoints.MapPut("/api/settings/notifications/command-bots/onebot", (OneBotCommandBotOptions options, HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
@@ -56,7 +56,7 @@ public static class CommandBotEndpointRouteBuilderExtensions
             {
                 context.Response.Headers.CacheControl = "no-store";
                 var settings = bot.GetSettings();
-                return Results.Ok(settings);
+                return safeMode.Enabled ? Results.Ok(new { settings.Enabled }) : Results.Ok(settings);
             });
             endpoints.MapPut(configurationRoute, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
                 ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)

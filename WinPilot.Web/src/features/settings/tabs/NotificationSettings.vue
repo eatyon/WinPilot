@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { createSettingsRequests } from '../SettingsRequests';
-import { apiFetch, isAbortError, userErrorMessage } from '../../../api/client';
+import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../../api/client';
 import { showToast } from '../../../ui/toast';
 import AppIcon from '../../../components/AppIcon.vue';
 import AppSelect from '../../../components/AppSelect.vue';
@@ -12,7 +12,7 @@ type NotificationSettings = Record<string, any>;
 type QQBotOpenIdTarget = 'user' | 'group';
 type QQBotOpenIdStatus = { text: string; tone: 'info' | 'success' | 'error' } | null;
 const requests = createSettingsRequests();
-const form = reactive<NotificationSettings>({
+const defaultSettings: NotificationSettings = {
   windowsEnabled: false,
   webhookEnabled: false,
   webhookUrl: '',
@@ -42,7 +42,10 @@ const form = reactive<NotificationSettings>({
   qqBotGroupOpenId: '',
   qqBotSendTarget: 'auto',
   qqBotMessageFormat: 'text',
-});
+};
+const form = reactive<NotificationSettings>({ ...defaultSettings });
+let readRequests = createSettingsRequests();
+let configurationGeneration = 0;
 const expanded = reactive<Record<string, boolean>>({
   windows: false,
   webhook: false,
@@ -88,7 +91,6 @@ const messageFormatOptions = [
 const connectionDirty = computed(() => botDialog.value
   ? botFields[botDialog.value].some((key) => form[key] !== savedSettings[key]) : false);
 const settingsLoaded = ref(false);
-watch(safeModeEnabled, (enabled) => { if (enabled) botDialog.value = undefined; });
 const channels = [
   { key: 'windows', title: 'Windows 通知', desc: '使用系统原生通知显示消息', enabled: 'windowsEnabled' },
   { key: 'webhook', title: 'Webhook', desc: 'Webhook 相关设置', enabled: 'webhookEnabled' },
@@ -98,27 +100,50 @@ const channels = [
   { key: 'onebot', title: 'OneBot', desc: 'OneBot 通知相关设置', enabled: 'oneBotEnabled' },
   { key: 'qqbot', title: 'QQBot', desc: 'QQ 官方 Bot 通知设置', enabled: 'qqBotEnabled' },
 ] as const;
-onMounted(async () => {
+async function loadSettings() {
+  const generation = ++configurationGeneration;
+  readRequests.dispose();
+  readRequests = createSettingsRequests();
+  const reads = readRequests;
+  loading.value = true;
+  settingsLoaded.value = botsLoaded.value = false;
+  error.value = '';
   try {
-    const response = await requests.fetch('/api/settings/notifications');
-    if (!response.ok) throw Error();
-    Object.assign(form, await requests.json(response));
+    const response = await reads.fetch('/api/settings/notifications');
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取通知设置', reads.json));
+    Object.assign(form, await reads.json(response));
     Object.assign(savedSettings, form);
     settingsLoaded.value = true;
-    const botsResponse = await requests.fetch('/api/settings/notifications/command-bots');
-    if (!botsResponse.ok) throw new Error('无法读取命令机器人开关');
-    Object.assign(botEnabled, await requests.json(botsResponse));
+    const botsResponse = await reads.fetch('/api/settings/notifications/command-bots');
+    if (!botsResponse.ok) throw new Error(await readApiError(botsResponse, '无法读取命令机器人开关', reads.json));
+    Object.assign(botEnabled, await reads.json(botsResponse));
     botsLoaded.value = true;
   } catch (cause) {
-    if (!requests.active || isAbortError(cause)) return;
+    if (!reads.active || isAbortError(cause)) return;
     error.value = userErrorMessage(cause, '无法读取通知设置');
   } finally {
-    loading.value = false;
+    if (generation === configurationGeneration) loading.value = false;
   }
-});
+}
+onMounted(loadSettings);
+watch(safeModeEnabled, (enabled) => {
+  for (const key of Object.keys(form))
+    if (!channels.some(channel => channel.enabled === key)) form[key] = defaultSettings[key];
+  Object.keys(savedSettings).forEach(key => delete savedSettings[key]);
+  Object.keys(passwordVisible).forEach(key => passwordVisible[key] = false);
+  qqbotOpenIdController?.abort();
+  qqbotOpenIdStatus.user = qqbotOpenIdStatus.group = null;
+  binding.value = '';
+  if (enabled) {
+    botDialog.value = undefined;
+    Object.keys(expanded).forEach(key => expanded[key] = false);
+  }
+  void loadSettings();
+}, { flush: 'sync' });
 async function save(channel: string, notify = true) {
   if (!settingsLoaded.value || saving.value || safeModeEnabled.value || !requests.active) return;
   saving.value = true;
+  const generation = configurationGeneration;
   const submitted = { ...form };
   try {
     const response = await requests.fetch(`/api/settings/notifications/${channel}`, {
@@ -126,8 +151,9 @@ async function save(channel: string, notify = true) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(submitted),
     });
+    if (!response.ok) throw new Error(await readApiError(response, '无法保存通知设置', requests.json));
     const result = await requests.json<NotificationSettings>(response);
-    if (!response.ok) throw Error(result.message || result.detail || '无法保存通知设置');
+    if (generation !== configurationGeneration) return;
     const prefix = channels.find(item => item.key === channel)?.enabled.replace(/Enabled$/, '');
     if (!prefix) throw new Error('通知渠道无效');
     for (const key of Object.keys(form)) {
@@ -138,6 +164,7 @@ async function save(channel: string, notify = true) {
     error.value = '';
     if (notify) showToast('通知设置已保存', 'success');
   } catch (cause) {
+    if (generation !== configurationGeneration) return;
     if (!requests.active || isAbortError(cause)) return;
     if (!notify) {
       const field = channels.find(item => item.key === channel)?.enabled;
@@ -161,8 +188,8 @@ async function test(channel: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '这是一条测试通知信息', content: '', channel }),
     });
+    if (!response.ok) throw new Error(await readApiError(response, '通知测试失败', requests.json));
     const results = await requests.json(response);
-    if (!response.ok) throw Error();
     if (!Array.isArray(results)) throw new Error('通知测试返回的数据无效');
     const failed = results.filter((item: { succeeded?: boolean }) => item.succeeded === false);
     if (failed.length > 0)
@@ -225,7 +252,7 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
       reader.releaseLock();
     }
   } catch (cause) {
-    if (!requests.active || isAbortError(cause)) return;
+    if (!requests.active || controller.signal.aborted || isAbortError(cause)) return;
     const message = userErrorMessage(cause, 'OpenID 获取失败');
     qqbotOpenIdStatus[target] = message ? { text: message, tone: 'error' } : null;
   } finally {
@@ -235,7 +262,7 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
     }
   }
 }
-onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
+onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdController?.abort(); });
 </script>
 <template>
   <div class="settings-tab-content notification-settings-content">

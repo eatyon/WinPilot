@@ -78,7 +78,11 @@ public sealed class TelegramCommandBotTest
         const string route = "/api/settings/notifications/command-bots/telegram";
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/telegram/status")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync(route + "/reconnect", null)).StatusCode);
+        using var safeConfiguration = await client.GetAsync(route);
+        using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/telegram/reconnect", null)).StatusCode);
         var reception = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         await fixture.Updates.Writer.WriteAsync(new[] { Update(10, 123, "/帮助") });
         Assert.True((await reception.WaitAsync(TimeSpan.FromSeconds(5))) > 0);

@@ -390,7 +390,11 @@ public sealed class QQBotCommandBotTest
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/qqbot/status")).StatusCode);
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync(route + "/reconnect", null)).StatusCode);
+        using var safeConfiguration = await client.GetAsync(route);
+        using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/qqbot/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
     }
 

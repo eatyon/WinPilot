@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using WinPilot.Features.Notifications;
 
@@ -18,7 +19,7 @@ public static class PluginSettingOptionSources
         _ => throw new InvalidOperationException($"不支持的配置选项来源：{source}")
     };
 
-    public static string WithSelectedOptions(string definitionJson, string? storageJson)
+    public static string WithSelectedOptions(string definitionJson, string? storageJson, JsonSerializerOptions? options = null)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray ?? throw new InvalidOperationException("settings.json 必须是数组");
         var storage = string.IsNullOrWhiteSpace(storageJson) ? null : JsonNode.Parse(storageJson) as JsonObject;
@@ -27,7 +28,7 @@ public static class PluginSettingOptionSources
             if (item["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name)) continue;
             HydrateField(item, [storage?[name]]);
         }
-        return definition.ToJsonString();
+        return definition.ToJsonString(options);
     }
 
     private static void HydrateField(JsonObject field, IEnumerable<JsonNode?> storedValues)

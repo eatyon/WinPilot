@@ -120,10 +120,13 @@ public static class PluginEndpointRouteBuilderExtensions
     {
         context.Response.Headers.CacheControl = "no-store";
         var storage = plugins.ReadStorage(id);
-        if (!readDefinition) return Results.Content(storage, "application/json");
+        var safeMode = context.RequestServices.GetRequiredService<WinPilot.Features.Security.SafeModeService>().Enabled;
+        if (!readDefinition && !safeMode) return Results.Content(storage, "application/json");
         var definition = plugins.ReadSettingsDefinition(id);
+        if (safeMode)
+            (definition, storage) = PluginConfigurationResponse.MaskSensitiveValues(definition, storage);
         return Results.Content(readDefinition
-            ? PluginSettingOptionSources.WithSelectedOptions(definition, storage) : storage, "application/json");
+            ? PluginSettingOptionSources.WithSelectedOptions(definition, storage, safeMode ? PluginConfigurationResponse.JsonOptions : null) : storage, "application/json");
     }
 
     private static IResult ServePluginAsset(HttpContext context, string id, string? path, PluginWebResourceService resources, string? version = null)

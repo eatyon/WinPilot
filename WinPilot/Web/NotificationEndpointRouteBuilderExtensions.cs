@@ -17,7 +17,10 @@ public static class NotificationEndpointRouteBuilderExtensions
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = WinPilotSettings.LoadAndInitialize(configurationFile).Notifications;
-            return Results.Ok(settings);
+            return safeMode.Enabled
+                ? Results.Ok(new { settings.WindowsEnabled, settings.WebhookEnabled, settings.TelegramEnabled,
+                    settings.WorkWeixinEnabled, settings.FeishuEnabled, settings.OneBotEnabled, settings.QQBotEnabled })
+                : Results.Ok(settings);
         });
         endpoints.MapPatch("/api/settings/notifications/{channel}", async (string channel, NotificationSettings settings, ILoggerFactory loggerFactory, CommandBotConfiguration bots, HttpContext context) =>
         {
