@@ -44,7 +44,7 @@ static Dictionary<string, string> ParseArguments(string[] values) => values.Chun
 static string GetRequired(IReadOnlyDictionary<string, string> values, string key) => values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : throw new ArgumentException($"缺少更新参数：{key}");
 static void StartCleanupHelper(string directory)
 {
-    using var process = Process.Start(new ProcessStartInfo("cmd.exe", $"/d /c ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"{directory}\"") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+    using var process = Process.Start(new ProcessStartInfo("cmd.exe", $"/d /c for /l %i in (1,1,10) do (ping 127.0.0.1 -n 2 > nul & rmdir /s /q \"{directory}\" > nul 2>&1 & if not exist \"{directory}\" exit /b)") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = Path.GetTempPath() });
 }
 
 static class NativeMethods

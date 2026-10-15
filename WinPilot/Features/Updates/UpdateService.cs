@@ -5,7 +5,7 @@ using WinPilot.Core;
 
 namespace WinPilot.Features.Updates;
 
-public sealed class UpdateService : IDisposable
+public sealed class UpdateService : IDisposable, IAsyncDisposable
 {
     private readonly HttpClient httpClient;
     private readonly UpdateReleaseCatalog releases;
@@ -20,11 +20,25 @@ public sealed class UpdateService : IDisposable
     private UpdateInstallStatus installStatus = new("Idle", 0, null, "");
     private int installRunning;
     private readonly ILogger<UpdateService> logger;
+    private readonly CancellationTokenSource stoppingCancellation = new();
+    private readonly CancellationTokenRegistration stoppingRegistration;
+    private readonly string applicationDirectory;
+    private readonly string temporaryDirectory;
+    private readonly Func<ProcessStartInfo, Process?> startUpdater;
+    private readonly Action requestExit;
+    private Task<bool>? installation;
+    private Task cancellation = Task.CompletedTask;
+    private Task? disposal;
+    private bool stopping;
+    private bool launchCommitted;
+    private bool handedOff;
 
-    public UpdateService(ILogger<UpdateService> logger, PortableDataPaths paths)
-        : this(logger, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, paths.ConfigurationFile) { }
+    public UpdateService(ILogger<UpdateService> logger, PortableDataPaths paths, IHostApplicationLifetime? lifetime = null)
+        : this(logger, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, paths.ConfigurationFile, lifetime: lifetime) { }
 
-    internal UpdateService(ILogger<UpdateService> logger, HttpClient httpClient, string? configurationFile = null, string? currentVersion = null)
+    internal UpdateService(ILogger<UpdateService> logger, HttpClient httpClient, string? configurationFile = null, string? currentVersion = null,
+        IHostApplicationLifetime? lifetime = null, string? applicationDirectory = null, string? temporaryDirectory = null,
+        Func<ProcessStartInfo, Process?>? startUpdater = null, Action? requestExit = null)
     {
         this.logger = logger;
         this.httpClient = httpClient;
@@ -35,6 +49,11 @@ public sealed class UpdateService : IDisposable
         this.currentVersion = parsed;
         releases = new(httpClient);
         httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("WinPilot", WinPilotVersion.DisplayVersion));
+        this.applicationDirectory = applicationDirectory ?? AppContext.BaseDirectory;
+        this.temporaryDirectory = temporaryDirectory ?? Path.GetTempPath();
+        this.startUpdater = startUpdater ?? Process.Start;
+        this.requestExit = requestExit ?? System.Windows.Forms.Application.Exit;
+        stoppingRegistration = lifetime?.ApplicationStopping.Register(RequestStop) ?? default;
     }
 
     public UpdateSettings GetSettings() => Volatile.Read(ref settings);
@@ -102,46 +121,69 @@ public sealed class UpdateService : IDisposable
             if (lastResult is not { UpdateAvailable: true, CheckFailed: false } result || lastRelease is not { } release
                 || target.Version != result.LatestVersion || target.Source != result.Source || target.Channel != result.Channel)
                 throw new InvalidOperationException("更新信息已变化，请重新检查更新");
-            Interlocked.Exchange(ref installRunning, 1);
-            SetInstallStatus("Preparing", 0, null, "正在准备更新…");
-            _ = Task.Run(() => DownloadAndLaunchAsync(parentProcessId, result, release));
+            Task<bool> pending;
+            lock (installStatusGate)
+            {
+                if (stopping) throw new InvalidOperationException("程序正在停止，无法开始更新");
+                Interlocked.Exchange(ref installRunning, 1);
+                SetInstallStatus("Preparing", 0, null, "正在准备更新…");
+                installation = pending = Task.Run(() => DownloadAndLaunchAsync(parentProcessId, result, release));
+            }
+            _ = RequestExitAfterInstallationAsync(pending);
             return true;
         }
         finally { gate.Release(); }
     }
 
-    private async Task DownloadAndLaunchAsync(int parentProcessId, UpdateCheckResult result, UpdateRelease release)
+    private async Task<bool> DownloadAndLaunchAsync(int parentProcessId, UpdateCheckResult result, UpdateRelease release)
     {
         string? updateDirectory = null;
+        var updaterStarted = false;
+        string? finalState = null;
         try
         {
+            var token = stoppingCancellation.Token;
+            token.ThrowIfCancellationRequested();
             logger.LogInformation("开始更新，目标版本：{Version}，更新源：{Source}", result.LatestVersion, SourceName(result.Source));
             logger.LogDebug("开始准备更新，主程序进程 ID：{ParentProcessId}", parentProcessId);
             if (!release.CanInstall) throw new InvalidOperationException("此版本暂不支持在线更新，请前往版本发布页面手动下载");
-            var updaterPath = Path.Combine(AppContext.BaseDirectory, "WinPilot.Updater.exe");
+            var updaterPath = Path.Combine(applicationDirectory, "WinPilot.Updater.exe");
             if (!File.Exists(updaterPath)) throw new InvalidOperationException("当前安装缺少更新器，请手动下载最新版本");
 
             var package = release.Package!;
             var packageHash = package.Sha256!;
             var packageUrl = UpdateReleaseCatalog.CreateDownloadUri(result.Source, package.Url);
-            updateDirectory = Path.Combine(Path.GetTempPath(), $"WinPilot-update-{Guid.NewGuid():N}");
+            updateDirectory = Path.Combine(temporaryDirectory, $"WinPilot-update-{Guid.NewGuid():N}");
             Directory.CreateDirectory(updateDirectory);
             var packagePath = Path.Combine(updateDirectory, "package.zip");
             logger.LogDebug("开始下载更新包，版本：{Version}，文件：{Package}，更新源：{Source}", result.LatestVersion, package.Name, SourceName(result.Source));
-            await DownloadFileAsync(packageUrl, packagePath, (downloaded, total) => SetInstallStatus("Downloading", downloaded, total, "正在下载更新…"), CancellationToken.None);
+            await DownloadFileAsync(packageUrl, packagePath, (downloaded, total) => SetInstallStatus("Downloading", downloaded, total, "正在下载更新…"), token);
             logger.LogDebug("更新包下载完成，版本：{Version}，文件大小：{Bytes} 字节", result.LatestVersion, new FileInfo(packagePath).Length);
             SetInstallStatus("Verifying", 0, null, "正在校验更新包…");
-            if (!string.Equals(await ComputeSha256Async(packagePath, CancellationToken.None), packageHash, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("更新包校验失败");
+            if (!string.Equals(await ComputeSha256Async(packagePath, token), packageHash, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("更新包校验失败");
             logger.LogDebug("更新包 SHA-256 校验通过，版本：{Version}", result.LatestVersion);
             var temporaryUpdaterPath = Path.Combine(updateDirectory, "WinPilot.Updater.exe");
             File.Copy(updaterPath, temporaryUpdaterPath, true);
-            var arguments = $"--parent-pid {parentProcessId} --package-path \"{packagePath}\" --package-sha256 {packageHash} --target-dir \"{AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)}\" --cleanup-dir \"{updateDirectory}\"";
-            using var updaterProcess = Process.Start(new ProcessStartInfo(temporaryUpdaterPath, arguments) { UseShellExecute = true, Verb = "runas", WorkingDirectory = updateDirectory });
+            var arguments = $"--parent-pid {parentProcessId} --package-path \"{packagePath}\" --package-sha256 {packageHash} --target-dir \"{applicationDirectory.TrimEnd(Path.DirectorySeparatorChar)}\" --cleanup-dir \"{updateDirectory}\"";
+            lock (installStatusGate)
+            {
+                if (stopping) throw new OperationCanceledException(token);
+                token.ThrowIfCancellationRequested();
+                launchCommitted = true;
+            }
+            using var updaterProcess = startUpdater(new ProcessStartInfo(temporaryUpdaterPath, arguments) { UseShellExecute = true, Verb = "runas", WorkingDirectory = updateDirectory });
             if (updaterProcess is null) throw new InvalidOperationException("无法启动更新器");
+            updaterStarted = true;
+            lock (installStatusGate) handedOff = true;
             logger.LogDebug("更新器已启动，目标版本：{Version}，更新器进程 ID：{UpdaterProcessId}", result.LatestVersion, updaterProcess.Id);
             SetInstallStatus("Restarting", 0, null, "更新器已启动，WinPilot 即将重启…");
-            await Task.Delay(500);
-            System.Windows.Forms.Application.Exit();
+            return true;
+        }
+        catch (OperationCanceledException) when (stoppingCancellation.IsCancellationRequested)
+        {
+            finalState = "Idle";
+            logger.LogDebug("程序停止，更新准备已取消");
+            return false;
         }
         catch (Exception exception)
         {
@@ -153,14 +195,62 @@ public sealed class UpdateService : IDisposable
                 "Restarting" => "等待主程序退出",
                 var state => state
             });
-            if (!string.IsNullOrWhiteSpace(updateDirectory))
+            finalState = "Failed";
+            return false;
+        }
+        finally
+        {
+            if (!updaterStarted && updateDirectory is not null)
             {
                 try { Directory.Delete(updateDirectory, true); }
                 catch (Exception cleanupException) { logger.LogWarning(cleanupException, "清理更新临时目录失败"); }
             }
-            SetInstallStatus("Failed", 0, null, "更新失败，请重试或前往版本发布页面手动下载");
-            Interlocked.Exchange(ref installRunning, 0);
+            lock (installStatusGate)
+            {
+                if (!updaterStarted)
+                {
+                    launchCommitted = false;
+                    Interlocked.Exchange(ref installRunning, 0);
+                }
+                if (finalState is not null) SetInstallStatus(finalState, 0, null,
+                    finalState == "Failed" ? "更新失败，请重试或前往版本发布页面手动下载" : "");
+            }
         }
+    }
+
+    private async Task RequestExitAfterInstallationAsync(Task<bool> pending)
+    {
+        if (!await pending.ConfigureAwait(false)) return;
+        await Task.Delay(500).ConfigureAwait(false);
+        lock (installStatusGate) if (stopping) return;
+        try { requestExit(); }
+        catch (Exception exception) { logger.LogError(exception, "更新器已启动，请求程序退出失败"); }
+    }
+
+    private void RequestStop()
+    {
+        lock (installStatusGate)
+        {
+            if (stopping) return;
+            stopping = true;
+            if (!launchCommitted && !handedOff) cancellation = CancelPreparationAsync();
+        }
+    }
+
+    private async Task CancelPreparationAsync()
+    {
+        try { await stoppingCancellation.CancelAsync().ConfigureAwait(false); }
+        catch (AggregateException exception) { logger.LogWarning(exception, "停止更新准备时，取消回调失败"); }
+    }
+
+    internal async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        RequestStop();
+        Task cancelled;
+        Task pending;
+        lock (installStatusGate) { cancelled = cancellation; pending = installation ?? Task.CompletedTask; }
+        await cancelled.ConfigureAwait(false);
+        await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal async Task DownloadFileAsync(Uri url, string destination, Action<long, long?> progress, CancellationToken cancellationToken, TimeSpan? idleTimeout = null)
@@ -203,7 +293,34 @@ public sealed class UpdateService : IDisposable
     private static string SourceName(UpdateSource source) => source == UpdateSource.Cnb ? "CNB" : "GitHub";
     private static string ChannelName(UpdateChannel channel) => channel == UpdateChannel.Preview ? "测试版（含正式版）" : "正式版";
 
-    public void Dispose() { httpClient.Dispose(); gate.Dispose(); }
+    public void Dispose() => GetDisposalTask().GetAwaiter().GetResult();
+    public ValueTask DisposeAsync() => new(GetDisposalTask());
+    private Task GetDisposalTask()
+    {
+        TaskCompletionSource completion;
+        lock (installStatusGate)
+        {
+            if (disposal is not null) return disposal;
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            disposal = completion.Task;
+        }
+        _ = CompleteDisposalAsync(completion);
+        return completion.Task;
+    }
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try { await DisposeCoreAsync().ConfigureAwait(false); completion.TrySetResult(); }
+        catch (OperationCanceledException exception) { completion.TrySetCanceled(exception.CancellationToken); }
+        catch (Exception exception) { completion.TrySetException(exception); }
+    }
+    private async Task DisposeCoreAsync()
+    {
+        await StopAsync().ConfigureAwait(false);
+        stoppingRegistration.Dispose();
+        stoppingCancellation.Dispose();
+        httpClient.Dispose();
+        gate.Dispose();
+    }
 }
 
 public sealed record UpdateCheckResult(string CurrentVersion, string? LatestVersion, bool UpdateAvailable, string? ReleaseUrl, bool CanInstall, bool CheckFailed, UpdateSource Source, UpdateChannel Channel, string ReleaseNotes);
