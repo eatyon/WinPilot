@@ -1,15 +1,14 @@
-using WinPilot.Windows;
 using System.Text;
 
 namespace WinPilot.Features.Terminal;
 
 internal sealed class TerminalSession : IAsyncDisposable
 {
-    private readonly ConPtyTerminalProcess process;
+    private readonly ITerminalProcess process;
     private readonly Func<TerminalEvent, Task> publish;
     private readonly Func<TerminalSession, Task> remove;
     private readonly ILogger logger;
-    private readonly CancellationTokenSource cancellation = new();
+    private readonly CancellationTokenSource cancellation;
     private readonly StreamWriter input;
     private Task? outputTask;
     private Task? watchTask;
@@ -20,7 +19,7 @@ internal sealed class TerminalSession : IAsyncDisposable
 
     public Guid ConnectionId { get; }
 
-    public TerminalSession(Guid id, Guid connectionId, ConPtyTerminalProcess process, Func<TerminalEvent, Task> publish, Func<TerminalSession, Task> remove, ILogger logger)
+    internal TerminalSession(Guid id, Guid connectionId, ITerminalProcess process, Func<TerminalEvent, Task> publish, Func<TerminalSession, Task> remove, ILogger logger, CancellationTokenSource? cancellation = null)
     {
         Id = id;
         ConnectionId = connectionId;
@@ -28,6 +27,7 @@ internal sealed class TerminalSession : IAsyncDisposable
         this.publish = publish;
         this.remove = remove;
         this.logger = logger;
+        this.cancellation = cancellation ?? new();
         input = new StreamWriter(process.Input, new UTF8Encoding(false))
         {
             AutoFlush = true

@@ -9,20 +9,26 @@ public sealed class AuthenticationMiddleware(RequestDelegate next)
         var path = context.Request.Path;
         if (path == "/health") { await next(context); return; }
         var configured = auth.IsConfigured;
-        if (securityEvents.ObserveAuthConfiguration(configured))
+        Action? completeProtection = null;
+        if (securityEvents.ObserveAuthConfiguration(configured, () => completeProtection = safeMode.EnableForAuthenticationFailure()))
         {
-            sessions.RevokeAll();
             try
             {
-                var wasEnabled = safeMode.Enabled;
-                if (!wasEnabled) safeMode.SetEnabled(true);
-                logger.LogWarning(wasEnabled
+                try { sessions.RevokeAll(); }
+                finally { completeProtection?.Invoke(); }
+                logger.LogWarning(completeProtection is null
                     ? "密码配置缺失或损坏，安全模式保持开启；可通过本机托盘手动关闭"
                     : "密码配置缺失或损坏，已自动开启安全模式；可通过本机托盘手动关闭");
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception exception)
             {
-                logger.LogError(exception, "密码配置缺失或损坏，自动开启安全模式失败");
+                logger.LogError(exception, exception is IOException or UnauthorizedAccessException
+                    || exception is AggregateException aggregate && aggregate.Flatten().InnerExceptions.All(error => error is IOException or UnauthorizedAccessException)
+                    ? "密码配置缺失或损坏，安全模式已开启，但配置保存失败"
+                    : "密码配置缺失或损坏，安全模式已开启，但保护收尾失败");
+                await Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "安全保护未能完成", detail: "安全模式已开启，请通过本机检查配置和程序日志").ExecuteAsync(context);
+                return;
             }
         }
         if (!configured)
@@ -42,7 +48,7 @@ public sealed class AuthenticationMiddleware(RequestDelegate next)
             finally { context.RequestAborted = originalCancellation; }
             return;
         }
-        if (path.StartsWithSegments("/plugin-assets"))
+        if (path.StartsWithSegments("/api") || path.StartsWithSegments("/plugin-assets"))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;

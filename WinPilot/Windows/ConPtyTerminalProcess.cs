@@ -1,3 +1,4 @@
+using WinPilot.Features.Terminal;
 using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -5,7 +6,7 @@ using System.Text;
 
 namespace WinPilot.Windows;
 
-internal sealed class ConPtyTerminalProcess : IAsyncDisposable
+internal sealed class ConPtyTerminalProcess : ITerminalProcess
 {
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
@@ -13,6 +14,8 @@ internal sealed class ConPtyTerminalProcess : IAsyncDisposable
     private const uint HandleFlagInherit = 0x00000001;
     public FileStream Input { get; }
     public FileStream Output { get; }
+    Stream ITerminalProcess.Input => Input;
+    Stream ITerminalProcess.Output => Output;
     private readonly SafeFileHandle processHandle;
     private IntPtr pseudoConsole;
 

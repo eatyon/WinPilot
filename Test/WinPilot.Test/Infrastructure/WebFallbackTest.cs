@@ -251,6 +251,12 @@ public sealed class WebFallbackTest : IAsyncLifetime
     [InlineData("/api/single", "POST", "application/json")]
     [InlineData("/api/unknown", "GET", "application/json")]
     [InlineData("/api/unknown", "POST", "application/json")]
+    [InlineData("/api/single", "GET", "text/html")]
+    [InlineData("/api/single", "POST", "text/html")]
+    [InlineData("/api/unknown", "GET", "text/html")]
+    [InlineData("/api/unknown", "POST", "text/html")]
+    [InlineData("/api/single", "GET", "text/html,application/xhtml+xml,*/*;q=0.8")]
+    [InlineData("/api/unknown", "HEAD", "text/html,application/xhtml+xml,*/*;q=0.8")]
     public async Task AuthenticationRejectionRemains401BeforeFallback(string path, string method, string accept)
     {
         client.DefaultRequestHeaders.Remove("Cookie");

@@ -13,12 +13,15 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
     private bool? authConfigured;
     private readonly object authStateGate = new();
 
-    public bool ObserveAuthConfiguration(bool configured)
+    public bool ObserveAuthConfiguration(bool configured) => ObserveAuthConfiguration(configured, null);
+
+    internal bool ObserveAuthConfiguration(bool configured, Action? protect)
     {
         var invalidated = false;
         lock (authStateGate)
         {
             invalidated = authConfigured is true && !configured;
+            if (invalidated) protect?.Invoke();
             authConfigured = configured;
         }
         if (invalidated) Record(SecurityEventType.AuthConfigurationInvalid);

@@ -110,11 +110,10 @@ public sealed record WinPilotSettings
             ?? throw new InvalidOperationException("配置文件路径必须包含目录");
         Directory.CreateDirectory(directory);
         var temporaryFile = configurationFile + ".tmp";
-        try
+        FileOperationRecovery.WithCleanup(() =>
         {
             File.WriteAllText(temporaryFile, configuration.ToJsonString(JsonOptions));
             File.Move(temporaryFile, configurationFile, overwrite: true);
-        }
-        finally { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); }
+        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
     }
 }

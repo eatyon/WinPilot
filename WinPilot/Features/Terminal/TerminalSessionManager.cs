@@ -1,5 +1,5 @@
-using WinPilot.Windows;
 using System.Collections.Concurrent;
+using WinPilot.Windows;
 
 namespace WinPilot.Features.Terminal;
 
@@ -91,9 +91,17 @@ public sealed class TerminalSessionManager : IAsyncDisposable
             await session.CloseAsync();
     }
 
-    public async Task CloseAllAsync()
+    public Task CloseAllAsync() => CloseSessionsAsync(sessions.Values.ToArray());
+
+    internal Func<Task> CaptureCloseOperation()
     {
-        foreach (var session in sessions.Values.ToArray())
+        var targets = sessions.Values.ToArray();
+        return () => CloseSessionsAsync(targets);
+    }
+
+    private static async Task CloseSessionsAsync(TerminalSession[] targets)
+    {
+        foreach (var session in targets)
             await session.CloseAsync();
     }
 

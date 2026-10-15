@@ -164,4 +164,25 @@ public sealed class ConfigurationUpdateTest : IDisposable
     }
 
     public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+
+    [Fact]
+    public void LockedTemporaryFileReportsSaveAndCleanupFailuresWithoutChangingConfiguration()
+    {
+        WinPilotSettings.LoadAndInitialize(FilePath);
+        var original = File.ReadAllText(FilePath);
+        var temporary = FilePath + ".tmp";
+        File.WriteAllText(temporary, "temporary");
+        using (var locked = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var error = Assert.Throws<AggregateException>(() => WinPilotSettings.Update(FilePath, current => current with { Port = 9124 }));
+            Assert.Equal(2, error.InnerExceptions.Count);
+            Assert.All(error.InnerExceptions, exception => Assert.IsAssignableFrom<IOException>(exception));
+            Assert.Equal(original, File.ReadAllText(FilePath));
+            Assert.Equal("temporary", File.ReadAllText(temporary));
+        }
+        File.Delete(temporary);
+        WinPilotSettings.Update(FilePath, current => current with { Port = 9124 });
+        Assert.False(File.Exists(temporary));
+        Assert.Equal(9124, WinPilotSettings.LoadAndInitialize(FilePath).Port);
+    }
 }

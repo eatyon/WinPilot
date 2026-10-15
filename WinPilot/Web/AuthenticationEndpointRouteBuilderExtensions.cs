@@ -13,16 +13,18 @@ public static class AuthenticationEndpointRouteBuilderExtensions
             var source = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             var loopback = context.Connection.RemoteIpAddress is { } address && System.Net.IPAddress.IsLoopback(address);
             if (limiter.IsLocked(source)) return Results.StatusCode(StatusCodes.Status429TooManyRequests);
-            if (!auth.Verify(request.Password))
+            if (!auth.Verify(request.Password, out var authenticationVersion))
             {
                 securityEvents.Record(SecurityEventType.LoginFailed, source, loopback, success: false);
                 if (limiter.Failure(source)) securityEvents.Record(SecurityEventType.LoginSourceLocked, source, loopback, success: false, lockoutDuration: TimeSpan.FromMinutes(5));
                 return Results.Unauthorized();
             }
+            var session = sessions.Create(auth, authenticationVersion);
+            if (session is null) return Results.Unauthorized();
             limiter.Success(source);
             if (facade.IsEnabled()) facade.ConsumeManagementEntry(context);
             securityEvents.Record(SecurityEventType.LoginSucceeded, source, loopback, success: true, allowNotification: !loopback);
-            context.Response.Cookies.Append("WinPilot.Session", sessions.Create(), new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = context.Request.IsHttps, Path = "/", MaxAge = TimeSpan.FromMinutes(30) });
+            context.Response.Cookies.Append("WinPilot.Session", session, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = context.Request.IsHttps, Path = "/", MaxAge = TimeSpan.FromMinutes(30) });
             return Results.NoContent();
         });
         endpoints.MapPost("/_manage", (HttpContext context, AuthStore auth, WebFacadeService facade) =>
@@ -30,7 +32,7 @@ public static class AuthenticationEndpointRouteBuilderExtensions
             if (!auth.IsConfigured || !facade.IsEnabled() || !facade.GrantManagementEntry(context)) return Results.NotFound();
             return Results.NoContent();
         });
-        endpoints.MapPut("/api/settings/security/password", (PasswordChangeRequest request, AuthStore auth, SessionManager sessions, SecurityEventNotifier securityEvents) =>
+        endpoints.MapPut("/api/settings/security/password", (PasswordChangeRequest request, AuthStore auth, SessionManager sessions, SecurityEventNotifier securityEvents, ILoggerFactory loggerFactory) =>
         {
             try
             {
@@ -45,10 +47,15 @@ public static class AuthenticationEndpointRouteBuilderExtensions
                 return Results.NoContent();
             }
             catch (InvalidOperationException exception) { return Results.ValidationProblem(new Dictionary<string, string[]> { ["password"] = [exception.Message] }); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                loggerFactory.CreateLogger("WinPilot.Security").LogError(exception, "密码保存失败");
+                return Results.Problem(statusCode: 500, title: "密码保存失败", detail: "无法保存密码，请检查数据目录权限");
+            }
         });
         endpoints.MapGet("/api/settings/security/password", (AuthStore auth) => Results.Ok(new { configured = auth.IsConfigured }));
         endpoints.MapGet("/api/settings/security/notifications", (WinPilot.Core.PortableDataPaths paths) => Results.Ok(WinPilot.Core.WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).SecurityNotifications));
-        endpoints.MapPut("/api/settings/security/notifications", (WinPilot.Core.SecurityNotificationSettings settings, WinPilot.Core.PortableDataPaths paths, SecurityEventNotifier securityEvents) =>
+        endpoints.MapPut("/api/settings/security/notifications", (WinPilot.Core.SecurityNotificationSettings settings, WinPilot.Core.PortableDataPaths paths, SecurityEventNotifier securityEvents, ILoggerFactory loggerFactory) =>
         {
             try
             {
@@ -63,6 +70,11 @@ public static class AuthenticationEndpointRouteBuilderExtensions
                 return Results.Ok(settings);
             }
             catch (InvalidOperationException exception) { return Results.ValidationProblem(new Dictionary<string, string[]> { ["notifications"] = [exception.Message] }); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                loggerFactory.CreateLogger("WinPilot.Security").LogError(exception, "安全通知设置保存失败");
+                return Results.Problem(statusCode: 500, title: "安全通知设置保存失败", detail: "无法保存安全通知设置，请检查数据目录权限");
+            }
         });
         return endpoints;
     }

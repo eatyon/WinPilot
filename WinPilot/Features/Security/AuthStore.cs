@@ -16,6 +16,13 @@ public sealed class AuthStore(PortableDataPaths paths)
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
     private readonly object gate = new();
+    private long authenticationVersion;
+    private readonly Action<string> applyAcl = ApplyAcl;
+
+    internal AuthStore(PortableDataPaths paths, Action<string> applyAcl) : this(paths)
+    {
+        this.applyAcl = applyAcl ?? throw new ArgumentNullException(nameof(applyAcl));
+    }
 
     public bool IsConfigured => HasValidRecord(paths.AuthenticationFile);
 
@@ -25,9 +32,7 @@ public sealed class AuthStore(PortableDataPaths paths)
         {
             if (!File.Exists(path)) return false;
             var record = JsonSerializer.Deserialize<AuthRecord>(File.ReadAllText(path), SerializationOptions);
-            return record is not null
-                   && Convert.FromBase64String(record.Salt).Length == 32
-                   && Convert.FromBase64String(record.Hash).Length == 32;
+            return IsValidRecord(record);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or FormatException)
         {
@@ -44,11 +49,16 @@ public sealed class AuthStore(PortableDataPaths paths)
         }
     }
 
-    public bool Verify(string password)
+    public bool Verify(string password) => Verify(password, out _);
+
+    internal bool IsCurrentVersion(long version) => Volatile.Read(ref authenticationVersion) == version;
+
+    internal bool Verify(string password, out long version)
     {
+        version = 0;
         if (!IsValidPasswordInput(password)) return false;
         AuthRecord record;
-        lock (gate) { record = Read(); }
+        lock (gate) { record = Read(); version = authenticationVersion; }
         var salt = Convert.FromBase64String(record.Salt);
         var expected = Convert.FromBase64String(record.Hash);
         var actual = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA512, expected.Length);
@@ -98,12 +108,14 @@ public sealed class AuthStore(PortableDataPaths paths)
         try
         {
             File.WriteAllText(temporary, JsonSerializer.Serialize(record, SerializationOptions));
-            try { ApplyAcl(temporary); }
+            try { applyAcl(temporary); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception exception)
             {
-                throw new InvalidOperationException("无法为认证配置文件设置安全访问权限", exception);
+                throw new IOException("无法为认证配置文件设置安全访问权限", exception);
             }
             File.Move(temporary, paths.AuthenticationFile, true);
+            Interlocked.Increment(ref authenticationVersion);
         }
         finally
         {
@@ -126,8 +138,13 @@ public sealed class AuthStore(PortableDataPaths paths)
         new FileInfo(path).SetAccessControl(security);
     }
 
-    private static bool IsValidRecord(AuthRecord record) => Convert.FromBase64String(record.Salt).Length == 32
-        && Convert.FromBase64String(record.Hash).Length == 32;
+    private static bool IsValidRecord(AuthRecord? record)
+    {
+        if (record is null || string.IsNullOrWhiteSpace(record.Salt) || string.IsNullOrWhiteSpace(record.Hash)) return false;
+        Span<byte> decoded = stackalloc byte[32];
+        return Convert.TryFromBase64String(record.Salt, decoded, out var saltLength) && saltLength == 32
+            && Convert.TryFromBase64String(record.Hash, decoded, out var hashLength) && hashLength == 32;
+    }
 
     private sealed record AuthRecord(string Salt, string Hash);
 }
