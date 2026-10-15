@@ -36,11 +36,12 @@ async function load(scan = false) {
   scanning.value = scan;
   error.value = '';
   try {
-    const response = await requests.fetch(scan ? '/api/plugins/scan' : '/api/plugins', {
+    const loaded = await requests.run<PluginInfo[]>(scan ? '/api/plugins/scan' : '/api/plugins', {
       method: scan ? 'POST' : 'GET',
+    }, async response => {
+      if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试'));
+      return response.json();
     });
-    if (!response.ok) throw new Error(await readApiError(response, '操作失败，请稍后重试', requests.json));
-    const loaded = (await requests.json(response)) as PluginInfo[];
     if (generation === loadGeneration) {
       plugins.value = loaded;
       hasLoaded.value = true;
@@ -64,12 +65,14 @@ async function toggle(plugin: PluginInfo) {
   const failureMessage = plugin.enabled ? '插件禁用失败' : '插件启用失败';
   changingIds.value.add(plugin.id);
   try {
-    const response = await requests.fetch(
+    const updated = await requests.run<PluginInfo>(
       `/api/plugins/${encodeURIComponent(plugin.id)}/${plugin.enabled ? 'disable' : 'enable'}`,
       { method: 'POST' },
+      response => {
+        if (!response.ok) throw new Error(failureMessage);
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error(failureMessage);
-    const updated = (await requests.json(response)) as PluginInfo;
     if (!requests.active) return;
     plugins.value = plugins.value.map((item) => (item.id === updated.id ? updated : item));
     if (updated.state === 'Failed' || updated.state === 'Invalid')

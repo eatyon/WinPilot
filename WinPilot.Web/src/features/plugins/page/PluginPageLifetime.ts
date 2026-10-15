@@ -21,20 +21,4 @@ export function createPluginPageLifetime(reportError: (error: unknown) => void) 
   };
 }
 
-export function combinePageSignal(page: AbortSignal, request?: AbortSignal) {
-  if (!request || request === page) return { signal: page, dispose: () => {} };
-  const controller = new AbortController();
-  const pageAborted = () => controller.abort(page.reason);
-  const requestAborted = () => controller.abort(request.reason);
-  page.addEventListener('abort', pageAborted, { once: true });
-  request.addEventListener('abort', requestAborted, { once: true });
-  if (page.aborted) pageAborted();
-  else if (request.aborted) requestAborted();
-  return {
-    signal: controller.signal,
-    dispose() {
-      page.removeEventListener('abort', pageAborted);
-      request.removeEventListener('abort', requestAborted);
-    },
-  };
-}
+export { combineRequestSignal as combinePageSignal } from '../../../api/requestSignal.ts';

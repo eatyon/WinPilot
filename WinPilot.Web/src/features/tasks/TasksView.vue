@@ -6,7 +6,8 @@ import AppSelect from '../../components/AppSelect.vue';
 import AppMultiSelect from '../../components/AppMultiSelect.vue';
 import KeyboardKeyPicker from '../desktop/KeyboardKeyPicker.vue';
 import CronEditor from './CronEditor.vue';
-import { readApiError, apiFetch, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { executeRequest } from '../../api/requestExecutor';
 import { showToast } from '../../ui/toast';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
 type Trigger = {
@@ -110,12 +111,12 @@ let variableHelpController: AbortController | undefined;
 const requestControllers = new Set<AbortController>();
 const pendingOperations = shallowReactive(new Map<string, AbortController>());
 
-async function fetchPageResource(url: string, init?: RequestInit): Promise<Response> {
+async function runPageRequest<T>(url: string, init: RequestInit, handleResponse: (response: Response) => T | Promise<T>): Promise<T> {
   const controller = new AbortController();
   if (!isPageActive) controller.abort();
   requestControllers.add(controller);
   try {
-    return await apiFetch(url, { ...init, signal: controller.signal });
+    return await executeRequest(url, init, controller, handleResponse);
   } finally {
     requestControllers.delete(controller);
   }
@@ -126,8 +127,9 @@ async function performOperation(key: string, url: string, init: RequestInit, suc
   const controller = new AbortController();
   pendingOperations.set(key, controller);
   try {
-    const response = await apiFetch(url, { ...init, signal: controller.signal });
-    if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
+    await runPageRequest(url, { ...init, signal: controller.signal }, async response => {
+      if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
+    });
     if (isPageActive && !controller.signal.aborted) await success();
   } catch (cause) {
     if (isPageActive && !controller.signal.aborted && !isAbortError(cause)) {
@@ -198,11 +200,14 @@ function fetchActionOptions(pluginId: string, actionId: string, parameterKey: st
   const pending = pendingActionOptions.get(key);
   if (pending) return pending;
   const request = (async () => {
-    const response = await fetchPageResource(
+    const options = await runPageRequest<unknown>(
       `/api/tasks/extensions/actions/${encodeURIComponent(pluginId)}/${encodeURIComponent(actionId)}/options/${encodeURIComponent(parameterKey)}`,
+      {},
+      response => {
+        if (!response.ok) throw new Error('读取动作配置失败');
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error('读取动作配置失败');
-    const options = (await response.json()) as unknown;
     if (
       !Array.isArray(options) ||
       !options.every(
@@ -216,7 +221,9 @@ function fetchActionOptions(pluginId: string, actionId: string, parameterKey: st
     )
       throw new Error('动作配置数据无效');
     return options as ActionOption[];
-  })().finally(() => pendingActionOptions.delete(key));
+  })().finally(() => {
+    if (pendingActionOptions.get(key) === request) pendingActionOptions.delete(key);
+  });
   pendingActionOptions.set(key, request);
   return request;
 }
@@ -457,11 +464,10 @@ async function loadTasks() {
   loadController = controller;
   try {
     const urls = ['/api/tasks', '/api/programs/tags', '/api/tasks/extensions/triggers', '/api/tasks/extensions/actions', '/api/notifications/channels'];
-    const values = await Promise.all(urls.map(async url => {
-      const response = await apiFetch(url, { signal: controller.signal });
+    const values = await Promise.all(urls.map(url => runPageRequest(url, { signal: controller.signal }, async response => {
       if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
       return response.json();
-    }));
+    })));
     if (!isPageActive || loadController !== controller || controller.signal.aborted) return;
     [tasks.value, tags.value, registeredTriggers.value, registeredActions.value, channelOptions.value] = values;
     tasksLoaded.value = true;
@@ -660,9 +666,10 @@ async function openVariableHelp() {
   variableHelpLoading.value = true;
   variableHelpError.value = '';
   try {
-    const response = await apiFetch('/api/tasks/variables', { signal: controller.signal });
-    if (!response.ok) throw new Error('无法读取变量');
-    const variables = await response.json();
+    const variables = await runPageRequest('/api/tasks/variables', { signal: controller.signal }, response => {
+      if (!response.ok) throw new Error('无法读取变量');
+      return response.json();
+    });
     if (isPageActive && variableHelpOpen.value && variableHelpController === controller && !controller.signal.aborted)
       registeredVariables.value = variables;
   } catch (cause) {

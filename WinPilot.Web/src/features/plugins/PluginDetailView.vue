@@ -84,34 +84,34 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}?waitForLifecycle=true`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('无法加载插件');
-    const current = await requests.json<PluginInfo>(response);
+    const current = await requests.run<PluginInfo>(`/api/plugins/${encodeURIComponent(id.value)}?waitForLifecycle=true`, { cache: 'no-store' }, response => {
+      if (!response.ok) throw new Error('无法加载插件');
+      return response.json();
+    });
     if (!requests.active || generation !== loadGeneration) return;
     plugin.value = current;
     const isRunning = pluginRunning.value;
-    const [stateResponse, configResponse, definitionResponse, settingsDisplayResponse, featuresResponse] =
+    const [state, savedConfig, rawDefinitions, display, declaredFeatures] =
       await Promise.all([
         isRunning && plugin.value.manifest?.status_ui
-          ? requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/status`)
+          ? requests.run<Record<string, unknown> | undefined>(`/api/plugins/${encodeURIComponent(id.value)}/status`, {}, response => response.ok ? response.json() : undefined)
           : Promise.resolve(undefined),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration`),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration/schema`),
-        requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/settings/display/configuration`),
+        requests.run<Record<string, unknown>>(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {}, response => {
+          if (!response.ok) throw new Error('读取插件设置失败');
+          return response.json();
+        }),
+        requests.run<unknown[]>(`/api/plugins/${encodeURIComponent(id.value)}/configuration/schema`, {}, response => {
+          if (!response.ok) throw new Error('读取插件设置失败');
+          return response.json();
+        }),
+        requests.run<PluginSettingsDisplaySettings>(`/api/plugins/${encodeURIComponent(id.value)}/settings/display/configuration`, {}, response => {
+          if (!response.ok) throw new Error('读取插件设置失败');
+          return response.json();
+        }),
         isRunning && plugin.value.manifest?.features_ui
-          ? requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/features`)
+          ? requests.run<{ features?: PluginFeatureDefinition[] } | undefined>(`/api/plugins/${encodeURIComponent(id.value)}/features`, {}, response => response.ok ? response.json() : undefined)
           : Promise.resolve(undefined),
       ]);
-    if (!requests.active || generation !== loadGeneration) return;
-    if (!configResponse.ok || !definitionResponse.ok || !settingsDisplayResponse.ok)
-      throw new Error('读取插件设置失败');
-    const [state, savedConfig, rawDefinitions, display, declaredFeatures] = await Promise.all([
-      stateResponse?.ok ? requests.json<Record<string, unknown>>(stateResponse) : undefined,
-      requests.json<Record<string, unknown>>(configResponse),
-      requests.json<unknown[]>(definitionResponse),
-      requests.json<PluginSettingsDisplaySettings>(settingsDisplayResponse),
-      featuresResponse?.ok ? requests.json<{ features?: PluginFeatureDefinition[] }>(featuresResponse) : undefined,
-    ]);
     if (!requests.active || generation !== loadGeneration) return;
     Object.keys(status).forEach((key) => delete status[key]);
     if (state) Object.assign(status, state);
@@ -153,12 +153,14 @@ async function toggle() {
   loadGeneration++;
   requests.cancelReads();
   try {
-    const response = await requests.fetch(
+    const updated = await requests.run<PluginInfo>(
       `/api/plugins/${encodeURIComponent(id.value)}/${current.enabled ? 'disable' : 'enable'}`,
       { method: 'POST' },
+      response => {
+        if (!response.ok) throw new Error(failureMessage);
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error(failureMessage);
-    const updated = await requests.json<PluginInfo>(response);
     if (!requests.active || id.value !== current.id) return;
     plugin.value = updated;
     await load();
@@ -225,14 +227,13 @@ async function saveSettings() {
   loadGeneration++;
   requests.cancelReads();
   try {
-    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {
+    await requests.run(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
+    }, async response => {
+      if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
     });
-    if (!response.ok) {
-      throw new Error(await readApiError(response, '配置保存失败，请重试', requests.json));
-    }
     showToast('配置已保存', 'success');
     await load();
   } catch (cause) {
@@ -246,12 +247,14 @@ async function executeFeature(feature: PluginFeatureDefinition) {
   if (feature.mode !== 'action' || executingFeatureId.value) return;
   executingFeatureId.value = feature.id;
   try {
-    const response = await requests.fetch(
+    const result = await requests.run<PluginFeatureExecutionResult>(
       `/api/plugins/${encodeURIComponent(id.value)}/features/${encodeURIComponent(feature.id)}/execute`,
       { method: 'POST' },
+      response => {
+        if (!response.ok) throw new Error('执行功能失败');
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error('执行功能失败');
-    const result = (await requests.json(response)) as PluginFeatureExecutionResult;
     showToast(result.message, result.succeeded ? 'success' : 'error');
     return result.succeeded;
   } catch (cause) {

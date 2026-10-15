@@ -79,10 +79,9 @@ let settingsController: AbortController | undefined;
 
 async function checkReadme(pluginId: string) {
   try {
-    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(pluginId)}/readme`, {
+    readmeAvailable.value = await requests.run(`/api/plugins/${encodeURIComponent(pluginId)}/readme`, {
       method: 'HEAD',
-    });
-    readmeAvailable.value = response.ok;
+    }, response => response.ok);
   } catch (cause) {
     if (requests.active && !isAbortError(cause)) readmeAvailable.value = false;
   }
@@ -104,12 +103,14 @@ async function openReadme() {
   readmeController = controller;
   readmeLoading.value = true;
   try {
-    const response = await requests.fetch(
+    const source = await requests.run(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/readme`,
       { signal: controller.signal },
+      response => {
+        if (!response.ok) throw new Error('读取说明文档失败');
+        return response.text();
+      },
     );
-    if (!response.ok) throw new Error('读取说明文档失败');
-    const source = await requests.text(response);
     if (controller.signal.aborted) return;
     const html = await renderMarkdown(source);
     if (controller.signal.aborted) return;
@@ -135,13 +136,18 @@ watch(safeModeEnabled, (enabled) => {
 }, { flush: 'sync' });
 async function loadStatusSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
-  const [statusResponse, settingsResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/status`),
-    requests.fetch(`/api/plugins/${id}/settings/display/status`),
+  const [status, settings] = await Promise.all([
+    requests.run<Record<string, unknown>>(`/api/plugins/${id}/status`, {}, response => {
+      if (!response.ok) throw new Error('读取状态展示设置失败');
+      return response.json();
+    }),
+    requests.run<PluginStatusDisplaySettings>(`/api/plugins/${id}/settings/display/status`, {}, response => {
+      if (!response.ok) throw new Error('读取状态展示设置失败');
+      return response.json();
+    }),
   ]);
-  if (!statusResponse.ok || !settingsResponse.ok) throw new Error('读取状态展示设置失败');
-  statusKeys.value = Object.keys((await requests.json(statusResponse)) as Record<string, unknown>);
-  statusSettings.value = (await requests.json(settingsResponse)) as PluginStatusDisplaySettings;
+  statusKeys.value = Object.keys(status);
+  statusSettings.value = settings;
 }
 
 async function openStatusSettings() {
@@ -157,16 +163,18 @@ async function saveStatusSettings() {
   if (savingStatusSettings.value || safeModeEnabled.value) return;
   savingStatusSettings.value = true;
   try {
-    const response = await requests.fetch(
+    statusSettings.value = await requests.run<PluginStatusDisplaySettings>(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/settings/display/status`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(statusSettings.value),
       },
+      response => {
+        if (!response.ok) throw new Error('保存状态展示设置失败');
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error('保存状态展示设置失败');
-    statusSettings.value = (await requests.json(response)) as PluginStatusDisplaySettings;
     statusSettingsOpen.value = false;
     showToast('状态展示设置已保存', 'success');
   } catch (cause) {
@@ -177,14 +185,18 @@ async function saveStatusSettings() {
 }
 async function loadFeatureSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
-  const [featuresResponse, settingsResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/features`),
-    requests.fetch(`/api/plugins/${id}/settings/display/features`),
+  const [declaredFeatures, settings] = await Promise.all([
+    requests.run<{ features?: PluginFeatureDefinition[] }>(`/api/plugins/${id}/features`, {}, response => {
+      if (!response.ok) throw new Error('读取功能展示设置失败');
+      return response.json();
+    }),
+    requests.run<PluginFeatureDisplaySettings>(`/api/plugins/${id}/settings/display/features`, {}, response => {
+      if (!response.ok) throw new Error('读取功能展示设置失败');
+      return response.json();
+    }),
   ]);
-  if (!featuresResponse.ok || !settingsResponse.ok) throw new Error('读取功能展示设置失败');
-  features.value =
-    ((await requests.json(featuresResponse)) as { features?: PluginFeatureDefinition[] }).features ?? [];
-  featureSettings.value = (await requests.json(settingsResponse)) as PluginFeatureDisplaySettings;
+  features.value = declaredFeatures.features ?? [];
+  featureSettings.value = settings;
 }
 async function openFeatureSettings() {
   if (safeModeEnabled.value) return;
@@ -200,18 +212,23 @@ async function loadSettings() {
   settingsController = new AbortController();
   const signal = settingsController.signal;
   const id = encodeURIComponent(String(route.params.pluginId));
-  const [settingsResponse, definitionResponse, configurationResponse] = await Promise.all([
-    requests.fetch(`/api/plugins/${id}/settings/display/configuration`, { signal }),
-    requests.fetch(`/api/plugins/${id}/configuration/schema`, { signal }),
-    requests.fetch(`/api/plugins/${id}/configuration`, { signal }),
+  const [display, definitions, configuration] = await Promise.all([
+    requests.run<PluginSettingsDisplaySettings>(`/api/plugins/${id}/settings/display/configuration`, { signal }, response => {
+      if (!response.ok) throw new Error('读取插件设置失败');
+      return response.json();
+    }),
+    requests.run<unknown[]>(`/api/plugins/${id}/configuration/schema`, { signal }, response => {
+      if (!response.ok) throw new Error('读取插件设置失败');
+      return response.json();
+    }),
+    requests.run<Record<string, any>>(`/api/plugins/${id}/configuration`, { signal }, response => {
+      if (!response.ok) throw new Error('读取插件设置失败');
+      return response.json();
+    }),
   ]);
-  if (settingsResponse.ok)
-    settingsDisplay.value = (await requests.json(settingsResponse)) as PluginSettingsDisplaySettings;
-  if (!settingsResponse.ok || !definitionResponse.ok || !configurationResponse.ok)
-    throw new Error('读取插件设置失败');
-  settingsDefinitions.value = ((await requests.json(definitionResponse)) as unknown[])
-    .filter(value => isDefinition(value) || isCollection(value));
-  settingsConfig.value = (await requests.json(configurationResponse)) as Record<string, any>;
+  settingsDisplay.value = display;
+  settingsDefinitions.value = definitions.filter(value => isDefinition(value) || isCollection(value));
+  settingsConfig.value = configuration;
 }
 async function openSettings() {
   if (safeModeEnabled.value) return;
@@ -228,21 +245,21 @@ async function saveSettings() {
   let configurationSaved = false;
   try {
     const id = encodeURIComponent(String(route.params.pluginId));
-    const configurationResponse = await requests.fetch(`/api/plugins/${id}/configuration`, {
+    await requests.run(`/api/plugins/${id}/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settingsConfig.value),
+    }, async response => {
+      if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
     });
-    if (!configurationResponse.ok) {
-      throw new Error(await readApiError(configurationResponse, '配置保存失败，请重试', requests.json));
-    }
     configurationSaved = true;
-    const settingsResponse = await requests.fetch(`/api/plugins/${id}/settings/display/configuration`, {
+    await requests.run(`/api/plugins/${id}/settings/display/configuration`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settingsDisplay.value),
+    }, response => {
+      if (!response.ok) throw new Error('保存配置展示设置失败');
     });
-    if (!settingsResponse.ok) throw new Error('保存配置展示设置失败');
     settingsOpen.value = false;
     showToast('配置展示设置已保存', 'success');
   } catch (cause) {
@@ -255,16 +272,18 @@ async function saveFeatureSettings() {
   if (savingFeatureSettings.value || safeModeEnabled.value) return;
   savingFeatureSettings.value = true;
   try {
-    const response = await requests.fetch(
+    featureSettings.value = await requests.run<PluginFeatureDisplaySettings>(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/settings/display/features`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(featureSettings.value),
       },
+      response => {
+        if (!response.ok) throw new Error('保存功能展示设置失败');
+        return response.json();
+      },
     );
-    if (!response.ok) throw new Error('保存功能展示设置失败');
-    featureSettings.value = (await requests.json(response)) as PluginFeatureDisplaySettings;
     featureSettingsOpen.value = false;
     showToast('功能展示设置已保存', 'success');
   } catch (cause) {
@@ -277,11 +296,13 @@ async function deletePlugin(deleteData: boolean) {
   if (safeModeEnabled.value || deleting.value) return;
   deleting.value = true;
   try {
-    const response = await requests.fetch(
+    await requests.run(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}?deleteData=${deleteData}`,
       { method: 'DELETE' },
+      response => {
+        if (!response.ok) throw new Error('删除插件失败');
+      },
     );
-    if (!response.ok) throw new Error('删除插件失败');
     showToast(deleteData ? '插件和配置已删除' : '插件已删除，配置已保留', 'success');
     await router.push('/plugins');
   } catch (cause) {
@@ -299,18 +320,18 @@ async function load() {
   plugin.value = undefined;
   error.value = '';
   try {
-    const response = await requests.fetch(`/api/plugins/${encodeURIComponent(String(route.params.pluginId))}`);
-    if (response.ok) {
-      const loadedPlugin = (await requests.json(response)) as PluginInfo;
-      if (!requests.active || generation !== loadGeneration) return;
-      plugin.value = loadedPlugin;
-      await Promise.all([
-        checkReadme(loadedPlugin.id),
-        loadedPlugin.manifest?.status_ui ? loadStatusSettings() : Promise.resolve(),
-        loadedPlugin.manifest?.features_ui ? loadFeatureSettings() : Promise.resolve(),
-        loadedPlugin.manifest?.settings_ui ? loadSettings() : Promise.resolve(),
-      ]);
-    } else throw new Error('无法加载插件信息');
+    const loadedPlugin = await requests.run<PluginInfo>(`/api/plugins/${encodeURIComponent(String(route.params.pluginId))}`, {}, response => {
+      if (!response.ok) throw new Error('无法加载插件信息');
+      return response.json();
+    });
+    if (!requests.active || generation !== loadGeneration) return;
+    plugin.value = loadedPlugin;
+    await Promise.all([
+      checkReadme(loadedPlugin.id),
+      loadedPlugin.manifest?.status_ui ? loadStatusSettings() : Promise.resolve(),
+      loadedPlugin.manifest?.features_ui ? loadFeatureSettings() : Promise.resolve(),
+      loadedPlugin.manifest?.settings_ui ? loadSettings() : Promise.resolve(),
+    ]);
   } catch (cause) {
     if (requests.active && generation === loadGeneration && !isAbortError(cause)) error.value = userErrorMessage(cause, '无法加载插件信息');
   }

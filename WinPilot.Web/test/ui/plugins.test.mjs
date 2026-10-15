@@ -7,14 +7,14 @@ import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
 import { combinePageSignal } from '../../src/features/plugins/page/PluginPageLifetime.ts';
 
-function evaluate(path, require, members = '') {
+function evaluate(path, require, members = '', globals = {}) {
   const code = loadScriptModule(new URL(path, import.meta.url), members);
-  const context = { exports: {}, require, AbortController, DOMException, console, sessionStorage: { getItem: () => null, removeItem() {} }, EventSource: class { close() {} } };
+  const context = { exports: {}, require, AbortController, DOMException, console, sessionStorage: { getItem: () => null, removeItem() {} }, EventSource: class { close() {} }, ...globals };
   runInNewContext(code, context);
   return context.exports;
 }
 
-function fixture(page = 'PluginInfoView.vue') {
+function fixture(page = 'PluginInfoView.vue', requestGlobals = {}) {
   const calls = [], toasts = [], renders = [];
   const safeModeEnabled = vue.ref(false);
   const route = vue.reactive({ params: { pluginId: 'first' }, fullPath: '/plugins/first' });
@@ -27,7 +27,8 @@ function fixture(page = 'PluginInfoView.vue') {
     isAbortError: error => error?.name === 'AbortError',
     userErrorMessage: (error, fallback) => error.message || fallback,
   };
-  const requests = evaluate('../../src/features/plugins/PluginRequests.ts', name => name.endsWith('/client') ? client : { combinePageSignal });
+  const executor = evaluate('../../src/api/requestExecutor.ts', name => name.endsWith('/client') ? client : { combineRequestSignal: combinePageSignal });
+  const requests = evaluate('../../src/features/plugins/PluginRequests.ts', () => executor, '', requestGlobals);
   const models = evaluate('../../src/features/plugins/PluginModels.ts', () => ({}));
   const imports = name => {
     if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: callback => { unmount = callback; } };
@@ -43,7 +44,7 @@ function fixture(page = 'PluginInfoView.vue') {
   const members = page === 'PluginsView.vue'
     ? 'load,toggle,onToggle,plugins,changingIds,loading,scanning,requests'
     : page === 'PluginDetailView.vue' ? 'load,toggle,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
-    : 'loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,checkReadme,openReadme,closeReadme,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
+    : 'loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,checkReadme,openReadme,closeReadme,readmeController,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
   const scope = vue.effectScope();
   let subject;
   scope.run(() => { subject = evaluate('../../src/features/plugins/' + page, imports, members); });
@@ -55,6 +56,16 @@ function fixture(page = 'PluginInfoView.vue') {
   } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
+
+function trackedRequestFixture(page = 'PluginInfoView.vue') {
+  const maps = [];
+  const f = fixture(page, { Map: class extends Map {
+    constructor(...args) { super(...args); maps.push(this); }
+  } });
+  assert.equal(maps.length, 1);
+  return { ...f, controllers: maps[0] };
+}
+
 
 test('safe mode clears modal configuration and cancels late configuration reads', async () => {
   const f = fixture();
@@ -141,8 +152,10 @@ test('closing or leaving a readme cancels work and late rendering cannot overwri
     const first = f.subject.openReadme();
     f.calls[0].resolve({ ok: true, text: async () => 'old' });
     await setImmediate();
+    const dialogSignal = f.subject.readmeController.signal;
     f.subject.closeReadme();
-    assert.equal(f.calls[0].init.signal.aborted, true);
+    assert.equal(dialogSignal.aborted, true);
+    assert.equal(f.calls[0].init.signal.aborted, false);
     const second = f.subject.openReadme();
     f.renders[0].resolve('<p>old</p>');
     await first;
@@ -435,16 +448,6 @@ test('leaving cancels writes and late bodies cannot update data or send a toast'
   assert.equal(f.subject.plugins.value.length, 0);
 });
 
-test('cancelled late network errors are treated as cancellation', async () => {
-  const f = fixture();
-  try {
-    const pending = f.subject.requests.fetch('/test');
-    f.subject.requests.cancelAll();
-    f.calls[0].reject(new Error('late network error'));
-    await assert.rejects(pending, error => error.name === 'AbortError');
-  } finally { f.dispose(); }
-});
-
 test('shared settings predicates validate collections without plugin business rules', () => {
   const models = evaluate('../../src/features/plugins/PluginModels.ts', () => ({}));
   assert.equal(models.isPluginSetting({ name: 'value', type: 'text' }), true);
@@ -505,5 +508,54 @@ test('saving display settings cannot proceed after failed configuration save', a
     assert.equal(f.calls.length, 1);
     assert.match(f.calls[0].url, /\/configuration$/);
     assert.equal(f.toasts.length, 1);
+  } finally { f.dispose(); }
+});
+
+test('plugin HEAD checks finish tracking without reading a body', async () => {
+  const f = trackedRequestFixture();
+  let bodyReads = 0;
+  try {
+    const checking = f.subject.checkReadme('first');
+    assert.equal(f.calls[0].init.method, 'HEAD');
+    f.calls[0].resolve({ ok: true, status: 200, body: null, json: async () => { bodyReads++; return {}; } });
+    await checking;
+    assert.equal(f.subject.readmeAvailable.value, true);
+    assert.equal(bodyReads, 0);
+    assert.equal(f.controllers.size, 0);
+  } finally { f.dispose(); }
+});
+
+test('status-only plugin saves release both requests without requiring JSON', async () => {
+  const f = trackedRequestFixture();
+  let saving;
+  try {
+    saving = f.subject.saveSettings();
+    f.calls[0].resolve(new Response('not JSON', { status: 200 }));
+    await setImmediate();
+    assert.equal(f.calls.length, 2);
+    assert.ok(f.calls.every(call => call.init.method === 'PUT'));
+    f.calls[1].resolve(new Response('not JSON', { status: 200 }));
+    await saving;
+    assert.equal(f.toasts.length, 1);
+    assert.equal(f.toasts[0].text, '配置展示设置已保存');
+    assert.equal(f.toasts[0].type, 'success');
+    assert.equal(f.controllers.size, 0);
+  } finally {
+    f.dispose();
+    for (const call of f.calls) call.resolve(response({}));
+    if (saving) await saving;
+  }
+});
+
+test('plugin HTTP failures before body reading release their request', async () => {
+  const f = trackedRequestFixture('PluginDetailView.vue');
+  try {
+    const loading = f.subject.load();
+    f.calls[0].resolve(new Response('not JSON', { status: 503 }));
+    await loading;
+    assert.equal(f.subject.error.value, '无法加载插件');
+    assert.equal(f.subject.loading.value, false);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.controllers.size, 0);
   } finally { f.dispose(); }
 });

@@ -5,18 +5,23 @@ import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
+import { combineRequestSignal } from '../../src/api/requestSignal.ts';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, tasksLoaded, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions');
+    'tasks, tasksLoaded, registeredActions, registeredTriggers, detailTarget, editor, deleteTarget, runTarget, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
   const requests = [];
   const toasts = [];
   let unmount;
+  const client = { ...apiErrors, apiFetch: (url, init) => new Promise(resolve => requests.push({ url, init, resolve })), isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message, WinPilotConnectionError: class extends Error {} };
+  const executor = { exports: {}, AbortController, DOMException, require: name => name.endsWith('/client') ? client : { combineRequestSignal } };
+  runInNewContext(loadScriptModule(new URL('../../src/api/requestExecutor.ts', import.meta.url)), executor);
   const context = {
-    exports: {}, AbortController, HTMLInputElement: class {},
+    exports: {}, AbortController, DOMException, HTMLInputElement: class {},
     require: name => {
       if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
-      if (name.endsWith('/client')) return { ...apiErrors, apiFetch: (url, init) => new Promise(resolve => requests.push({ url, init, resolve })), isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message, WinPilotConnectionError: class extends Error {} };
+      if (name.endsWith('/client')) return client;
+      if (name.endsWith('/requestExecutor')) return executor.exports;
       if (name.endsWith('/toast')) return { showToast: text => toasts.push(text) };
       if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
       return {};
@@ -357,4 +362,82 @@ test('disabled or missing plugin extensions remain unavailable in overview witho
     f.subject.registeredTriggers.value = [];
     assert.equal(f.subject.extensionTriggerLabel(trigger), '扩展 · plugin · trigger（不可用）');
   } finally { f.dispose(); }
+});
+
+test('task dynamic option requests stay tracked from headers through body completion', async () => {
+  const f = fixture();
+  const body = Promise.withResolvers();
+  let loading, bodyStarted = false;
+  try {
+    f.subject.editor.value = { actions: [f.action] };
+    loading = f.subject.loadActionOptions(0, 'name');
+    assert.equal(f.subject.requestControllers.size, 1);
+    f.requests[0].resolve({ ok: true, json: () => { bodyStarted = true; return body.promise; } });
+    await setImmediate();
+    assert.equal(bodyStarted, true);
+    assert.equal(f.subject.requestControllers.size, 1);
+    body.resolve([{ value: 'saved', label: '已保存的任务' }]);
+    assert.equal(await loading, true);
+    assert.equal(f.subject.requestControllers.size, 0);
+  } finally {
+    body.resolve([{ value: 'saved', label: '已保存的任务' }]);
+    f.dispose();
+    if (loading) await loading;
+  }
+});
+
+test('task unmount cancels the underlying dynamic option body after headers arrive', async () => {
+  const f = fixture();
+  const body = Promise.withResolvers();
+  let loading, call, bodyStarted = false, bodyCancelled = false;
+  const cancelBody = () => {
+    bodyCancelled = true;
+    body.reject(new DOMException('正文读取已取消', 'AbortError'));
+  };
+  try {
+    f.subject.editor.value = { actions: [f.action] };
+    loading = f.subject.loadActionOptions(0, 'name');
+    call = f.requests[0];
+    call.resolve({ ok: true, json: () => {
+      bodyStarted = true;
+      call.init.signal.addEventListener('abort', cancelBody, { once: true });
+      if (call.init.signal.aborted) cancelBody();
+      return body.promise;
+    } });
+    await setImmediate();
+    assert.equal(bodyStarted, true);
+    assert.equal(call.init.signal.aborted, false);
+    f.dispose();
+    assert.deepEqual({ aborted: call.init.signal.aborted, bodyCancelled }, { aborted: true, bodyCancelled: true });
+    assert.equal(await loading, false);
+    assert.equal(f.subject.requestControllers.size, 0);
+    assert.equal(f.toasts.length, 0);
+  } finally {
+    body.resolve([{ value: 'saved', label: '迟到的任务' }]);
+    call?.init.signal.removeEventListener('abort', cancelBody);
+    f.dispose();
+    if (loading) await loading;
+  }
+});
+
+test('completed task dynamic option bodies release tracking and preserve their result', async () => {
+  const f = fixture();
+  const body = Promise.withResolvers();
+  let loading;
+  try {
+    f.subject.editor.value = { actions: [f.action] };
+    loading = f.subject.loadActionOptions(0, 'name');
+    assert.equal(f.subject.requestControllers.size, 1);
+    f.requests[0].resolve({ ok: true, json: () => body.promise });
+    await setImmediate();
+    body.resolve([{ value: 'saved', label: '已保存的任务' }]);
+    assert.equal(await loading, true);
+    assert.equal(f.subject.requestControllers.size, 0);
+    assert.equal(f.subject.registeredActions.value[0].parameters[0].options[0].label, '已保存的任务');
+    assert.equal(f.toasts.length, 0);
+  } finally {
+    body.resolve([{ value: 'saved', label: '已保存的任务' }]);
+    f.dispose();
+    if (loading) await loading;
+  }
 });
