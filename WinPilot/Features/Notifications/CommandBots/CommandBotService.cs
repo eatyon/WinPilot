@@ -192,7 +192,7 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
                     await foreach (var item in queue.Reader.ReadAllAsync(processing.Token))
                     {
                         processing.Token.ThrowIfCancellationRequested();
-                        processor ??= new(name, current.Notifications, logger, screenshots, systemMonitor, tags, programs, tasks, pluginCommands);
+                        processor ??= new(name, current.Notifications, logger, screenshots, systemMonitor, tags, programs, tasks, pluginCommands, current.CommandBots);
                         await processor.ProcessAsync(item.Item1, item.Item2, processing.Token);
                     }
                 }

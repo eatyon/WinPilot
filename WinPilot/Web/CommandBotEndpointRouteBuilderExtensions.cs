@@ -41,7 +41,7 @@ public static class CommandBotEndpointRouteBuilderExtensions
         });
         endpoints.MapPut("/api/settings/notifications/command-bots/onebot", (OneBotCommandBotOptions options, HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
-            ExecuteAsync(() => bot.SaveAsync(options, context.RequestAborted), bot, safeMode));
+            ExecuteAsync(() => bot.SaveAsync(options, context.RequestAborted), bot, safeMode, context, "onebot", "保存设置"));
         return endpoints;
     }
 
@@ -60,10 +60,10 @@ public static class CommandBotEndpointRouteBuilderExtensions
             });
             endpoints.MapPut(configurationRoute, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
                 ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)
-                    : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted), bot, safeMode));
+                    : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted), bot, safeMode, context, channel, "保存设置"));
         }
         endpoints.MapPost(route + "/reconnect", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
-            ExecuteAsync(() => bot.ReconnectAsync(context.RequestAborted), bot, safeMode));
+            ExecuteAsync(() => bot.ReconnectAsync(context.RequestAborted), bot, safeMode, context, channel, "重新连接"));
         endpoints.MapGet(route + "/events", async (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot) =>
         {
             context.Response.ContentType = "text/event-stream";
@@ -80,14 +80,22 @@ public static class CommandBotEndpointRouteBuilderExtensions
         });
     }
 
-    private static async Task<IResult> ExecuteAsync(Func<Task> action, CommandBotService bot, SafeModeService safeMode)
+    internal static async Task<IResult> ExecuteAsync(Func<Task> action, CommandBotService bot, SafeModeService safeMode,
+        HttpContext context, string channel, string operation)
     {
         if (safeMode.Enabled) return Results.Json(new { message = "安全模式下不可修改命令机器人设置" }, statusCode: 403);
         try { await action(); return Results.Ok(bot.Status); }
         catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        { return Results.Problem(statusCode: 500, title: "命令机器人设置保存失败", detail: "无法保存配置，请检查数据目录权限"); }
+        catch (Exception exception) when (IsSaveFailure(exception))
+        {
+            context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(CommandBotEndpointRouteBuilderExtensions).FullName!)
+                .LogError(exception, "命令机器人配置操作失败，渠道：{Channel}，操作：{Operation}", channel, operation);
+            return Results.Problem(statusCode: 500, title: "命令机器人设置保存失败", detail: "无法保存配置，请检查数据目录权限");
+        }
     }
+
+    internal static bool IsSaveFailure(Exception exception) => exception is IOException or UnauthorizedAccessException ||
+        exception is AggregateException { InnerExceptions.Count: 2 } aggregate && aggregate.InnerExceptions.All(IsSaveFailure);
 
     private sealed record EnabledRequest(bool Enabled, string? Prefix = null);
     private sealed record CommandItem(string Usage, string Description);

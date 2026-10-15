@@ -29,19 +29,21 @@ internal sealed class FeishuCommandBotReceiver(ILogger<FeishuCommandBotService> 
             catch (Exception) when (token.IsCancellationRequested) { return; }
             catch (FeishuConnectionException exception) when (exception.Permanent)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "飞书命令机器人连接无法恢复");
                 SetStatus(Status with { State = "failed", Error = exception.Message });
                 return;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 var connectedDuration = connectedAt is { } timestamp
                     ? System.Diagnostics.Stopwatch.GetElapsedTime(timestamp) : (TimeSpan?)null;
                 if (!retry.TryNextDelay(connectedDuration, Random.Shared.NextDouble(), out var delay))
                 {
+                    logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "飞书命令机器人重连已停止：次数已达上限");
                     SetStatus(Status with { State = "failed", Error = "飞书自动重连次数已达上限，请检查网络后点击重新连接" });
                     return;
                 }
-                if (Status.State != "reconnecting") logger.LogWarning("飞书命令机器人连接中断，正在重连");
+                if (Status.State != "reconnecting") logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "飞书命令机器人连接中断，正在重连");
                 SetStatus(Status with { State = "reconnecting", Error = "无法连接飞书，请检查网络和应用配置，正在重连" });
                 try { await Task.Delay(delay, token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }

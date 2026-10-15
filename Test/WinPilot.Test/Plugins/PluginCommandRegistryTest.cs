@@ -13,8 +13,8 @@ public sealed class PluginCommandRegistryTest
     private static PluginCommandRegistry Registry() => new(CommandProcessor.IsSupportedCommand);
 
     [Theory]
-    [InlineData("查询", "插件「插件名称」命令「查询」处理失败，异常类型：IOException")]
-    [InlineData("*", "插件「插件名称」通配命令处理失败，异常类型：IOException")]
+    [InlineData("查询", "插件「插件名称」命令「查询」处理失败")]
+    [InlineData("*", "插件「插件名称」通配命令处理失败")]
     public async Task FailureLogsUsePluginDisplayName(string name, string expected)
     {
         var logger = new CommandBotTestObserver<PluginCommandRegistry>();
@@ -27,6 +27,7 @@ public sealed class PluginCommandRegistryTest
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, entry.Level);
         Assert.Equal(expected, entry.Message);
+        Assert.Contains("System.IO.IOException", Assert.Single(logger.Diagnostics));
     }
 
     [Fact]
@@ -176,10 +177,12 @@ public sealed class PluginCommandRegistryTest
         var calls = 0;
         first.Register(new("*", ""), (_, _) => { Interlocked.Increment(ref calls); return Task.CompletedTask; });
         second.Register(new("*", ""), (_, _) => { Interlocked.Increment(ref calls); return Task.CompletedTask; });
-        Assert.True(await registry.ExecuteAsync("未知命令", _ => new FailingCleanupReply(), CancellationToken.None));
+        Assert.True(await registry.ExecuteAsync("未知命令", _ => new FailingCleanupReply(), CancellationToken.None, ["sensitive-token"]));
         Assert.Equal(2, calls);
         Assert.Equal(2, logger.Entries.Count(entry => entry.Message.Contains("通配命令回复清理失败")));
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("sensitive-token"));
+        Assert.Equal(2, logger.Diagnostics.Count);
+        Assert.DoesNotContain(logger.Diagnostics, details => details.Contains("sensitive-token", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -253,7 +256,7 @@ public sealed class PluginCommandRegistryTest
         var registry = Registry();
         using var scope = registry.CreateScope("plugin", "插件");
         scope.Register(new("PluginStatus", "状态"), (_, _) => Task.CompletedTask);
-        Assert.Equal(expected, registry.IsSupportedCommand(text));
+        Assert.Equal(expected ? "PluginStatus" : null, registry.GetCommandName(text));
     }
 
     [Theory]
@@ -274,7 +277,7 @@ public sealed class PluginCommandRegistryTest
         });
         Assert.True(await registry.ExecuteAsync(text, _ => new RecordingReply(), CancellationToken.None));
         Assert.Equal(expected, argument);
-        Assert.Equal(attached, registry.IsSupportedCommand("插件任务Example"));
+        Assert.Equal(attached ? "插件任务" : null, registry.GetCommandName("插件任务Example"));
     }
 
     [Fact]
@@ -304,7 +307,7 @@ public sealed class PluginCommandRegistryTest
         Assert.Equal("新名称", Assert.Single(registry.GetAll()).PluginDisplayName);
         Assert.True(await registry.ExecuteAsync("插件状态", _ => new RecordingReply(), CancellationToken.None));
         current.Dispose();
-        Assert.False(registry.IsSupportedCommand("插件状态"));
+        Assert.Null(registry.GetCommandName("插件状态"));
     }
 
     [Theory]
@@ -431,7 +434,7 @@ public sealed class PluginCommandRegistryTest
         using var scope = registry.CreateScope("plugin", "插件");
         var executions = 0;
         scope.Register(new("故障", "故障"), (_, _) => { executions++; throw new IOException("sensitive-token"); });
-        using var processor = new CommandProcessor("Test", new(), logger, pluginCommands: registry);
+        using var processor = new CommandProcessor("Test", new() { QQBotClientSecret = "sensitive-token" }, logger, pluginCommands: registry);
         var replies = 0;
         await processor.ProcessAsync(new("original", "user", "故障")
         {
@@ -441,6 +444,7 @@ public sealed class PluginCommandRegistryTest
         Assert.Equal(0, replies);
         Assert.Single(logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("sensitive-token", StringComparison.Ordinal));
+        Assert.DoesNotContain("sensitive-token", Assert.Single(logger.Diagnostics));
     }
 
     [Fact]

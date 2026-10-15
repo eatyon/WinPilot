@@ -205,7 +205,7 @@ public sealed class QQBotCommandBotTest
         Assert.Equal("connected", fixture.Bot.Status.State);
         var pending = fixture.Bot.BindAsync(fixture.Settings!, false, (_, _) => Task.CompletedTask, CancellationToken.None);
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<HttpRequestException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]
@@ -236,7 +236,7 @@ public sealed class QQBotCommandBotTest
             code = value;
             return Task.CompletedTask;
         }, CancellationToken.None);
-        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Bot.BindAsync(
+        var busy = await Assert.ThrowsAsync<QQBotBindingValidationException>(() => fixture.Bot.BindAsync(
             fixture.Settings!, false, (_, _) => Task.CompletedTask, CancellationToken.None));
         Assert.Contains("正在获取", busy.Message);
         Assert.False(first.IsCompleted);
@@ -262,7 +262,7 @@ public sealed class QQBotCommandBotTest
         using var cancellation = new CancellationTokenSource();
         var first = fixture.Bot.BindAsync(settings, false, (_, _) => Task.CompletedTask, cancellation.Token);
         await fixture.TemporaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Bot.BindAsync(settings, true,
+        await Assert.ThrowsAsync<QQBotBindingValidationException>(() => fixture.Bot.BindAsync(settings, true,
             (_, _) => Task.CompletedTask, CancellationToken.None));
         Assert.Equal(1, fixture.TemporaryAttempts);
         cancellation.Cancel();
@@ -290,7 +290,7 @@ public sealed class QQBotCommandBotTest
         Assert.Equal(0, fixture.Attempts);
         Assert.Equal("connecting", fixture.Bot.Status.State);
         fixture.ReleaseTemporaryCleanup.TrySetResult();
-        var cancelled = await Assert.ThrowsAsync<InvalidOperationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
+        var cancelled = await Assert.ThrowsAsync<QQBotBindingValidationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Contains("本次获取已取消", cancelled.Message);
         await WaitUntil(() => fixture.Bot.Status.State == "connected");
         Assert.Equal(1, fixture.TemporaryCleanups);
@@ -312,7 +312,7 @@ public sealed class QQBotCommandBotTest
         await WaitUntil(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
         Assert.DoesNotContain("secret must not appear", fixture.Bot.Status.Error!);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Bot.BindAsync(new(), false, (_, _) => Task.CompletedTask, CancellationToken.None));
+        await Assert.ThrowsAsync<QQBotBindingValidationException>(() => fixture.Bot.BindAsync(new(), false, (_, _) => Task.CompletedTask, CancellationToken.None));
         fixture.Failure = null;
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
         await WaitUntil(() => fixture.Bot.Status.State == "connected");

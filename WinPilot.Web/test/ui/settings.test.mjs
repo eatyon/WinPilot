@@ -55,6 +55,30 @@ async function loadNotifications(f) {
   await loading;
 }
 
+test('Telegram proxy defaults to port 7890 when no saved address is returned', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form');
+  try {
+    assert.equal(f.subject.form.telegramProxyUrl, 'http://127.0.0.1:7890');
+    await loadNotifications(f);
+    assert.equal(f.subject.form.telegramProxyUrl, 'http://127.0.0.1:7890');
+  } finally { f.dispose(); }
+});
+
+test('Telegram proxy preserves a saved custom address when loaded and saved', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form,save');
+  try {
+    const loading = f.mount();
+    f.calls[0].resolve(response({ telegramProxyUrl: 'http://localhost:10809' }));
+    await loading;
+    assert.equal(f.subject.form.telegramProxyUrl, 'http://localhost:10809');
+    const saving = f.subject.save('telegram');
+    assert.equal(JSON.parse(f.calls[1].init.body).telegramProxyUrl, 'http://localhost:10809');
+    f.calls[1].resolve(response({ telegramProxyUrl: 'http://localhost:10809' }));
+    await saving;
+    assert.equal(f.subject.form.telegramProxyUrl, 'http://localhost:10809');
+  } finally { f.dispose(); }
+});
+
 test('notification page reads enabled flags without opening status streams', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'botEnabled,botsLoaded');
   try {

@@ -88,7 +88,7 @@ public sealed class QQBotCommandBotService : CommandBotService
     private void FailBindings()
     {
         lock (bindingGate)
-            binding?.Result.TrySetException(new InvalidOperationException("QQBot 连接已停止，请恢复连接后重新获取"));
+            binding?.Result.TrySetException(new HttpRequestException("QQBot 连接已停止，请恢复连接后重新获取"));
     }
 
     private void OnPayload(JsonElement payload)
@@ -107,20 +107,20 @@ public sealed class QQBotCommandBotService : CommandBotService
         token.ThrowIfCancellationRequested();
         lock (bindingGate)
         {
-            if (bindingInProgress) throw new InvalidOperationException("QQBot 正在获取 OpenID，请稍后重试");
+            if (bindingInProgress) throw new QQBotBindingValidationException("QQBot 正在获取 OpenID，请稍后重试");
             bindingInProgress = true;
         }
         try
         {
             if (Status.Enabled) return await BindConnectedAsync(group, reportCode, token);
             if (!await gateway.WaitAsync(0, token))
-                throw new InvalidOperationException("请等待 QQBot 连接成功后再获取 OpenID");
+                throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
             try
             {
                 using var temporary = CancellationTokenSource.CreateLinkedTokenSource(token);
                 lock (bindingGate)
                 {
-                    if (Status.Enabled) throw new InvalidOperationException("请等待 QQBot 连接成功后再获取 OpenID");
+                    if (Status.Enabled) throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
                     temporaryBinding = temporary;
                 }
                 try
@@ -131,7 +131,7 @@ public sealed class QQBotCommandBotService : CommandBotService
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested && temporary.IsCancellationRequested)
                 {
-                    throw new InvalidOperationException("命令机器人已开启，本次获取已取消；连接成功后请重新获取");
+                    throw new QQBotBindingValidationException("命令机器人已开启，本次获取已取消；连接成功后请重新获取");
                 }
                 finally { lock (bindingGate) temporaryBinding = null; }
             }
@@ -140,20 +140,21 @@ public sealed class QQBotCommandBotService : CommandBotService
         finally { lock (bindingGate) bindingInProgress = false; }
     }
 
-    private async Task<string> BindConnectedAsync(bool group, Func<string, CancellationToken, Task> reportCode, CancellationToken token)
+    private Task<string> BindConnectedAsync(bool group, Func<string, CancellationToken, Task> reportCode, CancellationToken token)
+        => QQBotBindingService.WithTimeoutAsync(bindingToken => WaitForBindingAsync(group, reportCode, bindingToken), token, TimeSpan.FromSeconds(60));
+
+    private async Task<string> WaitForBindingAsync(bool group, Func<string, CancellationToken, Task> reportCode, CancellationToken token)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(60));
         var waiter = new BindingWaiter(group, Random.Shared.Next(1000, 10000).ToString());
         lock (bindingGate)
         {
-            if (!connectionActive || Status.State != "connected") throw new InvalidOperationException("请等待 QQBot 连接成功后再获取 OpenID");
+            if (!connectionActive || Status.State != "connected") throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
             binding = waiter;
         }
         try
         {
-            await reportCode(waiter.Code, timeout.Token);
-            return await waiter.Result.Task.WaitAsync(timeout.Token);
+            await reportCode(waiter.Code, token);
+            return await waiter.Result.Task.WaitAsync(token);
         }
         finally { lock (bindingGate) binding = null; }
     }

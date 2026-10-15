@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using WinPilot.Core;
+using WinPilot.Features.Notifications;
+using WinPilot.Features.Security;
 
 namespace WinPilot.Test;
 
@@ -7,6 +9,27 @@ public sealed class ConfigurationUpdateTest : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "winpilot-configuration-update-tests", Guid.NewGuid().ToString("N"));
     private string FilePath => Path.Combine(directory, "config.json");
+
+    [Fact]
+    public void LockedTemporaryFileReportsSaveAndCleanupFailuresWithoutChangingConfiguration()
+    {
+        WinPilotSettings.LoadAndInitialize(FilePath);
+        var original = File.ReadAllText(FilePath);
+        var temporary = FilePath + ".tmp";
+        File.WriteAllText(temporary, "temporary");
+        using (var locked = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var error = Assert.Throws<AggregateException>(() => WinPilotSettings.Update(FilePath, current => current with { Port = 9124 }));
+            Assert.Equal(2, error.InnerExceptions.Count);
+            Assert.All(error.InnerExceptions, exception => Assert.IsAssignableFrom<IOException>(exception));
+            Assert.Equal(original, File.ReadAllText(FilePath));
+            Assert.Equal("temporary", File.ReadAllText(temporary));
+        }
+        File.Delete(temporary);
+        WinPilotSettings.Update(FilePath, current => current with { Port = 9124 });
+        Assert.False(File.Exists(temporary));
+        Assert.Equal(9124, WinPilotSettings.LoadAndInitialize(FilePath).Port);
+    }
 
     [Fact]
     public void SavedChineseRemainsReadableAndSpecialCharactersRoundTrip()
@@ -52,6 +75,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.False(settings.CommandBots.OneBotEnabled);
         Assert.False(settings.CommandBots.QQBotEnabled);
         Assert.False(settings.Notifications.WindowsEnabled);
+        Assert.Equal("http://127.0.0.1:7890", settings.Notifications.TelegramProxyUrl);
         Assert.False(settings.SafeModeEnabled);
         Assert.Equal("", settings.SecurityNotifications.Channel);
         Assert.Equal(UpdateSource.GitHub, settings.Updates.Source);
@@ -149,6 +173,87 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.Equal(original, File.ReadAllText(FilePath));
     }
 
+    [Theory]
+    [InlineData("notifications", "OneBotSendTarget", "unknown", "OneBot 发送目标无效")]
+    [InlineData("notifications", "QQBotSendTarget", "unknown", "QQBot 发送目标无效")]
+    [InlineData("notifications", "QQBotMessageFormat", "unknown", "QQBot 消息格式无效")]
+    [InlineData("notifications", "OneBotSendTarget", null, "OneBot 发送目标无效")]
+    [InlineData("notifications", "QQBotMessageFormat", null, "QQBot 消息格式无效")]
+    [InlineData("securityNotifications", "Channel", "unknown", "安全通知渠道无效")]
+    [InlineData("securityNotifications", "Events", "[999]", "安全事件类型无效")]
+    public void InvalidNotificationValuesAreRejectedOnLoadAndSaveWithoutChangingFile(string section, string property, string? value, string message)
+    {
+        WinPilotSettings.LoadAndInitialize(FilePath);
+        var original = File.ReadAllText(FilePath);
+        var root = JsonNode.Parse(original)!.AsObject();
+        root[section]![property] = property == "Events" ? JsonNode.Parse(value!) : JsonValue.Create(value);
+        var invalid = root.ToJsonString();
+        File.WriteAllText(FilePath, invalid);
+        var loadError = Assert.Throws<InvalidDataException>(() => WinPilotSettings.LoadAndInitialize(FilePath));
+        Assert.Equal(message, loadError.Message);
+        Assert.Throws<InvalidDataException>(() => WinPilotSettings.Update(FilePath, current => current));
+        Assert.Equal(invalid, File.ReadAllText(FilePath));
+
+        File.WriteAllText(FilePath, original);
+        var submitted = System.Text.Json.JsonSerializer.Deserialize<WinPilotSettings>(invalid,
+            new System.Text.Json.JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } })!;
+        var saveError = Assert.Throws<InvalidDataException>(() => WinPilotSettings.Update(FilePath, _ => submitted));
+        Assert.Equal(message, saveError.Message);
+        Assert.Equal(original, File.ReadAllText(FilePath));
+        Assert.False(File.Exists(FilePath + ".tmp"));
+
+        if (section == "securityNotifications")
+            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(submitted.SecurityNotifications)).Message);
+        else if (property == "QQBotMessageFormat")
+            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.ValidateMessageFormat(submitted.Notifications)).Message);
+        else if (property == "OneBotSendTarget")
+            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => OneBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+        else
+            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+    }
+
+    [Theory]
+    [InlineData("auto", "text")]
+    [InlineData("private", "markdown")]
+    [InlineData("group", "text")]
+    public void DisabledChannelsWithoutCredentialsLoadWithValidValues(string target, string format)
+    {
+        WinPilotSettings.Update(FilePath, current => current with
+        {
+            Notifications = new() { OneBotSendTarget = target, QQBotSendTarget = target, QQBotMessageFormat = format }
+        });
+        var original = File.ReadAllText(FilePath);
+        var loaded = WinPilotSettings.LoadAndInitialize(FilePath);
+        Assert.Equal(target, loaded.Notifications.OneBotSendTarget);
+        Assert.Equal(target, loaded.Notifications.QQBotSendTarget);
+        Assert.Equal(format, loaded.Notifications.QQBotMessageFormat);
+        Assert.False(loaded.Notifications.OneBotEnabled);
+        Assert.False(loaded.Notifications.QQBotEnabled);
+        Assert.Equal("", loaded.Notifications.OneBotUserId);
+        Assert.Equal("", loaded.Notifications.QQBotClientSecret);
+        Assert.Equal(original, File.ReadAllText(FilePath));
+    }
+
+    [Fact]
+    public void AllNotificationChannelsAndEventsLoadWithoutChangingSavedValues()
+    {
+        foreach (var channel in NotificationChannelCatalog.All.Select(item => item.Id).Append(NotificationChannelCatalog.AllEnabled).Append(""))
+        {
+            var savedChannel = channel.ToUpperInvariant();
+            WinPilotSettings.Update(FilePath, current => current with
+            {
+                SecurityNotifications = new() { Channel = savedChannel, Events = Enum.GetValues<SecurityEventType>() },
+                Notifications = current.Notifications with { TelegramProxyUrl = "http://localhost:10809" }
+            });
+            var original = File.ReadAllText(FilePath);
+            var loaded = WinPilotSettings.LoadAndInitialize(FilePath);
+            Assert.Equal(savedChannel, loaded.SecurityNotifications.Channel);
+            Assert.Equal(Enum.GetValues<SecurityEventType>(), loaded.SecurityNotifications.Events);
+            Assert.Equal("http://localhost:10809", loaded.Notifications.TelegramProxyUrl);
+            Assert.Equal(original, File.ReadAllText(FilePath));
+        }
+    }
+
     [Fact]
     public void NullSectionsUseDefaultsAndAreFilledOnSave()
     {
@@ -164,25 +269,4 @@ public sealed class ConfigurationUpdateTest : IDisposable
     }
 
     public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
-
-    [Fact]
-    public void LockedTemporaryFileReportsSaveAndCleanupFailuresWithoutChangingConfiguration()
-    {
-        WinPilotSettings.LoadAndInitialize(FilePath);
-        var original = File.ReadAllText(FilePath);
-        var temporary = FilePath + ".tmp";
-        File.WriteAllText(temporary, "temporary");
-        using (var locked = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
-        {
-            var error = Assert.Throws<AggregateException>(() => WinPilotSettings.Update(FilePath, current => current with { Port = 9124 }));
-            Assert.Equal(2, error.InnerExceptions.Count);
-            Assert.All(error.InnerExceptions, exception => Assert.IsAssignableFrom<IOException>(exception));
-            Assert.Equal(original, File.ReadAllText(FilePath));
-            Assert.Equal("temporary", File.ReadAllText(temporary));
-        }
-        File.Delete(temporary);
-        WinPilotSettings.Update(FilePath, current => current with { Port = 9124 });
-        Assert.False(File.Exists(temporary));
-        Assert.Equal(9124, WinPilotSettings.LoadAndInitialize(FilePath).Port);
-    }
 }

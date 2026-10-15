@@ -10,6 +10,10 @@ internal sealed class PluginCommandReply : IPluginCommandReply, IDisposable
     private readonly SemaphoreSlim sending = new(1, 1);
     private int sequence;
     private int disposed;
+    private readonly object gate = new();
+    private int activeSends;
+    private bool cancellationCompleted;
+    private bool released;
 
     internal PluginCommandReply(Func<string, byte[]?, int, CancellationToken, Task> send, CancellationToken token)
     {
@@ -34,20 +38,38 @@ internal sealed class PluginCommandReply : IPluginCommandReply, IDisposable
 
     private async Task ReplyAsync(string text, byte[]? image)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        await sending.WaitAsync(token);
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+            activeSends++;
+        }
+        var acquired = false;
         try
         {
+            await sending.WaitAsync(token);
+            acquired = true;
             token.ThrowIfCancellationRequested();
             await send(text, image, ++sequence, token);
         }
-        finally { sending.Release(); }
+        finally
+        {
+            if (acquired) sending.Release();
+            lock (gate) { activeSends--; ReleaseIfIdle(); }
+        }
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         try { cancellation.Cancel(); }
-        finally { cancellation.Dispose(); }
+        finally { lock (gate) { cancellationCompleted = true; ReleaseIfIdle(); } }
+    }
+
+    private void ReleaseIfIdle()
+    {
+        if (disposed == 0 || !cancellationCompleted || activeSends != 0 || released) return;
+        released = true;
+        cancellation.Dispose();
+        sending.Dispose();
     }
 }

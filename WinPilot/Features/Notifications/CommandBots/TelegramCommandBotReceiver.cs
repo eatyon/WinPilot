@@ -17,8 +17,9 @@ internal sealed class TelegramCommandBotReceiver(ILogger<TelegramCommandBotServi
             await ReceiveLoopAsync(settings, client, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception)
+        catch (Exception exception)
         {
+            logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "Telegram 命令机器人连接初始化失败");
             SetStatus(Status with { State = "failed", Error = "Telegram 连接无法初始化，请检查代理和 API 地址" });
         }
     }
@@ -79,13 +80,14 @@ internal sealed class TelegramCommandBotReceiver(ILogger<TelegramCommandBotServi
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (TelegramApiException exception) when (exception.Permanent)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "Telegram 命令机器人连接无法恢复");
                 SetStatus(Status with { State = "failed", Error = exception.Message });
                 return;
             }
             catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or TelegramApiException or JsonException)
             {
                 var message = exception is TelegramApiException api ? api.Message : "无法连接 Telegram，请检查网络、代理或 API 地址，正在重连";
-                if (Status.State != "reconnecting") logger.LogWarning("Telegram 命令机器人连接中断，正在重连");
+                if (Status.State != "reconnecting") logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "Telegram 命令机器人连接中断，正在重连");
                 SetStatus(Status with { State = "reconnecting", Error = message });
                 var delay = exception is TelegramApiException rateLimit && rateLimit.RetryAfter is { } seconds
                     ? Math.Clamp(seconds, 1, 3600) : retrySeconds;
@@ -93,8 +95,9 @@ internal sealed class TelegramCommandBotReceiver(ILogger<TelegramCommandBotServi
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
                 retrySeconds = Math.Min(retrySeconds * 2, 30);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "Telegram 命令机器人接收数据失败，已停止接收");
                 SetStatus(Status with { State = "failed", Error = "Telegram 返回的数据无法处理，请检查 API 地址后重新连接" });
                 return;
             }

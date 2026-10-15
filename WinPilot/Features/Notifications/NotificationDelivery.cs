@@ -8,11 +8,11 @@ internal static class NotificationDelivery
 
     internal static async Task SendAsync(INotificationService notifications, NotificationMessage message,
         CancellationToken token, string? channel = null, bool ignoreChannelEnabled = false,
-        byte[]? imageContent = null, string? imageContentType = null)
+        byte[]? imageContent = null, string? imageContentType = null, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(message.Content) && string.IsNullOrWhiteSpace(message.ImagePath) && imageContent is null)
             throw new InvalidOperationException("请输入通知内容或通知图片");
-        var temporaryImagePath = imageContent is null ? null : await WriteTemporaryImageAsync(imageContent, imageContentType!, token);
+        var temporaryImagePath = imageContent is null ? null : await WriteTemporaryImageAsync(imageContent, imageContentType!, token, logger);
         try
         {
             var deliveryMessage = temporaryImagePath is null ? message : message with { ImagePath = temporaryImagePath };
@@ -23,11 +23,12 @@ internal static class NotificationDelivery
         finally
         {
             if (temporaryImagePath is not null)
-                DeleteTemporaryImage(temporaryImagePath);
+                DeleteTemporaryImage(temporaryImagePath, logger);
         }
     }
 
-    internal static async Task<string> WriteTemporaryImageAsync(byte[] content, string contentType, CancellationToken token)
+    internal static async Task<string> WriteTemporaryImageAsync(byte[] content, string contentType, CancellationToken token, ILogger? logger = null,
+        Func<string, byte[], CancellationToken, Task>? write = null)
     {
         if (content.Length == 0)
             throw new InvalidOperationException("通知图片不能为空");
@@ -42,12 +43,12 @@ internal static class NotificationDelivery
         var path = Path.Combine(Path.GetTempPath(), $"WinPilot-notification-{Guid.NewGuid():N}{extension}");
         try
         {
-            await File.WriteAllBytesAsync(path, content, token);
+            await (write is null ? File.WriteAllBytesAsync(path, content, token) : write(path, content, token));
             return path;
         }
         catch
         {
-            DeleteTemporaryImage(path);
+            DeleteTemporaryImage(path, logger);
             throw;
         }
     }
@@ -61,9 +62,9 @@ internal static class NotificationDelivery
             throw new InvalidOperationException($"通知发送失败：{string.Join('、', failed)}");
     }
 
-    internal static void DeleteTemporaryImage(string path)
+    internal static void DeleteTemporaryImage(string path, ILogger? logger)
     {
         try { File.Delete(path); }
-        catch { }
+        catch (Exception exception) { logger?.LogWarning(exception, "临时通知图片清理失败，文件：{Path}", path); }
     }
 }

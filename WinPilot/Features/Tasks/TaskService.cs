@@ -499,7 +499,7 @@ public sealed class TaskService : BackgroundService
             PluginNotificationImageValidator.ValidateImageSize(pluginImage);
         await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, imagePath),
             context.CancellationToken, channel: channel, ignoreChannelEnabled: !string.IsNullOrWhiteSpace(channel),
-            imageContent: image?.Content, imageContentType: image?.ContentType);
+            imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger);
     }
 
     private static (string? ImagePath, PluginImageContent? Image) ResolveNotificationImageSource(string? template, PluginTaskRunContext context)

@@ -43,15 +43,18 @@ public static class NotificationEndpointRouteBuilderExtensions
                 logger.LogInformation("通知渠道 {Channel} 设置已保存", channelName);
                 return Results.Ok(merged);
             }
+            catch (OperationCanceledException) { throw; }
             catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
             catch (Exception exception) { logger.LogError(exception, "通知设置保存失败，渠道：{Channel}", NotificationChannelCatalog.GetDisplayName(channel)); return Results.Problem(statusCode: 500, title: "通知设置保存失败", detail: "无法保存通知设置"); }
         });
         endpoints.MapPost("/api/notifications/test", async (NotificationTestRequest request, HttpContext context) =>
         {
             if (string.IsNullOrWhiteSpace(request.Channel)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["channel"] = ["请选择通知渠道"] });
+            if (!NotificationChannelCatalog.All.Any(channel => string.Equals(channel.Id, request.Channel, StringComparison.OrdinalIgnoreCase)))
+                return Results.BadRequest(new { message = "通知渠道无效" });
             if (string.IsNullOrWhiteSpace(request.Content) && string.IsNullOrWhiteSpace(request.Title)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["content"] = ["请输入测试内容"] });
             var results = await notifications.SendAsync(new NotificationMessage(request.Title ?? "WinPilot 测试通知", request.Content, request.ImagePath), context.RequestAborted, request.Channel, ignoreChannelEnabled: true);
-            if (results.Count == 0) return Results.BadRequest(new { message = "没有启用的通知渠道" });
+            if (results.Count == 0) return Results.BadRequest(new { message = "没有可用的通知渠道" });
             return Results.Ok(results);
         });
         endpoints.MapPost("/api/notifications/qqbot/bind-user", (HttpContext context) => BindQQBot(context, configurationFile, false));
@@ -70,22 +73,34 @@ public static class NotificationEndpointRouteBuilderExtensions
     private static async Task BindQQBot(HttpContext context, string configurationFile, bool group)
     {
         context.Response.ContentType = "text/event-stream";
-        var settings = WinPilotSettings.LoadAndInitialize(configurationFile).Notifications;
+        context.Response.Headers.CacheControl = "no-cache";
+        NotificationSettings settings = new();
         try
         {
+            settings = WinPilotSettings.LoadAndInitialize(configurationFile).Notifications;
             var bot = context.RequestServices.GetRequiredService<QQBotCommandBotService>();
             var id = await bot.BindAsync(settings, group,
                 (code, token) => WriteBindingEventAsync(context, new { type = "code", code }, token), context.RequestAborted);
             await WriteBindingEventAsync(context, new { type = "success", openId = id }, context.RequestAborted);
         }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { throw; }
+        catch (QQBotBindingTimeoutException)
         {
             await WriteBindingEventAsync(context, new { type = "error", message = "获取超时，请重试" }, context.RequestAborted);
         }
-        catch (Exception exception)
+        catch (QQBotBindingValidationException exception)
         {
             await WriteBindingEventAsync(context, new { type = "error", message = exception.Message }, context.RequestAborted);
+        }
+        catch (Exception exception)
+        {
+            context.RequestAborted.ThrowIfCancellationRequested();
+            var connectionFailure = exception is HttpRequestException or System.Net.WebSockets.WebSocketException or QQBotGatewayClosedException;
+            var message = connectionFailure ? "QQBot 连接失败，请检查网络和平台配置后重试" : "获取 OpenID 失败，请检查程序日志";
+            context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(NotificationEndpointRouteBuilderExtensions).FullName!)
+                .LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)),
+                    "QQBot 获取 OpenID 失败，绑定类型：{BindingType}", group ? "群聊" : "私聊");
+            await WriteBindingEventAsync(context, new { type = "error", message }, context.RequestAborted);
         }
     }
 

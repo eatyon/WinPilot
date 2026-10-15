@@ -44,7 +44,7 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
                     await NotificationDelivery.SendAsync(notifications, new NotificationMessage("", action.NotificationContent ?? ""), cancellationToken,
                         channel: string.IsNullOrWhiteSpace(channel) ? null : channel.Trim(),
                         ignoreChannelEnabled: !string.IsNullOrWhiteSpace(channel),
-                        imageContent: image?.Content, imageContentType: image?.ContentType); break;
+                        imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger); break;
                 default: throw new InvalidOperationException("Host Action 类型不支持");
             }
             logger.LogDebug("插件请求的主程序操作已完成，操作类型：{ActionName}", actionName);

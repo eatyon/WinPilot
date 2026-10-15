@@ -47,6 +47,7 @@ internal sealed class OneBotNotificationChannel(HttpClient httpClient)
     internal static (string Type, string Id)[] SelectTargets(NotificationSettings settings)
     {
         var mode = settings.OneBotSendTarget;
+        NotificationConfigurationValidator.ValidateSendTarget(mode, "OneBot");
         var candidates = mode switch
         {
             "auto" => new[] { ("private", settings.OneBotUserId), ("group", settings.OneBotGroupId) },

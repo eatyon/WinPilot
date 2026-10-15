@@ -51,7 +51,7 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
                         WriteEntry(logFile, CreateEntry(
                             DateTimeOffset.Now,
                             typeof(RollingFileLoggerProvider).FullName!,
-                            LogLevel.Information,
+                            LogLevel.Debug,
                             $"日志维护已清理 {deletedCount} 个过期或超出保留数量的日志文件",
                             null));
                     }

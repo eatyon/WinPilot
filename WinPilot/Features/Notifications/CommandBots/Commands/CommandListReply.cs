@@ -6,7 +6,7 @@ internal static class CommandListReply
 
     internal static async Task SendAsync(string title, IReadOnlyList<string> names, string usage,
         Func<string, int, Task> replyText, Func<byte[], int, Task>? replyImage,
-        ILogger logger, string channel, CancellationToken token)
+        ILogger logger, string channel, CancellationToken token, IEnumerable<string>? diagnosticSecrets = null)
     {
         var pageCount = (names.Count + PageSize - 1) / PageSize;
         var sequence = 0;
@@ -24,9 +24,10 @@ internal static class CommandListReply
                     continue;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (Exception) when (!token.IsCancellationRequested)
+                catch (Exception exception) when (!token.IsCancellationRequested)
                 {
-                    logger.LogWarning("{Channel} 命令列表图片生成或发送失败，尝试文字回复", channel);
+                    logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                        "{Channel} 命令列表图片生成或发送失败，尝试文字回复", channel);
                 }
             }
             var text = $"{heading}：\n" + string.Join("\n", items) +

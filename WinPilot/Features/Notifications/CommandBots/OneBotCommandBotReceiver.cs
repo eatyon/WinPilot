@@ -11,6 +11,7 @@ internal sealed class OneBotCommandBotReceiver(ILogger<OneBotCommandBotService> 
     {
         var options = OneBotCommandBotService.Options(configuration.CommandBots ?? new());
         var settings = configuration.Notifications ?? new();
+        var diagnosticSecrets = NotificationFailureDiagnostics.Secrets(settings, configuration.CommandBots);
         var seen = new Dictionary<string, DateTimeOffset>();
         var attempts = 0;
         while (!token.IsCancellationRequested)
@@ -40,18 +41,20 @@ internal sealed class OneBotCommandBotReceiver(ILogger<OneBotCommandBotService> 
             catch (Exception) when (token.IsCancellationRequested) { return; }
             catch (OneBotConnectionException exception) when (exception.Permanent)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "OneBot 命令机器人连接无法恢复");
                 SetStatus(Status with { State = "failed", Error = exception.Message });
                 return;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 if (connectedAt is { } timestamp && System.Diagnostics.Stopwatch.GetElapsedTime(timestamp) >= TimeSpan.FromMinutes(2)) attempts = 0;
                 if (attempts >= 100)
                 {
+                    logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "OneBot 命令机器人重连已停止：次数已达上限");
                     SetStatus(Status with { State = "failed", Error = "OneBot 自动重连次数已达上限，请检查服务后重新连接" });
                     return;
                 }
-                if (Status.State != "reconnecting") logger.LogWarning("OneBot 命令机器人连接中断，正在重连");
+                if (Status.State != "reconnecting") logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "OneBot 命令机器人连接中断，正在重连");
                 SetStatus(Status with { State = "reconnecting", Error = "OneBot 连接中断，正在重连，请检查服务、地址和网络" });
                 var seconds = Math.Min(Math.Pow(2, Math.Min(attempts++, 6)), 60);
                 try { await Task.Delay(TimeSpan.FromSeconds(seconds * (1 + Random.Shared.NextDouble() * 0.2)), token); }

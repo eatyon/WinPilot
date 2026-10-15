@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.PluginContract;
+using WinPilot.Features.Notifications;
 
 namespace WinPilot.Features.Plugins;
 
@@ -11,6 +12,7 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
     private readonly Dictionary<string, Entry> commands = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Entry> wildcardCommands = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Scope> scopes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<Task> executions = [];
     private long registrationOrder;
     private readonly ILogger logger = logger ?? NullLogger<PluginCommandRegistry>.Instance;
 
@@ -46,9 +48,8 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
             ?? (text.Length > 0 && !isReserved(text) && wildcardCommands.Values.Any(IsCurrent) ? "*" : null);
     }
 
-    internal bool IsSupportedCommand(string text) => GetCommandName(text) is not null;
-
-    internal async Task<bool> ExecuteAsync(string text, Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken token)
+    internal async Task<bool> ExecuteAsync(string text, Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken token,
+        IEnumerable<string>? diagnosticSecrets = null)
     {
         (Entry Entry, CancellationTokenSource Cancellation)? registered = null;
         (Entry Entry, CancellationTokenSource Cancellation)[] handlers = [];
@@ -64,63 +65,108 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
         }
         if (registered is not { } matched)
         {
-            await Task.WhenAll(handlers.Select(handler => ExecuteWildcardAsync(handler.Entry, handler.Cancellation, text, createReply, token)));
+            await Task.WhenAll(handlers.Select(handler => ExecuteWildcardAsync(handler.Entry, handler.Cancellation, text, createReply, token, diagnosticSecrets)));
             return handlers.Length > 0;
         }
-        using (var cancellation = matched.Cancellation)
+        var cancellation = matched.Cancellation;
+        IPluginCommandReply reply;
+        try { cancellation.Token.ThrowIfCancellationRequested(); reply = createReply(cancellation.Token); }
+        catch { cancellation.Dispose(); throw; }
+        var closed = 0;
+        void CloseReply()
         {
-            var entry = matched.Entry;
-            cancellation.Token.ThrowIfCancellationRequested();
-            var reply = createReply(cancellation.Token);
-            try
-            {
-                await entry.Handler(new(entry.Command.Definition.Name, text[entry.Command.Definition.Name.Length..].Trim(), reply), cancellation.Token);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            if (Interlocked.Exchange(ref closed, 1) != 0) return;
+            try { (reply as IDisposable)?.Dispose(); }
             catch (Exception exception)
             {
-                logger.LogWarning("插件「{PluginName}」命令「{Name}」处理失败，异常类型：{ErrorType}",
-                    entry.Command.PluginDisplayName, entry.Command.Definition.Name, exception.GetType().Name);
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "插件「{PluginName}」命令回复清理失败", matched.Entry.Command.PluginDisplayName);
                 throw;
             }
-            finally { (reply as IDisposable)?.Dispose(); }
         }
+        await TrackExecution(() => InvokeHandlerAsync(matched.Entry, cancellation, text, reply, CloseReply, false, diagnosticSecrets));
         return true;
     }
 
     private async Task ExecuteWildcardAsync(Entry entry, CancellationTokenSource cancellation, string text,
-        Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken callerToken)
+        Func<CancellationToken, IPluginCommandReply> createReply, CancellationToken callerToken, IEnumerable<string>? diagnosticSecrets)
     {
-        using (cancellation)
+        cancellation.CancelAfter(TimeSpan.FromSeconds(60));
+        var executionToken = cancellation.Token;
+        IPluginCommandReply? reply = null;
+        Task? actual = null;
+        var closed = 0;
+        void CloseReply()
         {
-            cancellation.CancelAfter(TimeSpan.FromSeconds(60));
-            var executionToken = cancellation.Token;
-            IPluginCommandReply? reply = null;
-            try
-            {
-                executionToken.ThrowIfCancellationRequested();
-                reply = createReply(executionToken);
-                await Task.Run(() => entry.Handler(new("*", text, reply), executionToken), executionToken)
-                    .WaitAsync(executionToken);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                if (!callerToken.IsCancellationRequested && !entry.Cancellation.IsCancellationRequested)
-                    logger.LogWarning("插件「{PluginName}」通配命令处理或发送回复超时", entry.Command.PluginDisplayName);
-            }
+            if (Interlocked.Exchange(ref closed, 1) != 0) return;
+            try { (reply as IDisposable)?.Dispose(); }
             catch (Exception exception)
             {
-                logger.LogWarning("插件「{PluginName}」通配命令处理失败，异常类型：{ErrorType}", entry.Command.PluginDisplayName, exception.GetType().Name);
-            }
-            finally
-            {
-                try { (reply as IDisposable)?.Dispose(); }
-                catch (Exception exception)
-                {
-                    logger.LogWarning("插件「{PluginName}」通配命令回复清理失败，异常类型：{ErrorType}", entry.Command.PluginDisplayName, exception.GetType().Name);
-                }
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "插件「{PluginName}」通配命令回复清理失败", entry.Command.PluginDisplayName);
             }
         }
+        try
+        {
+            executionToken.ThrowIfCancellationRequested();
+            reply = createReply(executionToken);
+            actual = TrackExecution(() => InvokeHandlerAsync(entry, cancellation, text, reply, CloseReply, true, diagnosticSecrets));
+            await actual.WaitAsync(executionToken);
+        }
+        catch (OperationCanceledException) when (executionToken.IsCancellationRequested)
+        {
+            if (!callerToken.IsCancellationRequested && !entry.Cancellation.IsCancellationRequested)
+                logger.LogWarning("插件「{PluginName}」通配命令处理或发送回复超时", entry.Command.PluginDisplayName);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "插件「{PluginName}」通配命令处理失败", entry.Command.PluginDisplayName);
+        }
+        finally
+        {
+            CloseReply();
+            if (actual is null) cancellation.Dispose();
+        }
+    }
+
+    private Task TrackExecution(Func<Task> invoke)
+    {
+        var started = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = started.Task.Unwrap();
+        lock (gate) executions.Add(execution);
+        _ = execution.ContinueWith(completed =>
+        {
+            _ = completed.Exception;
+            lock (gate) executions.Remove(completed);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        try { started.TrySetResult(invoke()); }
+        catch (Exception exception) { started.TrySetException(exception); }
+        return execution;
+    }
+
+    private async Task InvokeHandlerAsync(Entry entry, CancellationTokenSource cancellation, string text, IPluginCommandReply reply,
+        Action closeReply, bool wildcard, IEnumerable<string>? diagnosticSecrets)
+    {
+        var token = cancellation.Token;
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            var context = new PluginCommandContext(entry.Command.Definition.Name,
+                wildcard ? text : text[entry.Command.Definition.Name.Length..].Trim(), reply);
+            if (wildcard) await Task.Run(() => entry.Handler(context, token), token);
+            else await entry.Handler(context, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            if (wildcard)
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "插件「{PluginName}」通配命令处理失败", entry.Command.PluginDisplayName);
+            else
+            {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "插件「{PluginName}」命令「{Name}」处理失败",
+                    entry.Command.PluginDisplayName, entry.Command.Definition.Name);
+                throw;
+            }
+        }
+        finally { try { closeReply(); } finally { cancellation.Dispose(); } }
     }
 
     private bool IsCurrent(Entry entry) => scopes.TryGetValue(entry.Scope.PluginId, out var scope) && ReferenceEquals(scope, entry.Scope);
@@ -202,7 +248,7 @@ public sealed class PluginCommandRegistry(Func<string, bool> isReserved, ILogger
     private void Cancel(Entry entry)
     {
         try { entry.Cancellation.Cancel(); }
-        catch (AggregateException) { logger.LogWarning("插件「{PluginName}」命令取消回调异常，命令：{Name}", entry.Command.PluginDisplayName, entry.Command.Definition.Name); }
+        catch (AggregateException exception) { logger.LogWarning(NotificationFailureDiagnostics.Redact(exception), "插件「{PluginName}」命令取消回调异常，命令：{Name}", entry.Command.PluginDisplayName, entry.Command.Definition.Name); }
         finally { entry.Cancellation.Dispose(); }
     }
 

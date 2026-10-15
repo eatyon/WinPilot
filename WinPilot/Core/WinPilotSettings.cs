@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using WinPilot.Features.Notifications;
 
 namespace WinPilot.Core;
 
@@ -65,7 +66,7 @@ public sealed record WinPilotSettings
     {
         if (!File.Exists(configurationFile))
         {
-            var defaults = new WinPilotSettings();
+            var defaults = NormalizeAndValidate(new());
             WriteConfiguration(configurationFile, defaults);
             return defaults;
         }
@@ -90,13 +91,23 @@ public sealed record WinPilotSettings
         if (settings is null || settings.Port is < 1 or > 65535 || !Enum.IsDefined(settings.StartupMode)
             || settings.Updates is { IsValid: false })
             throw new InvalidDataException("配置内容不符合当前 WinPilot 版本要求");
-        return settings with
+        var normalized = settings with
         {
             Notifications = settings.Notifications ?? new(),
             CommandBots = settings.CommandBots ?? new(),
             SecurityNotifications = settings.SecurityNotifications ?? new(),
             Updates = settings.Updates ?? new()
         };
+        try
+        {
+            NotificationConfigurationValidator.Validate(normalized.Notifications);
+            NotificationConfigurationValidator.Validate(normalized.SecurityNotifications);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidDataException(exception.Message, exception);
+        }
+        return normalized;
     }
 
     private static void WriteConfiguration(string configurationFile, WinPilotSettings settings)

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -13,6 +14,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
+using WinPilot.Core.Notifications;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Web;
@@ -21,6 +23,235 @@ namespace WinPilot.Test;
 
 public sealed class NotificationChannelTest
 {
+    [Theory]
+    [InlineData("onebot", "unknown", "text", "OneBot 发送目标无效")]
+    [InlineData("qqbot", "unknown", "text", "QQBot 发送目标无效")]
+    [InlineData("qqbot", "auto", "unknown", "QQBot 消息格式无效")]
+    [InlineData("onebot", "private", "text", "OneBot 未配置私聊发送对象")]
+    [InlineData("qqbot", "group", "text", "QQBot 未配置群聊发送对象")]
+    [InlineData("onebot", "auto", "text", null)]
+    [InlineData("qqbot", "auto", "markdown", null)]
+    public async Task SaveEndpointPreservesValueAndRecipientValidation(string channel, string target, string format, string? error)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Notification.Endpoint.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile);
+            var original = File.ReadAllText(paths.ConfigurationFile);
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Services.AddSingleton<CommandBotConfiguration>();
+            await using var app = builder.Build();
+            app.MapNotificationEndpoints(paths.ConfigurationFile, new EndpointNotifications());
+            await app.StartAsync();
+            using var client = app.GetTestClient();
+            using var request = new HttpRequestMessage(HttpMethod.Patch, $"/api/settings/notifications/{channel}")
+            {
+                Content = JsonContent.Create(new NotificationSettings
+                {
+                    OneBotSendTarget = target, QQBotSendTarget = target, QQBotMessageFormat = format
+                })
+            };
+            using var response = await client.SendAsync(request);
+            Assert.Equal(error is null ? HttpStatusCode.OK : HttpStatusCode.BadRequest, response.StatusCode);
+            if (error is not null)
+            {
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.Equal(error, json.RootElement.GetProperty("message").GetString());
+                Assert.Equal(original, File.ReadAllText(paths.ConfigurationFile));
+            }
+            else
+            {
+                var saved = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
+                Assert.Equal(target, channel == "onebot" ? saved.OneBotSendTarget : saved.QQBotSendTarget);
+                if (channel == "qqbot") Assert.Equal(format, saved.QQBotMessageFormat);
+                Assert.False(saved.OneBotEnabled);
+                Assert.False(saved.QQBotEnabled);
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(null, "请选择通知渠道")]
+    [InlineData(" ", "请选择通知渠道")]
+    [InlineData("unknown", "通知渠道无效")]
+    [InlineData("all-enabled", "通知渠道无效")]
+    [InlineData(" Windows ", "通知渠道无效")]
+    public async Task TestEndpointRejectsInvalidChannelsBeforeSending(string? channel, string error)
+    {
+        var notifications = new EndpointNotifications();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<CommandBotConfiguration>();
+        await using var app = builder.Build();
+        app.MapNotificationEndpoints("unused.json", notifications);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/notifications/test", new { channel, title = "test", content = "content" });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        if (string.IsNullOrWhiteSpace(channel))
+        {
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(error, json.RootElement.GetProperty("errors").GetProperty("channel")[0].GetString());
+        }
+        else Assert.Equal(error, json.RootElement.GetProperty("message").GetString());
+        Assert.Equal(0, notifications.Calls);
+    }
+
+    [Theory]
+    [InlineData("windows")]
+    [InlineData("WEBHOOK")]
+    [InlineData("telegram")]
+    [InlineData("WORKWEIXIN")]
+    [InlineData("feishu")]
+    [InlineData("ONEBOT")]
+    [InlineData("qqbot")]
+    public async Task TestEndpointAcceptsCatalogChannelsIgnoringCaseAndPreservesSuccessfulResponse(string channel)
+    {
+        var notifications = new EndpointNotifications { Results = [new(channel, true)] };
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<CommandBotConfiguration>();
+        await using var app = builder.Build();
+        app.MapNotificationEndpoints("unused.json", notifications);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/notifications/test", new { channel, title = "test", content = "content" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(channel, Assert.Single(json.RootElement.EnumerateArray()).GetProperty("channel").GetString());
+        Assert.True(json.RootElement[0].GetProperty("succeeded").GetBoolean());
+        Assert.Equal(1, notifications.Calls);
+        Assert.Equal(channel, notifications.Channel);
+        Assert.True(notifications.IgnoreChannelEnabled);
+        Assert.Equal(new NotificationMessage("test", "content"), notifications.Message);
+    }
+
+    [Fact]
+    public async Task TestEndpointDistinguishesValidChannelWithNoAvailableDelivery()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<CommandBotConfiguration>();
+        var notifications = new EndpointNotifications();
+        await using var app = builder.Build();
+        app.MapNotificationEndpoints("unused.json", notifications);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/notifications/test", new { channel = "Windows", title = "test", content = "content" });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("没有可用的通知渠道", json.RootElement.GetProperty("message").GetString());
+        Assert.Equal(1, notifications.Calls);
+    }
+
+    [Fact]
+    public async Task SaveEndpointPropagatesCancellationWhileWaitingForConfigurationGate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Notification.Endpoint.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile);
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Services.AddSingleton<CommandBotConfiguration>();
+            await using var app = builder.Build();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completed = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            app.Use(async (context, next) =>
+            {
+                var handling = next(context);
+                entered.TrySetResult();
+                try { await handling; completed.TrySetResult(null); }
+                catch (Exception exception) { completed.TrySetResult(exception); throw; }
+            });
+            app.MapNotificationEndpoints(paths.ConfigurationFile, new EndpointNotifications());
+            await app.StartAsync();
+            var configuration = app.Services.GetRequiredService<CommandBotConfiguration>();
+            await configuration.Gate.WaitAsync();
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var client = app.GetTestClient();
+            using var request = new HttpRequestMessage(HttpMethod.Patch, "/api/settings/notifications/windows")
+            {
+                Content = JsonContent.Create(new NotificationSettings { WindowsEnabled = true })
+            };
+            var sending = client.SendAsync(request, cancellation.Token);
+            try
+            {
+                await entered.Task.WaitAsync(cancellation.Token);
+                Assert.False(completed.Task.IsCompleted);
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sending);
+                Assert.IsAssignableFrom<OperationCanceledException>(await completed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+                Assert.False(WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications.WindowsEnabled);
+            }
+            finally { cancellation.Cancel(); configuration.Gate.Release(); }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QQBotBindingStreamDisablesCachingAndPreservesEvents(bool group)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Notification.Endpoint.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(root);
+            WinPilotSettings.Update(paths.ConfigurationFile, current => current with
+            {
+                Notifications = current.Notifications with { QQBotAppId = "app", QQBotClientSecret = "secret" }
+            });
+            using var configuration = new CommandBotConfiguration();
+            await using var bot = new QQBotCommandBotService(paths, NullLogger<QQBotCommandBotService>.Instance, configuration,
+                (_, _, _, _, _) => throw new InvalidOperationException("不应建立真实连接"),
+                async (_, receivedGroup, report, token) =>
+                {
+                    Assert.Equal(group, receivedGroup);
+                    await report("test-code", token);
+                    return "test-openid";
+                });
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Services.AddSingleton(configuration);
+            builder.Services.AddSingleton(bot);
+            await using var app = builder.Build();
+            app.MapNotificationEndpoints(paths.ConfigurationFile, new EndpointNotifications());
+            await app.StartAsync();
+            using var client = app.GetTestClient();
+            using var response = await client.PostAsync($"/api/notifications/qqbot/bind-{(group ? "group" : "user")}", null);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+            Assert.True(response.Headers.CacheControl?.NoCache);
+            Assert.Equal(new[] { "data: {\"type\":\"code\",\"code\":\"test-code\"}", "data: {\"type\":\"success\",\"openId\":\"test-openid\"}" },
+                (await response.Content.ReadAsStringAsync()).Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private sealed class EndpointNotifications : INotificationService
+    {
+        public IReadOnlyList<NotificationChannelResult> Results { get; init; } = [];
+        public int Calls { get; private set; }
+        public string? Channel { get; private set; }
+        public NotificationMessage? Message { get; private set; }
+        public bool IgnoreChannelEnabled { get; private set; }
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default,
+            string? channel = null, bool ignoreChannelEnabled = false)
+        {
+            Calls++;
+            Channel = channel;
+            Message = message;
+            IgnoreChannelEnabled = ignoreChannelEnabled;
+            return Task.FromResult(Results);
+        }
+    }
+
     [Fact]
     public async Task ChannelOptionsEndpointUsesCatalogWithoutInitializingSettings()
     {
@@ -60,14 +291,12 @@ public sealed class NotificationChannelTest
         using var service = new NotificationService(
             PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
             NullLogger<NotificationService>.Instance);
-        var send = typeof(NotificationService).GetMethod("SendChannel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         Func<Task> timeout = () => Task.FromException(new OperationCanceledException());
-        var result = await (Task<WinPilot.Core.Notifications.NotificationChannelResult>)send.Invoke(service, ["Webhook", timeout, CancellationToken.None])!;
+        var result = await service.SendChannel("Webhook", timeout, CancellationToken.None);
         Assert.False(result.Succeeded);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            (Task<WinPilot.Core.Notifications.NotificationChannelResult>)send.Invoke(service, ["Webhook", timeout, cancellation.Token])!);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.SendChannel("Webhook", timeout, cancellation.Token));
     }
 
     [Theory]

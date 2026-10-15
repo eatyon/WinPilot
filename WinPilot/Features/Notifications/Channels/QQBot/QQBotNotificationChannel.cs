@@ -91,8 +91,7 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
 
     internal static void ValidateMessageFormat(NotificationSettings settings)
     {
-        if (settings.QQBotMessageFormat is not ("text" or "markdown"))
-            throw new InvalidOperationException("QQBot 消息格式无效");
+        NotificationConfigurationValidator.ValidateQQBotMessageFormat(settings.QQBotMessageFormat);
     }
 
     private static Dictionary<string, object> CreateTextPayload(NotificationSettings settings, string text,
@@ -184,6 +183,7 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
     internal static (string Type, string Id)[] SelectTargets(NotificationSettings settings)
     {
         var mode = settings.QQBotSendTarget;
+        NotificationConfigurationValidator.ValidateSendTarget(mode, "QQBot");
         var candidates = mode switch
         {
             "auto" => new[] { ("private", settings.QQBotOpenId), ("group", settings.QQBotGroupOpenId) },

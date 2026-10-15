@@ -164,7 +164,7 @@ public sealed class CommandReplyTest
                 ? Enumerable.Range(0, 200).Select(index => new SystemResourceUsage($"GPU {index}", 0)).ToArray()
                 : [], []));
         var logger = new CommandBotTestObserver();
-        using var processor = new CommandProcessor("Test", new(), logger, systemMonitor: monitor);
+        using var processor = new CommandProcessor("Test", new() { TelegramBotToken = "secret-token", QQBotClientSecret = "secret-path" }, logger, systemMonitor: monitor);
         var replies = new List<(string Text, byte[]? Image)>();
         await processor.ProcessAsync(new("origin", "sender", "系统状态")
         {
@@ -182,6 +182,7 @@ public sealed class CommandReplyTest
         var warning = Assert.Single(logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
         Assert.Contains($"{stage}失败", warning.Message);
         Assert.DoesNotContain("secret-", warning.Message);
+        Assert.DoesNotContain("secret-", Assert.Single(logger.Diagnostics));
         Assert.DoesNotContain("secret-", replies[^1].Text);
     }
 
@@ -189,7 +190,7 @@ public sealed class CommandReplyTest
     public async Task FailedTextFallbackDoesNotRetryOrLogSuccess()
     {
         var logger = new CommandBotTestObserver();
-        using var processor = new CommandProcessor("Test", new(), logger);
+        using var processor = new CommandProcessor("Test", new() { TelegramBotToken = "secret-token" }, logger);
         var calls = 0;
         await processor.ProcessAsync(new("origin", "sender", "帮助")
         {
@@ -199,6 +200,8 @@ public sealed class CommandReplyTest
         Assert.Contains(logger.Entries, entry => entry.Message.Contains("图片发送失败"));
         Assert.Contains(logger.Entries, entry => entry.Message.Contains("处理或发送回复失败"));
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("命令已处理") || entry.Message.Contains("secret-token"));
+        Assert.Equal(2, logger.Diagnostics.Count);
+        Assert.DoesNotContain(logger.Diagnostics, details => details.Contains("secret-token", StringComparison.Ordinal));
     }
 
     [Fact]

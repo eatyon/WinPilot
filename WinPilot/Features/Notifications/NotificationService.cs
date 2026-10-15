@@ -32,28 +32,30 @@ public sealed class NotificationService : INotificationService, IDisposable
         bool ignoreChannelEnabled = false)
     {
         var settings = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
+        var secrets = NotificationFailureDiagnostics.Secrets(settings);
         var channels = new List<Task<NotificationChannelResult>>();
         if (IsSelected(channel, NotificationChannelCatalog.Webhook) && (ignoreChannelEnabled || settings.WebhookEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Webhook, () => webhook.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.Webhook, () => webhook.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.Telegram) && (ignoreChannelEnabled || settings.TelegramEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Telegram, () => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.Telegram, () => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.WorkWeixin) && (ignoreChannelEnabled || settings.WorkWeixinEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.WorkWeixin, () => workWeixin.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.WorkWeixin, () => workWeixin.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.Windows) && (ignoreChannelEnabled || settings.WindowsEnabled))
-            channels.Insert(0, SendChannel(NotificationChannelCatalog.Windows, () => WindowsNotificationChannel.SendAsync(message, cancellationToken), cancellationToken));
+            channels.Insert(0, SendChannel(NotificationChannelCatalog.Windows, () => WindowsNotificationChannel.SendAsync(message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.Feishu) && (ignoreChannelEnabled || settings.FeishuEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Feishu, () => feishu.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.Feishu, () => feishu.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.OneBot) && (ignoreChannelEnabled || settings.OneBotEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.OneBot, () => oneBot.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.OneBot, () => oneBot.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         if (IsSelected(channel, NotificationChannelCatalog.QQBot) && (ignoreChannelEnabled || settings.QQBotEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.QQBot, () => qqbot.SendAsync(settings, message, cancellationToken), cancellationToken));
+            channels.Add(SendChannel(NotificationChannelCatalog.QQBot, () => qqbot.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
         return await Task.WhenAll(channels);
     }
 
     private static bool IsSelected(string? selected, string channel) =>
         string.IsNullOrWhiteSpace(selected) || string.Equals(selected, channel, StringComparison.OrdinalIgnoreCase);
 
-    private async Task<NotificationChannelResult> SendChannel(string id, Func<Task> send, CancellationToken cancellationToken)
+    internal async Task<NotificationChannelResult> SendChannel(string id, Func<Task> send, CancellationToken cancellationToken,
+        IEnumerable<string>? secrets = null)
     {
         var name = NotificationChannelCatalog.GetDisplayName(id);
         try
@@ -74,7 +76,7 @@ public sealed class NotificationService : INotificationService, IDisposable
                 InvalidOperationException => "配置不完整或渠道接口返回失败",
                 _ => exception.GetType().Name
             };
-            logger.LogError("通知渠道 {Channel} 发送失败：{Reason}", name, reason);
+            logger.LogError(NotificationFailureDiagnostics.Redact(exception, secrets), "通知渠道 {Channel} 发送失败：{Reason}", name, reason);
             return new(name, false, "发送失败");
         }
     }

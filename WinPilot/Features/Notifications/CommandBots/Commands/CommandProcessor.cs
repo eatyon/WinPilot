@@ -11,7 +11,7 @@ namespace WinPilot.Features.Notifications.CommandBots.Commands;
 internal sealed class CommandProcessor(string channel, NotificationSettings settings, ILogger logger,
     DesktopScreenshotService? screenshots = null, ISystemResourceMonitor? systemMonitor = null,
     ProgramTagService? tags = null, IProgramManager? programs = null, TaskService? tasks = null,
-    PluginCommandRegistry? pluginCommands = null) : IDisposable
+    PluginCommandRegistry? pluginCommands = null, CommandBotSettings? botSettings = null, TimeProvider? clock = null) : IDisposable
 {
     internal enum CommandKind { Help, SystemStatus, DesktopScreenshot, LaunchTag, RunTask }
     internal sealed record CommandDefinition(string Name, string Description, CommandKind Kind, string? Parameters = null)
@@ -31,6 +31,7 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
     private HttpClient? telegramClient;
     private QQBotNotificationChannel? qqbot;
     private FeishuNotificationChannel? feishu;
+    private readonly string[] diagnosticSecrets = NotificationFailureDiagnostics.Secrets(settings, botSettings);
 
     internal static bool IsSupportedCommand(string command) => FindCommand(command) is not null;
     internal static string? GetCommandName(string command) => FindCommand(command)?.Name;
@@ -62,8 +63,8 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
         if (command is null && pluginCommandName is null) return;
         var loggedCommand = FormatCommandForLog(command?.Name ?? pluginCommandName!, message.Content);
         token.ThrowIfCancellationRequested();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60), clock ?? TimeProvider.System);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
         if (command is null)
         {
             var sending = new SemaphoreSlim(1, 1);
@@ -80,8 +81,12 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
             }
             try
             {
-                var handled = await pluginCommands!.ExecuteAsync(message.Content,
-                    replyToken => new PluginCommandReply(SendPluginReplyAsync, replyToken), timeout.Token).WaitAsync(timeout.Token);
+                var executing = pluginCommands!.ExecuteAsync(message.Content,
+                    replyToken => new PluginCommandReply(SendPluginReplyAsync, replyToken), timeout.Token,
+                    diagnosticSecrets);
+                _ = executing.ContinueWith(completed => _ = completed.Exception, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                var handled = await executing.WaitAsync(timeout.Token);
                 timeout.Token.ThrowIfCancellationRequested();
                 if (handled) logger.LogInformation("{Channel} 插件命令已处理：{Command}", channel, loggedCommand);
             }
@@ -105,13 +110,13 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
                 await CommandHelpReply.SendAsync(prefix, pluginCommands?.GetAll() ?? [],
                     (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token),
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token),
-                    logger, channel, timeout.Token);
+                    logger, channel, timeout.Token, diagnosticSecrets);
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
                 return;
             }
             if (command.Kind == CommandKind.RunTask)
             {
-                await new RunTaskCommand(tasks, logger, channel).ExecuteAsync(message.Content.Trim()[command.Name.Length..], prefix,
+                await new RunTaskCommand(tasks, logger, channel, diagnosticSecrets).ExecuteAsync(message.Content.Trim()[command.Name.Length..], prefix,
                     (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token), timeout.Token,
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token));
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
@@ -120,7 +125,7 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
             if (command.Kind == CommandKind.LaunchTag)
             {
                 var argument = message.Content.Trim()[command.Name.Length..];
-                await new LaunchTagCommand(tags, programs, logger, channel).ExecuteAsync(argument, prefix,
+                await new LaunchTagCommand(tags, programs, logger, channel, diagnosticSecrets).ExecuteAsync(argument, prefix,
                     (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token), timeout.Token,
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token));
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
@@ -151,8 +156,8 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
             }
             catch (Exception exception) when (!timeout.IsCancellationRequested)
             {
-                logger.LogWarning("{Channel}「{Command}」命令{Stage}失败，尝试改用文字回复，异常类型：{ErrorType}",
-                    channel, command.Name, stage, exception.GetType().Name);
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                    "{Channel}「{Command}」命令{Stage}失败，尝试改用文字回复", channel, command.Name, stage);
                 await SendAsync(message, text, null, 2, timeout.Token);
             }
             logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
@@ -164,11 +169,23 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
         }
         catch (Exception exception)
         {
-            logger.LogWarning("{Channel}「{Command}」命令处理或发送回复失败，异常类型：{ErrorType}", channel, command.Name, exception.GetType().Name);
+            logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                "{Channel}「{Command}」命令处理或发送回复失败", channel, command.Name);
         }
     }
 
-    private Task SendAsync(CommandBotMessage message, string text, byte[]? image, int sequence, CancellationToken token)
+    private readonly object resourcesGate = new();
+    private int activeSends;
+    private bool disposed;
+
+    private async Task SendAsync(CommandBotMessage message, string text, byte[]? image, int sequence, CancellationToken token)
+    {
+        lock (resourcesGate) { ObjectDisposedException.ThrowIf(disposed, this); activeSends++; }
+        try { await SendCoreAsync(message, text, image, sequence, token).ConfigureAwait(false); }
+        finally { lock (resourcesGate) { activeSends--; if (disposed && activeSends == 0) ReleaseResources(); } }
+    }
+
+    private Task SendCoreAsync(CommandBotMessage message, string text, byte[]? image, int sequence, CancellationToken token)
     {
         if (message.Reply is { } reply) return reply(text, image, token);
         if (channel == "Telegram")
@@ -184,6 +201,16 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
     }
 
     public void Dispose()
+    {
+        lock (resourcesGate)
+        {
+            if (disposed) return;
+            disposed = true;
+            if (activeSends == 0) ReleaseResources();
+        }
+    }
+
+    private void ReleaseResources()
     {
         qqbot?.Dispose();
         feishu?.Dispose();

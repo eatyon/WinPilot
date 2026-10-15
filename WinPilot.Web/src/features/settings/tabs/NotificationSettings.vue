@@ -21,7 +21,7 @@ const defaultSettings: NotificationSettings = {
   telegramBotToken: '',
   telegramChatId: '',
   telegramApiBaseUrl: '',
-  telegramProxyUrl: 'http://127.0.0.1:10809',
+  telegramProxyUrl: 'http://127.0.0.1:7890',
   telegramProxyEnabled: false,
   workWeixinEnabled: false,
   workWeixinWebhookUrl: '',

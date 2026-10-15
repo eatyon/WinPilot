@@ -175,6 +175,37 @@ public sealed class TelegramCommandBotTest
     }
 
     [Fact]
+    public async Task ConsecutiveReconnectFailuresHaveOneDiagnosticAndStopIsQuiet()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.ErrorCode = 503;
+        await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
+        await fixture.SecondError.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
+        var warnings = fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
+        var warning = Assert.Single(warnings);
+        var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Contains("TelegramApiException", diagnostic);
+        Assert.Contains("503", diagnostic);
+        Assert.DoesNotContain("123:mock", diagnostic);
+        Assert.DoesNotContain("123:mock", warning.Message);
+    }
+
+    [Fact]
+    public async Task PermanentTelegramFailureHasOneDiagnosticAndExistingStateSummary()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.ErrorCode = 401;
+        await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
+        await fixture.WaitForState("failed");
+        var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Contains("TelegramApiException", diagnostic);
+        Assert.DoesNotContain("123:mock", diagnostic);
+        Assert.Contains(fixture.Logger.Entries, entry => entry.Message.Contains("连接无法恢复", StringComparison.Ordinal));
+        Assert.Contains(fixture.Logger.Entries, entry => entry.Message.Contains("连接失败，已停止接收", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task OtherSettingsSavesPreserveBotAndStartupRestoresEnabledState()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -242,6 +273,8 @@ public sealed class TelegramCommandBotTest
         public Channel<object[]> Updates { get; } = Channel.CreateUnbounded<object[]>();
         public System.Collections.Concurrent.ConcurrentBag<string> Methods { get; } = [];
         public volatile int ErrorCode;
+        public TaskCompletionSource SecondError { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int errorRequests;
 
         private Fixture(WebApplication app, string directory)
         {
@@ -259,7 +292,11 @@ public sealed class TelegramCommandBotTest
             app.MapPost("/bot{token}/{method}", async (HttpContext context, string method) =>
             {
                 fixture.Methods.Add(method);
-                if (fixture.ErrorCode != 0) return Results.StatusCode(fixture.ErrorCode);
+                if (fixture.ErrorCode != 0)
+                {
+                    if (Interlocked.Increment(ref fixture.errorRequests) == 2) fixture.SecondError.TrySetResult();
+                    return Results.StatusCode(fixture.ErrorCode);
+                }
                 if (method == "getMe") return Results.Json(new { ok = true, result = new { id = 1, username = "test_bot" } });
                 if (method == "getWebhookInfo") return Results.Json(new { ok = true, result = new { url = "" } });
                 using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);

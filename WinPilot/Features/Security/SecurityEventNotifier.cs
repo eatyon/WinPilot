@@ -5,13 +5,31 @@ using WinPilot.Features.Notifications;
 
 namespace WinPilot.Features.Security;
 
-public sealed class SecurityEventNotifier(PortableDataPaths paths, INotificationService notifications, ILogger<SecurityEventNotifier> logger)
+public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
 {
+    private readonly PortableDataPaths paths;
+    private readonly INotificationService notifications;
+    private readonly ILogger<SecurityEventNotifier> logger;
+    private readonly object deliveryGate = new();
+    private readonly HashSet<Task> deliveries = [];
+    private readonly CancellationTokenSource stoppingCancellation = new();
+    private readonly CancellationTokenRegistration stoppingRegistration;
+    private Task cancellation = Task.CompletedTask;
+    private Task? disposal;
+    private bool stopping;
     private static readonly TimeSpan LoginFailureNotificationInterval = TimeSpan.FromMinutes(5);
     private readonly ConcurrentDictionary<string, DateTimeOffset> loginFailureNotifications = new(StringComparer.Ordinal);
     private long nextFailureCleanupUtcTicks;
     private bool? authConfigured;
     private readonly object authStateGate = new();
+
+    public SecurityEventNotifier(PortableDataPaths paths, INotificationService notifications, ILogger<SecurityEventNotifier> logger, IHostApplicationLifetime? lifetime = null)
+    {
+        this.paths = paths;
+        this.notifications = notifications;
+        this.logger = logger;
+        stoppingRegistration = lifetime?.ApplicationStopping.Register(RequestStop) ?? default;
+    }
 
     public bool ObserveAuthConfiguration(bool configured) => ObserveAuthConfiguration(configured, null);
 
@@ -35,7 +53,19 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
         try
         {
             var settings = notificationSettings ?? LoadSettings();
-            if (allowNotification && ShouldNotify(type, sourceIp, settings)) _ = NotifySafelyAsync(type, sourceIp, isLoopback, lockoutDuration, enabled, settings);
+            if (allowNotification && ShouldNotify(type, sourceIp, settings))
+            {
+                TaskCompletionSource completion;
+                CancellationToken token;
+                lock (deliveryGate)
+                {
+                    if (stopping) return;
+                    completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    deliveries.Add(completion.Task);
+                    token = stoppingCancellation.Token;
+                }
+                _ = CompleteDeliveryAsync(completion, type, sourceIp, isLoopback, lockoutDuration, enabled, settings, token);
+            }
         }
         catch (Exception exception)
         {
@@ -45,17 +75,14 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
 
     public static SecurityNotificationSettings Validate(SecurityNotificationSettings settings)
     {
+        NotificationConfigurationValidator.Validate(settings);
         var events = (settings.Events ?? []).Distinct().ToList();
-        if (events.Any(type => !Enum.IsDefined(type))) throw new InvalidOperationException("安全事件类型无效");
         if (events.Contains(SecurityEventType.PasswordSet) || events.Contains(SecurityEventType.PasswordChanged))
         {
             if (!events.Contains(SecurityEventType.PasswordSet)) events.Add(SecurityEventType.PasswordSet);
             if (!events.Contains(SecurityEventType.PasswordChanged)) events.Add(SecurityEventType.PasswordChanged);
         }
         var channel = (settings.Channel ?? "").Trim().ToLowerInvariant();
-        if (channel.Length > 0 && channel != NotificationChannelCatalog.AllEnabled
-            && !NotificationChannelCatalog.All.Any(item => item.Id.Equals(channel, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("安全通知渠道无效");
         return settings with { Events = events, Channel = channel };
     }
 
@@ -83,19 +110,84 @@ public sealed class SecurityEventNotifier(PortableDataPaths paths, INotification
             : false;
     }
 
-    private async Task NotifySafelyAsync(SecurityEventType type, string? sourceIp, bool? isLoopback, TimeSpan? lockoutDuration, bool? enabled, SecurityNotificationSettings settings)
+    private async Task CompleteDeliveryAsync(TaskCompletionSource completion, SecurityEventType type, string? sourceIp, bool? isLoopback,
+        TimeSpan? lockoutDuration, bool? enabled, SecurityNotificationSettings settings, CancellationToken token)
+    {
+        try { await NotifySafelyAsync(type, sourceIp, isLoopback, lockoutDuration, enabled, settings, token).ConfigureAwait(false); }
+        finally
+        {
+            lock (deliveryGate) { completion.TrySetResult(); deliveries.Remove(completion.Task); }
+        }
+    }
+
+    private async Task NotifySafelyAsync(SecurityEventType type, string? sourceIp, bool? isLoopback, TimeSpan? lockoutDuration, bool? enabled, SecurityNotificationSettings settings, CancellationToken token)
     {
         try
         {
+            token.ThrowIfCancellationRequested();
             var message = new NotificationMessage("WinPilot 安全事件", Describe(type, sourceIp, isLoopback, lockoutDuration, enabled), Event: $"Security.{type}");
             var allEnabled = settings.Channel == NotificationChannelCatalog.AllEnabled;
-            var results = await notifications.SendAsync(message, channel: allEnabled ? null : settings.Channel, ignoreChannelEnabled: !allEnabled).ConfigureAwait(false);
+            var results = await notifications.SendAsync(message, token, channel: allEnabled ? null : settings.Channel, ignoreChannelEnabled: !allEnabled).ConfigureAwait(false);
             foreach (var result in results.Where(result => !result.Succeeded)) logger.LogWarning("安全事件通知发送失败，事件：{Event}，通知渠道：{Channel}", EventName(type), result.Channel);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "处理安全事件通知时发生异常，事件：{Event}", EventName(type));
         }
+    }
+
+    private void RequestStop()
+    {
+        lock (deliveryGate)
+        {
+            if (stopping) return;
+            stopping = true;
+            cancellation = CancelDeliveriesAsync();
+        }
+    }
+
+    private async Task CancelDeliveriesAsync()
+    {
+        try { await stoppingCancellation.CancelAsync().ConfigureAwait(false); }
+        catch (AggregateException exception) { logger.LogWarning(exception, "停止安全事件通知时，取消回调失败"); }
+    }
+
+    internal async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        RequestStop();
+        Task cancelled;
+        Task[] pending;
+        lock (deliveryGate) { cancelled = cancellation; pending = deliveries.ToArray(); }
+        await cancelled.ConfigureAwait(false);
+        await Task.WhenAll(pending).WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public void Dispose() => GetDisposalTask().GetAwaiter().GetResult();
+    public ValueTask DisposeAsync() => new(GetDisposalTask());
+    private Task GetDisposalTask()
+    {
+        TaskCompletionSource completion;
+        lock (deliveryGate)
+        {
+            if (disposal is not null) return disposal;
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            disposal = completion.Task;
+        }
+        _ = CompleteDisposalAsync(completion);
+        return completion.Task;
+    }
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try { await DisposeCoreAsync().ConfigureAwait(false); completion.TrySetResult(); }
+        catch (OperationCanceledException exception) { completion.TrySetCanceled(exception.CancellationToken); }
+        catch (Exception exception) { completion.TrySetException(exception); }
+    }
+    private async Task DisposeCoreAsync()
+    {
+        await StopAsync().ConfigureAwait(false);
+        stoppingRegistration.Dispose();
+        stoppingCancellation.Dispose();
     }
 
     private static string Describe(SecurityEventType type, string? sourceIp, bool? isLoopback, TimeSpan? lockoutDuration, bool? enabled) => type switch

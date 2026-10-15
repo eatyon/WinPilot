@@ -23,6 +23,7 @@ public sealed class RollingFileLoggerRetentionTest
             Assert.False(File.Exists(expiredLog));
             var currentLog = Assert.Single(Directory.EnumerateFiles(logsDirectory, "winpilot*.log"));
             Assert.Contains("日志维护已清理 1 个过期或超出保留数量的日志文件", File.ReadAllText(currentLog));
+            Assert.Contains($"[DBG] {typeof(RollingFileLoggerProvider).FullName}{Environment.NewLine}日志维护已清理", File.ReadAllText(currentLog));
         }
         finally
         {

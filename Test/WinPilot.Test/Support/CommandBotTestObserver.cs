@@ -7,6 +7,7 @@ internal class CommandBotTestObserver : ILogger
     private int count;
     internal int Count => Volatile.Read(ref count);
     internal System.Collections.Concurrent.ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();
+    internal System.Collections.Concurrent.ConcurrentQueue<string> Diagnostics { get; } = new();
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     public bool IsEnabled(LogLevel logLevel) => true;
@@ -14,6 +15,7 @@ internal class CommandBotTestObserver : ILogger
         Func<TState, Exception?, string> formatter)
     {
         var message = formatter(state, exception);
+        if (exception is not null) Diagnostics.Enqueue(exception.ToString());
         Entries.Enqueue((logLevel, message));
         if (logLevel == LogLevel.Debug && message.Contains("命令机器人收到消息：", StringComparison.Ordinal))
             Interlocked.Increment(ref count);

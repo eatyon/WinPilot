@@ -44,16 +44,19 @@ internal sealed class QQBotCommandBotReceiver(ILogger<QQBotCommandBotService> lo
             catch (Exception) when (token.IsCancellationRequested) { return; }
             catch (QQBotConnectionException exception) when (exception.Permanent)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人连接无法恢复");
                 SetStatus(Status with { State = "failed", Error = exception.Message });
                 return;
             }
             catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人凭据或权限校验失败");
                 SetStatus(Status with { State = "failed", Error = "QQBot 凭据或权限无效，请检查 AppID、AppSecret 和平台权限后重新连接" });
                 return;
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException exception)
             {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人连接信息无效");
                 SetStatus(Status with { State = "failed", Error = "QQBot 返回的访问令牌或网关信息无效，请检查平台配置后重新连接" });
                 return;
             }
@@ -64,6 +67,7 @@ internal sealed class QQBotCommandBotReceiver(ILogger<QQBotCommandBotService> lo
                     session.Reset();
                     if (++authenticationFailures >= 2)
                     {
+                        logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人重连已停止：认证失败");
                         SetStatus(Status with { State = "failed", Error = "QQBot 认证失败，请检查 AppID、AppSecret 后重新连接" });
                         return;
                     }
@@ -72,13 +76,14 @@ internal sealed class QQBotCommandBotReceiver(ILogger<QQBotCommandBotService> lo
                 if (connectedAt is { } timestamp && System.Diagnostics.Stopwatch.GetElapsedTime(timestamp) >= TimeSpan.FromMinutes(2)) attempts = 0;
                 if (attempts >= 100)
                 {
+                    logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人重连已停止：次数已达上限");
                     SetStatus(Status with { State = "failed", Error = "QQBot 自动重连次数已达上限，请检查网络后重新连接" });
                     return;
                 }
                 var seconds = exception is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests } or QQBotGatewayClosedException { Code: 4008 }
                     ? 60 : Math.Min(Math.Pow(2, Math.Min(attempts, 6)), 60);
                 attempts++;
-                if (Status.State != "reconnecting") logger.LogWarning("QQBot 命令机器人连接中断，正在重连");
+                if (Status.State != "reconnecting") logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)), "QQBot 命令机器人连接中断，正在重连");
                 SetStatus(Status with { State = "reconnecting", Error = "无法连接 QQBot，请检查网络和平台配置，正在重连" });
                 try { await Task.Delay(TimeSpan.FromSeconds(seconds * (1 + Random.Shared.NextDouble() * 0.2)), token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }

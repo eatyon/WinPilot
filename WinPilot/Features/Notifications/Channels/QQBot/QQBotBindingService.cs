@@ -14,15 +14,35 @@ public static class QQBotBindingService
         CancellationToken requestToken)
     {
         if (string.IsNullOrWhiteSpace(appId) || string.IsNullOrWhiteSpace(secret))
-            throw new InvalidOperationException("QQBot AppID 或 AppSecret 未配置");
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(requestToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(60));
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var access = await GetAccessTokenAsync(client, appId, secret, timeout.Token);
-        var gateway = await GetGatewayAsync(client, access, timeout.Token);
-        using var socket = new ClientWebSocket();
-        await socket.ConnectAsync(new Uri(gateway), timeout.Token);
-        return await BindSessionAsync(socket, access, group, reportCode, timeout.Token);
+            throw new QQBotBindingValidationException("QQBot AppID 或 AppSecret 未配置");
+        return await WithTimeoutAsync(async token =>
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var (access, gateway) = await GetConnectionAsync(client, appId, secret, token);
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(gateway), token);
+            return await BindSessionAsync(socket, access, group, reportCode, token);
+        }, requestToken, TimeSpan.FromSeconds(60));
+    }
+
+    internal static async Task<(string Access, string Gateway)> GetConnectionAsync(HttpClient client, string appId, string secret, CancellationToken token)
+    {
+        try
+        {
+            var access = await GetAccessTokenAsync(client, appId, secret, token);
+            return (access, await GetGatewayAsync(client, access, token));
+        }
+        catch (OperationCanceledException exception) when (!token.IsCancellationRequested && exception.InnerException is TimeoutException)
+        { throw new HttpRequestException("QQBot HTTP 请求超时", exception); }
+    }
+
+    internal static async Task<string> WithTimeoutAsync(Func<CancellationToken, Task<string>> action, CancellationToken token, TimeSpan duration)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(duration);
+        try { return await action(timeout.Token); }
+        catch (OperationCanceledException exception) when (!token.IsCancellationRequested && timeout.IsCancellationRequested)
+        { throw new QQBotBindingTimeoutException(exception); }
     }
 
     internal static async Task<string> BindSessionAsync(
