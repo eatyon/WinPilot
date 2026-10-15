@@ -60,6 +60,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
             await next();
         });
         app.UseResponseCompression();
+        app.UseRouting();
         app.UseMiddleware<AuthenticationMiddleware>();
         app.UseMiddleware<SafeModeMiddleware>();
         app.UseWebSockets();
@@ -100,10 +101,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         });
         app.MapGet("/", () => Results.Text("home"));
         app.MapGet("/login", () => Results.Text("login"));
-        app.MapFallback("/api/{**path}", () =>
-            Results.Problem(
-                statusCode: StatusCodes.Status404NotFound,
-                title: "API 不存在"));
+        app.UseWebFallback();
         await app.StartAsync();
         client = app.GetTestClient();
     }

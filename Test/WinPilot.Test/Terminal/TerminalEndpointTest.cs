@@ -61,6 +61,31 @@ public sealed class TerminalEndpointTest : IAsyncLifetime
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", cancellation.Token);
     }
 
+    [Theory]
+    [InlineData("input")]
+    [InlineData("interrupt")]
+    [InlineData("resize")]
+    [InlineData("close")]
+    public async Task MissingSessionIdReturnsExplicitErrorAndKeepsConnectionUsable(string operation)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = await app.GetTestServer().CreateWebSocketClient().ConnectAsync(new Uri("ws://localhost/api/terminal/ws"), cancellation.Token);
+        await Send(socket, JsonSerializer.Serialize(new { type = operation }), cancellation.Token);
+        var buffer = new byte[16 * 1024];
+        var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellation.Token);
+        Assert.True(result.EndOfMessage);
+        using var document = JsonDocument.Parse(buffer.AsMemory(0, result.Count));
+        Assert.Equal("error", document.RootElement.GetProperty("type").GetString());
+        Assert.Equal("缺少终端会话 ID", document.RootElement.GetProperty("data").GetString());
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("sessionId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("stream").ValueKind);
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("exitCode").ValueKind);
+        Assert.Equal(0, app.Services.GetRequiredService<TerminalSessionManager>().ActiveSessionCount);
+        await Send(socket, "{\"type\":\"unknown\"}", cancellation.Token);
+        Assert.Equal("error", await ReceiveType(socket, cancellation.Token));
+        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", cancellation.Token);
+    }
+
     [Fact]
     public async Task OversizedFragmentedMessageClosesConnection()
     {

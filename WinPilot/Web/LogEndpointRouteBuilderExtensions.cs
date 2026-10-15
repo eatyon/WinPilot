@@ -54,7 +54,10 @@ public static class LogEndpointRouteBuilderExtensions
             }
             catch (ArgumentOutOfRangeException exception)
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]> { [exception.ParamName?.ToLowerInvariant() ?? "offset"] = [exception.Message] });
+                var field = exception.ParamName?.ToLowerInvariant() ?? "offset";
+                var message = field == "snapshot" ? "日志快照值不能小于 0"
+                    : offset is < 0 ? "日志偏移量不能小于 0" : "最多可加载最近 10000 条历史日志";
+                return Results.ValidationProblem(new Dictionary<string, string[]> { [field] = [message] });
             }
         });
 

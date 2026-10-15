@@ -44,6 +44,25 @@ public sealed class LogEndpointTest : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RangeErrorsKeepFieldsAndUseFixedChineseMessages()
+    {
+        foreach (var (query, field, message) in new[]
+        {
+            ("offset=-1", "query.offset", "日志偏移量不能小于 0"),
+            ("offset=10001", "offset", "最多可加载最近 10000 条历史日志"),
+            ("snapshot=-1", "snapshot", "日志快照值不能小于 0")
+        })
+        {
+            using var response = await client.GetAsync("/api/logs?date=2026-10-04&" + query);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(message, problem.GetProperty("errors").GetProperty(field)[0].GetString());
+        }
+        using var clamped = await client.GetAsync("/api/logs?date=2026-10-04&limit=-1");
+        Assert.Equal(HttpStatusCode.OK, clamped.StatusCode);
+    }
+
+    [Fact]
     public async Task FilteredPaginationKeepsTheSnapshotAndOriginalResponseFields()
     {
         var file = Path.Combine(paths.LogsDirectory, "winpilot20261004.log");

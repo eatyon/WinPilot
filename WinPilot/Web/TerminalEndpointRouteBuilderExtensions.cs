@@ -85,6 +85,11 @@ public static class TerminalEndpointRouteBuilderExtensions
 
                 try
                 {
+                    if (command?.Type is "input" or "interrupt" or "resize" or "close" && command.SessionId is null)
+                    {
+                        await Publish(new TerminalEvent("error", null, null, "缺少终端会话 ID"));
+                        continue;
+                    }
                     switch (command?.Type)
                     {
                         case "create":

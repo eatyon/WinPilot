@@ -23,7 +23,7 @@ public static class DesktopKeyboardEndpointRouteBuilderExtensions
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
-                return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
+                throw;
             }
             catch (Exception exception)
             {

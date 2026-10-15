@@ -20,10 +20,12 @@ public sealed class SendInputKeyboardInputSimulator : IKeyboardInputSimulator
         }
 
         var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
-        if (sent != inputs.Length)
-        {
-            throw new KeyboardInputException("无法发送键盘输入", new Win32Exception(Marshal.GetLastWin32Error()));
-        }
+        ValidateSentInputCount(sent, inputs.Length, Marshal.GetLastWin32Error());
+    }
+
+    internal static void ValidateSentInputCount(uint sent, int expected, int errorCode)
+    {
+        if (sent != expected) throw new Win32Exception(errorCode, "无法发送键盘输入");
     }
 
     private static Input CreateInput(KeyboardKey key, bool keyUp) => new()

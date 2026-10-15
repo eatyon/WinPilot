@@ -139,6 +139,7 @@ internal static class Program
         {
             app.UseMiddleware<RequestCancellationMiddleware>();
             app.UseResponseCompression();
+            app.UseRouting();
             app.UseMiddleware<AuthenticationMiddleware>();
             app.UseMiddleware<SafeModeMiddleware>();
             app.UseDefaultFiles();
@@ -170,8 +171,7 @@ internal static class Program
             app.MapSystemStatusEndpoints();
             app.MapTerminalEndpoints();
             app.MapPluginEndpoints();
-            app.MapFallback("/api/{**path}", () => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "API 不存在"));
-            app.MapFallbackToFile("index.html", staticFileOptions);
+            app.UseWebFallback(staticFileOptions);
 
             using var trayContext = new TrayApplicationContext(
                 new Uri($"http://127.0.0.1:{settings.Port}/"),
