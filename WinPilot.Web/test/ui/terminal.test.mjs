@@ -60,6 +60,20 @@ function fixture() {
   return { subject, sockets, terminals, toasts, observed, safeModeEnabled, create, dispose: () => { unmount(); scope.stop(); } };
 }
 
+test('output failure ends only its tab without disconnecting other sessions', async () => {
+  const f = fixture();
+  try {
+    await f.create('failed');
+    await f.create('healthy');
+    f.subject.handleEvent({ type: 'error', sessionId: 'failed', data: '终端输出读取失败，正在关闭会话' });
+    f.subject.handleEvent({ type: 'exited', sessionId: 'failed', data: '终端会话已结束' });
+    assert.equal(f.subject.tabs.value.find(tab => tab.id === 'failed').status, 'exited');
+    assert.equal(f.subject.tabs.value.find(tab => tab.id === 'healthy').status, 'running');
+    assert.equal(f.subject.connected.value, true);
+    assert.deepEqual(f.toasts, ['终端输出读取失败，正在关闭会话']);
+  } finally { f.dispose(); }
+});
+
 test('failed sends preserve commands and disconnect marks sessions exited', async () => {
   const f = fixture();
   try {

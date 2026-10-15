@@ -1,8 +1,9 @@
-using WinPilot.Features.Terminal;
 using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Runtime.ExceptionServices;
+using WinPilot.Features.Terminal;
 
 namespace WinPilot.Windows;
 
@@ -17,14 +18,14 @@ internal sealed class ConPtyTerminalProcess : ITerminalProcess
     Stream ITerminalProcess.Input => Input;
     Stream ITerminalProcess.Output => Output;
     private readonly SafeFileHandle processHandle;
-    private IntPtr pseudoConsole;
+    private readonly PseudoConsoleHandle pseudoConsole;
 
     private ConPtyTerminalProcess(IntPtr inputWrite, IntPtr outputRead, IntPtr process, IntPtr pseudoConsole)
     {
         Input = new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write);
         Output = new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read);
         processHandle = new SafeFileHandle(process, true);
-        this.pseudoConsole = pseudoConsole;
+        this.pseudoConsole = new PseudoConsoleHandle(pseudoConsole);
     }
 
     public static ConPtyTerminalProcess Start(string shell, string workingDirectory)
@@ -81,25 +82,86 @@ internal sealed class ConPtyTerminalProcess : ITerminalProcess
         var result = WaitForSingleObject(processHandle, uint.MaxValue);
         if (result == uint.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), "等待终端进程退出失败");
     }, cancellationToken);
-    public void Resize(short columns, short rows)
-    {
-        var console = Interlocked.CompareExchange(ref pseudoConsole, IntPtr.Zero, IntPtr.Zero);
-        if (console == IntPtr.Zero) throw new ObjectDisposedException(nameof(ConPtyTerminalProcess));
-        Ensure(ResizePseudoConsole(console, new Coord(columns, rows)), "无法调整 ConPTY 大小");
-    }
-    public void Kill() { if (!processHandle.IsInvalid) TerminateProcess(processHandle, 1); }
-    public void ClosePseudoConsoleHandle()
-    {
-        var console = Interlocked.Exchange(ref pseudoConsole, IntPtr.Zero);
-        if (console != IntPtr.Zero) ClosePseudoConsole(console);
-    }
+    public void Resize(short columns, short rows) => pseudoConsole.Resize(columns, rows);
+    public void Kill() { if (!processHandle.IsInvalid) Ensure(TerminateProcess(processHandle, 1), "终止终端进程失败"); }
+    public void ClosePseudoConsoleHandle() => pseudoConsole.Close();
     public ValueTask CloseOutputAsync() => Output.DisposeAsync();
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => ReleaseResourcesAsync(Input, Output, processHandle, ClosePseudoConsoleHandle);
+
+    internal static async ValueTask ReleaseResourcesAsync(Stream input, Stream output, IDisposable processHandle, Action closePseudoConsole)
     {
-        await Input.DisposeAsync();
-        await Output.DisposeAsync();
-        processHandle.Dispose();
-        ClosePseudoConsoleHandle();
+        List<Exception>? failures = null;
+        try { await input.DisposeAsync(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        try { await output.DisposeAsync(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        try { processHandle.Dispose(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        try { closePseudoConsole(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        if (failures is { Count: 1 }) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures is { Count: > 1 }) throw new AggregateException("终端底层资源释放失败", failures);
+    }
+
+    internal sealed class PseudoConsoleHandle
+    {
+        private readonly object gate = new();
+        private readonly Action<IntPtr, short, short> resize;
+        private readonly Action<IntPtr> close;
+        private IntPtr handle;
+        private int resizing;
+        private bool closing;
+        private TaskCompletionSource? resizeCompleted;
+
+        internal PseudoConsoleHandle(IntPtr handle)
+            : this(handle, static (console, columns, rows) => Ensure(ResizePseudoConsole(console, new Coord(columns, rows)), "无法调整 ConPTY 大小"), ClosePseudoConsole) { }
+
+        internal PseudoConsoleHandle(IntPtr handle, Action<IntPtr, short, short> resize, Action<IntPtr> close)
+        {
+            this.handle = handle;
+            this.resize = resize;
+            this.close = close;
+        }
+
+        internal void Resize(short columns, short rows)
+        {
+            IntPtr console;
+            lock (gate)
+            {
+                if (closing || handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ConPtyTerminalProcess));
+                console = handle;
+                resizing++;
+            }
+            try { resize(console, columns, rows); }
+            finally
+            {
+                lock (gate)
+                {
+                    resizing--;
+                    if (resizing == 0) resizeCompleted?.TrySetResult();
+                }
+            }
+        }
+
+        internal void Close()
+        {
+            IntPtr console;
+            Task? pending = null;
+            lock (gate)
+            {
+                if (closing) return;
+                closing = true;
+                if (resizing != 0)
+                {
+                    resizeCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    pending = resizeCompleted.Task;
+                }
+                console = handle;
+                handle = IntPtr.Zero;
+            }
+            pending?.GetAwaiter().GetResult();
+            if (console != IntPtr.Zero) close(console);
+        }
     }
 
     private static void Ensure(bool result, string message) { if (!result) throw new Win32Exception(Marshal.GetLastWin32Error(), message); }
@@ -121,6 +183,6 @@ internal sealed class ConPtyTerminalProcess : ITerminalProcess
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool CreateProcessW(string? application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment, string currentDirectory, ref StartupInfoEx startupInfo, out ProcessInformation processInfo);
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(SafeHandle process, out uint exitCode);
-    [DllImport("kernel32.dll")] private static extern bool TerminateProcess(SafeHandle process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(SafeHandle process, uint exitCode);
     [DllImport("kernel32.dll")] private static extern uint WaitForSingleObject(SafeHandle handle, uint milliseconds);
 }
