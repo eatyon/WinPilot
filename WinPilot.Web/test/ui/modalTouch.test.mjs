@@ -47,9 +47,10 @@ function fixture() {
   return { document, modal, listeners, gesture, dispatch };
 }
 
-test('modal touch blocks backdrop and scroll edges but permits content scrolling', () => {
+test('modal touch blocks backdrop and scroll edges but permits content scrolling', t => {
   const { modal, gesture, listeners } = fixture();
   const release = manageModalTouch(modal);
+  t.after(release);
   const content = new Element();
   assert.equal(gesture([], 80), true);
   assert.equal(gesture([content, modal], 120), true);
@@ -63,11 +64,13 @@ test('modal touch blocks backdrop and scroll edges but permits content scrolling
   assert.equal([...listeners.values()].every(set => set.size === 0), true);
 });
 
-test('nested modals block their parent content and restore it after closing', () => {
+test('nested modals block their parent content and restore it after closing', t => {
   const { modal, document, gesture } = fixture();
   const releaseParent = manageModalTouch(modal);
+  let releaseChild;
+  t.after(() => { releaseChild?.(); releaseParent(); });
   const child = Object.assign(new Element(), { ownerDocument: document, overflowY: 'hidden' });
-  const releaseChild = manageModalTouch(child);
+  releaseChild = manageModalTouch(child);
   const content = new Element();
   assert.equal(gesture([content, modal], 80), true);
   assert.equal(gesture([content, child], 80), false);
@@ -76,13 +79,15 @@ test('nested modals block their parent content and restore it after closing', ()
   releaseParent();
 });
 
-test('ShadowRoot paths, registered menus and horizontal scroll retain their own scrolling', () => {
+test('ShadowRoot paths, registered menus and horizontal scroll retain their own scrolling', t => {
   const { modal, gesture } = fixture();
   const release = manageModalTouch(modal);
+  let unregister;
+  t.after(() => { unregister?.(); release(); });
   const content = new Element();
   assert.equal(gesture([content, {}, modal], 80), false);
   const portal = new Element();
-  const unregister = registerModalPortal(portal, modal);
+  unregister = registerModalPortal(portal, modal);
   assert.equal(gesture([portal], 80), false);
   unregister();
   assert.equal(gesture([portal], 80), true);
@@ -94,9 +99,10 @@ test('ShadowRoot paths, registered menus and horizontal scroll retain their own 
   release();
 });
 
-test('continuous moves track direction and a new gesture resets the touch position', () => {
+test('continuous moves track direction and a new gesture resets the touch position', t => {
   const { modal, dispatch } = fixture();
   const release = manageModalTouch(modal);
+  t.after(release);
   const content = new Element();
   const path = [content, modal];
   dispatch('touchstart', path, 100);
@@ -113,9 +119,10 @@ test('continuous moves track direction and a new gesture resets the touch positi
   release();
 });
 
-test('horizontal range input gestures are not prevented', () => {
+test('horizontal range input gestures are not prevented', t => {
   const { modal, gesture } = fixture();
   const release = manageModalTouch(modal);
+  t.after(release);
   const range = Object.assign(new Element(), {
     overflowY: 'visible',
     matches: selector => selector === 'input[type="range"]',
@@ -125,11 +132,13 @@ test('horizontal range input gestures are not prevented', () => {
   release();
 });
 
-test('closing a parent first preserves the child lock and final cleanup', () => {
+test('closing a parent first preserves the child lock and final cleanup', t => {
   const { modal, document, gesture, listeners } = fixture();
   const releaseParent = manageModalTouch(modal);
+  let releaseChild;
+  t.after(() => { releaseChild?.(); releaseParent(); });
   const child = Object.assign(new Element(), { ownerDocument: document, overflowY: 'hidden' });
-  const releaseChild = manageModalTouch(child);
+  releaseChild = manageModalTouch(child);
   releaseParent();
   const content = new Element();
   assert.equal(gesture([content, child], 80), false);

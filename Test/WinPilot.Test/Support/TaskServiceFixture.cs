@@ -1,4 +1,3 @@
-using WinPilot.Windows;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
 using WinPilot.Core.Desktop;
@@ -12,6 +11,7 @@ using WinPilot.Features.Notifications.CommandBots.Commands;
 using WinPilot.Features.Programs;
 using WinPilot.Features.Tasks;
 using WinPilot.Features.Terminal;
+using WinPilot.Windows;
 
 namespace WinPilot.Test;
 
@@ -20,10 +20,10 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     private readonly PortableDataPaths paths = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "winpilot-task-command-tests", Guid.NewGuid().ToString("N")));
     internal PortableDataPaths Paths => paths;
     private readonly TerminalSessionManager terminals = new(NullLogger<TerminalSessionManager>.Instance);
-    private readonly WindowsProcessEventListener processEvents = new(NullLogger<WindowsProcessEventListener>.Instance);
     internal TerminalSessionManager Terminals => terminals;
     private readonly Keyboard keyboard = new();
     internal IReadOnlyList<KeyboardKey>? SentKeys => keyboard.Keys;
+    private readonly WindowsProcessEventListener processEvents = new(NullLogger<WindowsProcessEventListener>.Instance);
     internal ProgramManager Programs { get; } = new();
     internal WinPilot.Features.Plugins.PluginTaskExtensionRegistry Extensions { get; } = new(new(), new(), new());
     internal TaskLogger Logger { get; } = new();
@@ -42,11 +42,35 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal CommandProcessor Processor() => new("Test", new(), NullLogger.Instance, tasks: Tasks);
     public async ValueTask DisposeAsync()
     {
-        await Tasks.StopAsync(CancellationToken.None);
-        Tasks.Dispose();
-        processEvents.Dispose();
-        await terminals.DisposeAsync();
-        if (Directory.Exists(paths.ApplicationDirectory)) Directory.Delete(paths.ApplicationDirectory, true);
+        var failures = new List<Exception>();
+        await CleanupAsync("停止任务服务", async () =>
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await Tasks.StopAsync(cancellation.Token);
+        });
+        await CleanupAsync("释放任务服务", () =>
+        {
+            Tasks.Dispose();
+            return Task.CompletedTask;
+        });
+        await CleanupAsync("释放进程事件监听", () =>
+        {
+            processEvents.Dispose();
+            return Task.CompletedTask;
+        });
+        await CleanupAsync("释放终端会话", () => terminals.DisposeAsync().AsTask());
+        await CleanupAsync($"删除测试目录：{paths.ApplicationDirectory}", () =>
+        {
+            if (Directory.Exists(paths.ApplicationDirectory)) Directory.Delete(paths.ApplicationDirectory, true);
+            return Task.CompletedTask;
+        });
+        if (failures.Count > 0) throw new AggregateException("任务测试资源清理失败", failures);
+
+        async Task CleanupAsync(string stage, Func<Task> cleanup)
+        {
+            try { await cleanup(); }
+            catch (Exception exception) { failures.Add(new InvalidOperationException(stage, exception)); }
+        }
     }
 
     internal sealed class ProgramManager : IProgramManager

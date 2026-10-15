@@ -52,6 +52,19 @@ public sealed class ConfigurationOrderTest
             Assert.True(JsonNode.DeepEquals(source["extra"], saved["extra"]));
             var rootOrder = saved.Select(property => property.Key).ToArray();
             var commandOrder = commands.Select(property => property.Key).ToArray();
+            string[] expectedRootOrder =
+            [
+                "port", "lanAccessEnabled", "startupMode", "unauthenticatedWebPageEnabled",
+                "notifications", "commandBots", "safeModeEnabled", "securityNotifications", "updates"
+            ];
+            string[] expectedCommandOrder =
+            [
+                "TelegramEnabled", "TelegramPrefix", "FeishuEnabled", "FeishuPrefix",
+                "OneBotEnabled", "OneBotPrefix", "OneBotWebSocketUrl", "OneBotToken", "QQBotEnabled", "QQBotPrefix"
+            ];
+            Assert.Equal(expectedRootOrder, rootOrder.Where(expectedRootOrder.Contains));
+            Assert.Equal(Array.IndexOf(rootOrder, "commandBots") + 1, Array.IndexOf(rootOrder, "safeModeEnabled"));
+            Assert.Equal(expectedCommandOrder, commandOrder.Where(expectedCommandOrder.Contains));
             var reordered = new JsonObject(saved.Reverse()
                 .Select(property => new KeyValuePair<string, JsonNode?>(property.Key, property.Value?.DeepClone())));
             reordered["commandBots"] = new JsonObject(commands.Reverse()

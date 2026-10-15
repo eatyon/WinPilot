@@ -1,4 +1,3 @@
-using WinPilot.Windows;
 using WinPilot.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core.Desktop;
@@ -11,6 +10,7 @@ using WinPilot.Features.Notifications;
 using WinPilot.Features.Programs;
 using WinPilot.Features.Tasks;
 using WinPilot.Features.Terminal;
+using WinPilot.Windows;
 
 namespace WinPilot.Test;
 
@@ -24,37 +24,52 @@ public sealed class DesktopImageVariableTest
         var screenshotBytes = new byte[] { 1, 2, 3, 4 };
         var screenshotProvider = new RecordingScreenshotProvider(new(DateTimeOffset.UtcNow, screenshotBytes, "image/jpeg"));
         var notificationService = new RecordingNotificationService();
-        await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
-        using var processEvents = new WindowsProcessEventListener(NullLogger<WindowsProcessEventListener>.Instance);
-        using var service = new TaskService(
-            PortableDataPaths.Create(applicationDirectory),
-            new NoOpProgramManager(),
-            new ProgramTagService(PortableDataPaths.Create(applicationDirectory)),
-            new KeyboardInputService(new NoOpKeyboardInputSimulator()),
-            terminals,
-            new DesktopScreenshotService(screenshotProvider),
-            notificationService,
-            processEvents,
-            NullLogger<TaskService>.Instance,
-            new(new(), new(), new()));
-
+        Exception? failure = null;
         try
         {
-            service.Create(new("desktop-image", true, new(TaskTriggerType.WinPilotStartup),
-                [new(TaskActionType.SendNotification, NotificationContent: "&screenshot")]));
+            await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
+            using var processEvents = new WindowsProcessEventListener(NullLogger<WindowsProcessEventListener>.Instance);
+            using var service = new TaskService(
+                PortableDataPaths.Create(applicationDirectory),
+                new NoOpProgramManager(),
+                new ProgramTagService(PortableDataPaths.Create(applicationDirectory)),
+                new KeyboardInputService(new NoOpKeyboardInputSimulator()),
+                terminals,
+                new DesktopScreenshotService(screenshotProvider),
+                notificationService,
+                processEvents,
+                NullLogger<TaskService>.Instance,
+                new(new(), new(), new()));
+            try
+            {
+                service.Create(new("desktop-image", true, new(TaskTriggerType.WinPilotStartup),
+                    [new(TaskActionType.SendNotification, NotificationContent: "&screenshot")]));
 
-            service.RunNow("desktop-image");
-            var sent = await notificationService.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                service.RunNow("desktop-image");
+                var sent = await notificationService.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            Assert.Equal(1, screenshotProvider.CaptureCount);
-            Assert.Equal(string.Empty, sent.Message.Content);
-            Assert.NotNull(sent.Message.ImagePath);
-            Assert.Equal(screenshotBytes, sent.ImageBytes);
-            await WaitUntilAsync(() => !File.Exists(sent.Message.ImagePath), TimeSpan.FromSeconds(5));
+                Assert.Equal(1, screenshotProvider.CaptureCount);
+                Assert.Equal(string.Empty, sent.Message.Content);
+                Assert.NotNull(sent.Message.ImagePath);
+                Assert.Equal(screenshotBytes, sent.ImageBytes);
+                await WaitUntilAsync(() => !File.Exists(sent.Message.ImagePath), TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await service.StopAsync(cancellation.Token);
+            }
         }
+        catch (Exception exception) { failure = exception; throw; }
         finally
         {
-            try { Directory.Delete(applicationDirectory, true); } catch { }
+            try { Directory.Delete(applicationDirectory, true); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                var cleanupFailure = new IOException($"清理桌面图片测试目录失败：{applicationDirectory}", exception);
+                if (failure is not null) throw new AggregateException(failure, cleanupFailure);
+                throw cleanupFailure;
+            }
         }
     }
 

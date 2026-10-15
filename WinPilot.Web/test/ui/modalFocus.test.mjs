@@ -61,7 +61,7 @@ function shadowContent(modal) {
   return input;
 }
 
-test('Tab reaches ShadowRoot controls and focus cannot escape a modal', () => {
+test('Tab reaches ShadowRoot controls and focus cannot escape a modal', t => {
   const outside = new Element('button');
   outside.focus();
   const modal = new Element();
@@ -69,6 +69,7 @@ test('Tab reaches ShadowRoot controls and focus cannot escape a modal', () => {
   modal.append(close);
   const input = shadowContent(modal);
   const release = manageModalFocus(modal);
+  t.after(release);
   try {
     close.focus();
     assert.equal(pressTab().defaultPrevented, true);
@@ -79,15 +80,17 @@ test('Tab reaches ShadowRoot controls and focus cannot escape a modal', () => {
   assert.equal(document.activeElement, outside);
 });
 
-test('closing a child restores focus inside its parent ShadowRoot', () => {
+test('closing a child restores focus inside its parent ShadowRoot', t => {
   const outside = new Element('button');
   outside.focus();
   const parent = new Element();
   const input = shadowContent(parent);
   const releaseParent = manageModalFocus(parent);
+  let releaseChild;
+  t.after(() => { releaseChild?.(); releaseParent(); });
   input.focus();
   const child = new Element();
-  const releaseChild = manageModalFocus(child);
+  releaseChild = manageModalFocus(child);
   try {
     assert.equal(document.activeElement, child);
     releaseChild();
@@ -97,15 +100,17 @@ test('closing a child restores focus inside its parent ShadowRoot', () => {
   assert.equal(document.activeElement, outside);
 });
 
-test('closing a parent before its child still restores the original page focus', () => {
+test('closing a parent before its child still restores the original page focus', t => {
   const outside = new Element('button');
   outside.focus();
   const parent = new Element();
   const input = shadowContent(parent);
   const releaseParent = manageModalFocus(parent);
+  let releaseChild;
+  t.after(() => { releaseChild?.(); releaseParent(); });
   input.focus();
   const child = new Element();
-  const releaseChild = manageModalFocus(child);
+  releaseChild = manageModalFocus(child);
   releaseParent();
   parent.isConnected = false;
   releaseChild();
@@ -113,10 +118,11 @@ test('closing a parent before its child still restores the original page focus',
   assert.equal(document.activeElement, outside);
 });
 
-test('inert parent controls are excluded across a ShadowRoot boundary', () => {
+test('inert parent controls are excluded across a ShadowRoot boundary', t => {
   const parent = new Element();
   const input = shadowContent(parent);
   const release = manageModalFocus(parent);
+  t.after(() => { parent.attrs.delete('inert'); release(); });
   try {
     parent.attrs.add('inert');
     const event = pressTab();
@@ -125,7 +131,7 @@ test('inert parent controls are excluded across a ShadowRoot boundary', () => {
   } finally { parent.attrs.delete('inert'); release(); }
 });
 
-test('a registered dropdown portal follows its ShadowRoot owner in Tab order', () => {
+test('a registered dropdown portal follows its ShadowRoot owner in Tab order', t => {
   const modal = new Element();
   const owner = new Element();
   modal.append(owner);
@@ -138,7 +144,9 @@ test('a registered dropdown portal follows its ShadowRoot owner in Tab order', (
   const option = new Element('button');
   portal.append(option);
   const unregister = registerModalPortal(portal, owner);
-  const release = manageModalFocus(modal);
+  let release;
+  t.after(() => { unregister(); release?.(); });
+  release = manageModalFocus(modal);
   try {
     trigger.focus();
     pressTab();

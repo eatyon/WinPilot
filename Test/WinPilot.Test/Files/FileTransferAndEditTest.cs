@@ -1,15 +1,16 @@
+using System.IO.Compression;
+using System.Text;
 using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using WinPilot.Web;
-using System.IO.Compression;
-using System.Text;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Features.Files;
+using WinPilot.Web;
+using Xunit.Abstractions;
 
 namespace WinPilot.Test;
 
@@ -18,9 +19,11 @@ public sealed class FileTransferAndEditTest : IDisposable
     private readonly string root = Path.Combine(Path.GetTempPath(), "WinPilot.File.Test", Guid.NewGuid().ToString("N"));
     private readonly FileSystemService service = new(NullLogger<FileSystemService>.Instance);
     private readonly string downloads;
+    private readonly ITestOutputHelper output;
 
-    public FileTransferAndEditTest()
+    public FileTransferAndEditTest(ITestOutputHelper output)
     {
+        this.output = output;
         downloads = Path.Combine(root, "downloads");
         Directory.CreateDirectory(downloads);
     }
@@ -228,18 +231,55 @@ public sealed class FileTransferAndEditTest : IDisposable
             RedirectStandardError = true
         };
         foreach (var argument in new[] { "/c", "mklink", "/J", link, source }) start.ArgumentList.Add(argument);
-        using var process = System.Diagnostics.Process.Start(start)!;
-        await process.WaitForExitAsync();
-        Assert.Equal(0, process.ExitCode);
+        using var process = new System.Diagnostics.Process { StartInfo = start };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Task<string>? standardOutput = null;
+        Task<string>? standardError = null;
+        var started = false;
+        Exception? failure = null;
         try
         {
+            started = process.Start();
+            Assert.True(started);
+            standardOutput = process.StandardOutput.ReadToEndAsync();
+            standardError = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync(cancellation.Token); }
+            catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
+            {
+                throw new TimeoutException($"创建 Junction 超时：{link}", exception);
+            }
+            Assert.Equal(0, process.ExitCode);
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateDownloadAsync(new([selectLink ? link : source]), CancellationToken.None, downloads));
             Assert.Empty(Directory.GetFiles(downloads));
         }
-        finally { Directory.Delete(link); }
+        catch (Exception exception) { failure = exception; throw; }
+        finally
+        {
+            try
+            {
+                try
+                {
+                    using var cleanupCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    if (started && !process.HasExited)
+                    {
+                        try { process.Kill(entireProcessTree: true); }
+                        catch (InvalidOperationException) when (process.HasExited) { }
+                        await process.WaitForExitAsync(cleanupCancellation.Token);
+                    }
+                    if (standardOutput is not null)
+                        output.WriteLine("mklink 标准输出：{0}", await standardOutput.WaitAsync(cleanupCancellation.Token));
+                    if (standardError is not null)
+                        output.WriteLine("mklink 标准错误：{0}", await standardError.WaitAsync(cleanupCancellation.Token));
+                }
+                finally { if (Directory.Exists(link)) Directory.Delete(link); }
+            }
+            catch (Exception exception)
+            {
+                if (failure is not null) throw new AggregateException($"Junction 测试收尾失败：{link}", failure, exception);
+                throw new IOException($"Junction 测试收尾失败：{link}", exception);
+            }
+        }
     }
-
-    public void Dispose() => Directory.Delete(root, true);
 
     [Fact]
     public async Task UploadApiRejectsMissingMultipartBoundaryWithProblem()
@@ -288,4 +328,6 @@ public sealed class FileTransferAndEditTest : IDisposable
         Assert.Equal(JsonValueKind.Null, file.GetProperty("error").ValueKind);
         Assert.Equal("中文内容", File.ReadAllText(Path.Combine(root, "uploaded.txt")));
     }
+
+    public void Dispose() => Directory.Delete(root, true);
 }
