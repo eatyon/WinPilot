@@ -1,3 +1,10 @@
+using System.Net;
+using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using WinPilot.Web;
 using System.IO.Compression;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -48,7 +55,7 @@ public sealed class FileTransferAndEditTest : IDisposable
         var original = service.ReadForEdit(path);
         File.WriteAllText(path, changeLength ? "external-content" : "new");
         if (!changeLength) File.SetLastWriteTimeUtc(path, original.LastWriteTime.UtcDateTime.AddMinutes(1));
-        Assert.Throws<InvalidOperationException>(() => service.SaveEdit(new(path, "replacement", original.Length, original.LastWriteTime, original.Encoding)));
+        Assert.Throws<FileEditConflictException>(() => service.SaveEdit(new(path, "replacement", original.Length, original.LastWriteTime, original.Encoding)));
         Assert.Equal(changeLength ? "external-content" : "new", File.ReadAllText(path));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
     }
@@ -78,7 +85,7 @@ public sealed class FileTransferAndEditTest : IDisposable
         var file = new FormFile(input, 0, input.Length, "file", "../notes.txt");
         await service.UploadAsync(root, file, CancellationToken.None);
         Assert.Equal("upload", File.ReadAllText(Path.Combine(root, "notes.txt")));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(root, file, CancellationToken.None));
+        await Assert.ThrowsAsync<WinPilot.Core.ResourceNameConflictException>(() => service.UploadAsync(root, file, CancellationToken.None));
         Assert.Equal("upload", File.ReadAllText(Path.Combine(root, "notes.txt")));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
     }
@@ -233,4 +240,52 @@ public sealed class FileTransferAndEditTest : IDisposable
     }
 
     public void Dispose() => Directory.Delete(root, true);
+
+    [Fact]
+    public async Task UploadApiRejectsMissingMultipartBoundaryWithProblem()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(service);
+        await using var app = builder.Build();
+        app.MapFileEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var content = new StringContent("invalid body", Encoding.UTF8);
+        content.Headers.ContentType = new("multipart/form-data");
+        using var response = await client.PostAsync("/api/files/upload", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(400, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("文件操作失败", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal("上传表单格式无效", problem.RootElement.GetProperty("detail").GetString());
+        Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task UploadApiPreservesSuccessfulPerFileResultsAndContent()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(service);
+        await using var app = builder.Build();
+        app.MapFileEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var content = new MultipartFormDataContent();
+        content.Add(new StringContent(root), "directory");
+        content.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("中文内容")), "files", "uploaded.txt");
+        using var response = await client.PostAsync("/api/files/upload", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var file = Assert.Single(result.RootElement.EnumerateArray());
+        Assert.Equal("uploaded.txt", file.GetProperty("fileName").GetString());
+        Assert.True(file.GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, file.GetProperty("error").ValueKind);
+        Assert.Equal("中文内容", File.ReadAllText(Path.Combine(root, "uploaded.txt")));
+    }
 }

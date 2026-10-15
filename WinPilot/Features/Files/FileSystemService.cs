@@ -2,12 +2,14 @@ using System.ComponentModel;
 using System.IO.Compression;
 using System.Text;
 using System.Runtime.InteropServices;
+using WinPilot.Core;
 using WinPilot.Core.Files;
 
 namespace WinPilot.Features.Files;
 
 public sealed class FileSystemService(ILogger<FileSystemService> logger)
 {
+    private static readonly object[] EditGates = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
     private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -136,9 +138,15 @@ public sealed class FileSystemService(ILogger<FileSystemService> logger)
     public void SaveEdit(EditFileSystemItemRequest request)
     {
         var path = RequireExisting(request.Path);
+        var editGate = EditGates[(uint)StringComparer.OrdinalIgnoreCase.GetHashCode(path) % (uint)EditGates.Length];
+        lock (editGate) SaveEditCore(request, path);
+    }
+
+    private void SaveEditCore(EditFileSystemItemRequest request, string path)
+    {
         if (Directory.Exists(path)) throw new InvalidOperationException("此项目不支持编辑");
         var info = new FileInfo(path);
-        if (info.Length != request.OriginalLength || info.LastWriteTimeUtc != request.OriginalLastWriteTime) throw new InvalidOperationException("文件在编辑期间已被其他程序修改");
+        if (info.Length != request.OriginalLength || info.LastWriteTimeUtc != request.OriginalLastWriteTime) throw new FileEditConflictException("文件在编辑期间已被其他程序修改");
         var encoding = ParseTextEncoding(request.Encoding);
         if (encoding.CodePage == Encoding.UTF8.CodePage)
         {
@@ -163,7 +171,7 @@ public sealed class FileSystemService(ILogger<FileSystemService> logger)
             }
             info.Refresh();
             if (info.Length != request.OriginalLength || info.LastWriteTimeUtc != request.OriginalLastWriteTime)
-                throw new InvalidOperationException("文件在编辑期间已被其他程序修改");
+                throw new FileEditConflictException("文件在编辑期间已被其他程序修改");
             File.Replace(temporaryPath, path, null);
             logger.LogInformation("文件操作：编辑保存 {Path}", path);
         }
@@ -197,7 +205,7 @@ public sealed class FileSystemService(ILogger<FileSystemService> logger)
             return new FileDownloadArtifact(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan), Path.GetFileName(path), "application/octet-stream");
         }
 
-        var temporaryPath = Path.Combine(temporaryDirectory, $"WinPilotDownload-{Guid.NewGuid():N}.zip");
+        var temporaryPath = Path.Combine(temporaryDirectory, $"WinPilot-download-{Guid.NewGuid():N}.zip");
         try
         {
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -337,7 +345,7 @@ public sealed class FileSystemService(ILogger<FileSystemService> logger)
 
     private static void RejectExistingDestination(string path)
     {
-        if (File.Exists(path) || Directory.Exists(path)) throw new InvalidOperationException($"目标已存在：{Path.GetFileName(path)}");
+        if (File.Exists(path) || Directory.Exists(path)) throw new ResourceNameConflictException($"目标已存在：{Path.GetFileName(path)}");
     }
 
     private static void RejectRoot(string path)
@@ -369,8 +377,8 @@ public sealed class FileSystemService(ILogger<FileSystemService> logger)
             fFlags = (ushort)(additionalFlags | FofNoConfirmation | FofSilent | FofNoErrorUi)
         };
         var errorCode = SHFileOperation(ref operation);
-        if (errorCode != 0) throw new IOException($"无法{operationName}：{new Win32Exception(errorCode).Message}");
-        if (operation.fAnyOperationsAborted) throw new IOException($"{operationName}操作已取消");
+        if (errorCode != 0) throw new ShellFileOperationException($"无法{operationName}：{new Win32Exception(errorCode).Message}", errorCode, operation.fAnyOperationsAborted);
+        if (operation.fAnyOperationsAborted) throw new ShellFileOperationException($"{operationName}操作已取消", errorCode, operation.fAnyOperationsAborted);
     }
 
     private static void ValidateName(string? name)
