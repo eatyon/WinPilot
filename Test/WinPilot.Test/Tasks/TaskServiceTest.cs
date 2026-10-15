@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
 using WinPilot.Features.Notifications;
+using WinPilot.Features.Plugins;
 using WinPilot.Features.Tasks;
 using WinPilot.PluginContract;
 using WinPilot.Web;
@@ -742,5 +743,36 @@ public sealed partial class TaskServiceTest
         Assert.NotNull(path);
         Assert.NotNull(notifications.ImageBytes);
         Assert.False(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExpiredTriggerCannotStartCurrentTaskEvenWithCurrentGenerationToken(bool useCurrentToken)
+    {
+        await using var fixture = new TaskServiceFixture();
+        using var previous = fixture.Extensions.CreateScope("test", "Test");
+        previous.Register([new("trigger", "Previous trigger")]);
+        PluginTaskTriggerFired? received = null;
+        fixture.Extensions.Triggered += fired => received = fired;
+        var trigger = new PluginTriggerEvent("trigger", DateTimeOffset.UtcNow, new Dictionary<string, object?>());
+        previous.Emit(trigger);
+        Assert.NotNull(received);
+        var expired = received;
+        using var current = fixture.Extensions.CreateScope("test", "Test");
+        previous.Dispose();
+        current.Register([new("trigger", "Current trigger")]);
+        current.Emit(trigger);
+        Assert.NotNull(received);
+        var currentToken = received.CancellationToken;
+        fixture.Tasks.Create(new("current", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "trigger"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var replay = useCurrentToken ? expired with { CancellationToken = currentToken } : expired;
+        typeof(TaskService).GetMethod("ExtensionTriggered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(fixture.Tasks, [replay]);
+        Assert.Equal(0, fixture.Programs.Launches);
+        current.Emit(trigger);
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.Empty(fixture.Logger.Exceptions);
     }
 }

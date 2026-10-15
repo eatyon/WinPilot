@@ -27,6 +27,7 @@ public sealed class PluginManager : IDisposable
     private IReadOnlyList<PluginInfo> plugins = [];
     private readonly Dictionary<string, IPluginRuntimeInstance> runtimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Action<string>>> stateSubscribers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, StatusSubscriptions> statusDeliveries = new(StringComparer.OrdinalIgnoreCase);
 
     public PluginManager(PortableDataPaths paths, ILogger<PluginManager> logger, IPluginRuntime runtime, PluginPageSessionManager pageSessions)
     {
@@ -34,7 +35,7 @@ public sealed class PluginManager : IDisposable
         this.logger = logger;
         this.runtime = runtime;
         this.pageSessions = pageSessions;
-        Scan();
+        Scan(throwOnFailure: false);
     }
 
     public IReadOnlyList<PluginInfo> GetPlugins()
@@ -73,18 +74,26 @@ public sealed class PluginManager : IDisposable
     public bool HasReadme(string id)
     {
         var path = Path.Combine(GetPlugin(id).Directory, "README.md");
-        return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+        try { return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件说明文档，请检查插件文件和程序日志", exception); }
     }
 
     public string ReadReadme(string id)
     {
         var path = Path.Combine(GetPlugin(id).Directory, "README.md");
         if (!HasReadme(id)) throw new FileNotFoundException("插件没有 README.md");
-        using var stream = File.OpenRead(path);
-        if (stream.Length > MaxReadmeBytes) throw new InvalidOperationException("README.md 不能超过 512 KB");
-        var bytes = new byte[(int)stream.Length];
-        stream.ReadExactly(bytes);
-        return new System.Text.UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length > MaxReadmeBytes) throw new PluginValidationException("README.md 不能超过 512 KB");
+            var bytes = new byte[(int)stream.Length];
+            stream.ReadExactly(bytes);
+            return new System.Text.UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
+        }
+        catch (PluginValidationException) { throw; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件说明文档，请检查插件文件和程序日志", exception); }
     }
 
     public void Enable(string id) => SetEnabled(id, true);
@@ -107,7 +116,7 @@ public sealed class PluginManager : IDisposable
         ArgumentNullException.ThrowIfNull(settings);
         var plugin = GetPlugin(id);
         var homeTitle = string.IsNullOrWhiteSpace(settings.HomeTitle) ? DefaultHomeTitle(plugin) : settings.HomeTitle.Trim();
-        if (homeTitle.Length > 100) throw new InvalidOperationException("首页标题不能超过 100 个字符");
+        if (homeTitle.Length > 100) throw new PluginValidationException("首页标题不能超过 100 个字符");
         var normalized = new PluginStatusDisplaySettings(settings.RegisterOnHome, settings.StatusKeys?.Where(key => !string.IsNullOrWhiteSpace(key)).Distinct(StringComparer.Ordinal).ToArray() ?? [], homeTitle);
         UpdateLifecycleState(plugin, lifecycle => lifecycle with { StatusDisplay = normalized });
         return normalized;
@@ -130,7 +139,7 @@ public sealed class PluginManager : IDisposable
         ArgumentNullException.ThrowIfNull(settings);
         var plugin = GetPlugin(id);
         var homeTitle = string.IsNullOrWhiteSpace(settings.HomeTitle) ? DefaultFeatureHomeTitle(plugin) : settings.HomeTitle.Trim();
-        if (homeTitle.Length > 100) throw new InvalidOperationException("首页标题不能超过 100 个字符");
+        if (homeTitle.Length > 100) throw new PluginValidationException("首页标题不能超过 100 个字符");
         var availableIds = ReadFeatureIds(plugin.Id).ToHashSet(StringComparer.Ordinal);
         var featureIds = settings.FeatureIds?.Where(availableIds.Contains).Distinct(StringComparer.Ordinal).ToArray() ?? [];
         var normalized = new PluginFeatureDisplaySettings(settings.RegisterOnHome, featureIds, homeTitle);
@@ -171,6 +180,7 @@ public sealed class PluginManager : IDisposable
         {
             plugins = plugins.Where(current => !current.Id.Equals(plugin.Id, StringComparison.OrdinalIgnoreCase)).ToArray();
             stateSubscribers.Remove(plugin.Id);
+            statusDeliveries.Remove(plugin.Id);
         }
         if (deleteData && Directory.Exists(plugin.DataDirectory)) Directory.Delete(plugin.DataDirectory, recursive: true);
         logger.LogInformation("插件「{PluginName}」已删除，插件数据处理：{DeleteData}", plugin.Manifest?.Name ?? plugin.Id, deleteData ? "删除" : "保留");
@@ -180,27 +190,51 @@ public sealed class PluginManager : IDisposable
     {
         var plugin = GetPlugin(id);
         var path = Path.Combine(plugin.DataDirectory, "config.json");
-        return PluginSettingsSchema.ApplyDefaults(ReadSettingsDefinition(id),
-            configurationStore.Read(path) ?? new JsonObject()).ToJsonString(ConfigurationJsonOptions);
+        var definition = ReadSettingsDefinition(id);
+        try
+        {
+            return PluginSettingsSchema.ApplyDefaults(definition,
+                configurationStore.Read(path) ?? new JsonObject()).ToJsonString(ConfigurationJsonOptions);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件配置，请检查配置文件和程序日志", exception); }
     }
 
-    public void WriteConfiguration(string id, string content)
+    public JsonObject WriteConfiguration(string id, string content)
         => RunLifecycle(id, () => WriteConfigurationCore(id, content));
 
-    public void WriteConfigurationAndRestart(string id, string content)
-        => RunLifecycle(id, () => { WriteConfigurationCore(id, content); RestartCore(id); });
+    public JsonObject WriteConfigurationAndRestart(string id, string content)
+        => RunLifecycle(id, () =>
+        {
+            var configuration = WriteConfigurationCore(id, content);
+            RestartCore(id);
+            return configuration;
+        });
 
-    private void WriteConfigurationCore(string id, string content)
+    private JsonObject WriteConfigurationCore(string id, string content)
     {
         ArgumentNullException.ThrowIfNull(content);
         var plugin = GetPlugin(id);
         var definition = ReadSettingsDefinition(id);
-        var submitted = JsonNode.Parse(content) as JsonObject
-            ?? throw new InvalidOperationException("插件配置格式无效，请重新打开配置");
-        var configuration = PluginSettingsSchema.ApplyDefaults(definition, submitted);
-        PluginSettingsSchema.ValidateConfiguration(definition, configuration.ToJsonString());
-        configurationStore.Update(Path.Combine(plugin.DataDirectory, "config.json"),
-            _ => configuration);
+        JsonObject configuration;
+        try
+        {
+            var submitted = JsonNode.Parse(content) as JsonObject
+                ?? throw new PluginValidationException("插件配置格式无效，请重新打开配置");
+            configuration = PluginSettingsSchema.ApplyDefaults(definition, submitted);
+            PluginSettingsSchema.ValidateConfiguration(definition, configuration.ToJsonString());
+        }
+        catch (PluginValidationException) { throw; }
+        catch (JsonException exception) { throw new PluginValidationException("插件配置内容不符合当前版本要求", exception); }
+        catch (InvalidOperationException exception) { throw new PluginValidationException(exception.Message, exception); }
+        try
+        {
+            configurationStore.Update(Path.Combine(plugin.DataDirectory, "config.json"), _ => configuration);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (InvalidDataException exception) { throw new PluginOperationException("无法读取插件配置，请检查配置文件和程序日志", exception); }
+        catch (Exception exception) { throw new PluginOperationException("无法保存插件配置，请检查数据目录和程序日志", exception); }
+        return configuration;
     }
 
     public void Restart(string id)
@@ -221,9 +255,12 @@ public sealed class PluginManager : IDisposable
         var plugin = GetPlugin(id);
         lock (gate)
         {
-            return runtimes.TryGetValue(plugin.Id, out var runtime) && runtime is IPluginRuntimeStatus status
-                ? status.StatusJson
-                : null;
+            try
+            {
+                return runtimes.TryGetValue(plugin.Id, out var runtime) && runtime is IPluginRuntimeStatus status ? status.StatusJson : null;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception) { throw new PluginOperationException("无法读取插件状态，请检查程序日志", exception); }
         }
     }
 
@@ -260,20 +297,30 @@ public sealed class PluginManager : IDisposable
     {
         var plugin = GetPlugin(id);
         if (string.IsNullOrWhiteSpace(plugin.Manifest?.SettingsUi)) return "[]";
-        var path = ResolveDeclarationPath(plugin.Directory, plugin.Manifest.SettingsUi);
-        var definition = File.ReadAllText(path);
-        PluginSettingsSchema.ValidateDefinition(definition);
-        return definition;
+        try
+        {
+            var path = ResolveDeclarationPath(plugin.Directory, plugin.Manifest.SettingsUi);
+            var definition = File.ReadAllText(path);
+            PluginSettingsSchema.ValidateDefinition(definition);
+            return definition;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件配置声明，请检查插件文件和程序日志", exception); }
     }
 
     public string ReadFeaturesDefinition(string id)
     {
         var plugin = GetPlugin(id);
         if (string.IsNullOrWhiteSpace(plugin.Manifest?.FeaturesUi)) return "{\"features\":[]}";
-        var path = ResolveDeclarationPath(plugin.Directory, plugin.Manifest.FeaturesUi);
-        var definition = File.ReadAllText(path);
-        PluginFeaturesSchema.ValidateDefinition(definition);
-        return definition;
+        try
+        {
+            var path = ResolveDeclarationPath(plugin.Directory, plugin.Manifest.FeaturesUi);
+            var definition = File.ReadAllText(path);
+            PluginFeaturesSchema.ValidateDefinition(definition);
+            return definition;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件功能声明，请检查插件文件和程序日志", exception); }
     }
 
     public PluginFeatureExecutionResult ExecuteFeature(string id, string featureId) => InvokeFeature(id, featureId);
@@ -284,14 +331,15 @@ public sealed class PluginManager : IDisposable
     private PluginPageFeatureSession OpenPageFeatureSessionCore(string id, string featureId)
     {
         var plugin = GetPlugin(id);
-        if (!plugin.Enabled) throw new InvalidOperationException("插件未启用");
+        if (!plugin.Enabled) throw new PluginValidationException("插件未启用");
         using var document = JsonDocument.Parse(ReadFeaturesDefinition(id));
         var feature = document.RootElement.GetProperty("features").EnumerateArray().FirstOrDefault(item => string.Equals(item.GetProperty("id").GetString(), featureId, StringComparison.Ordinal));
-        if (feature.ValueKind == JsonValueKind.Undefined || feature.GetProperty("mode").GetString() != "page") throw new InvalidOperationException("该 Feature 当前不支持功能页");
+        if (feature.ValueKind == JsonValueKind.Undefined || feature.GetProperty("mode").GetString() != "page") throw new PluginValidationException("该 Feature 当前不支持功能页");
         IPluginRuntimePageFeatures pageFeatures;
         lock (gate)
         {
-            if (!runtimes.TryGetValue(plugin.Id, out var instance) || instance is not IPluginRuntimePageFeatures features) throw new InvalidOperationException("插件未提供功能页能力");
+            if (!runtimes.TryGetValue(plugin.Id, out var instance) || instance is not IPluginRuntimePageFeatures features)
+                throw new PluginOperationException("插件功能页能力不可用，请检查程序日志", new InvalidOperationException("插件未提供功能页能力"));
             pageFeatures = features;
         }
         var sessionId = pageSessions.Open(plugin.Id, featureId, session => pageFeatures.OpenPage(featureId, session));
@@ -314,8 +362,8 @@ public sealed class PluginManager : IDisposable
         var plugin = GetPlugin(id);
         using var document = JsonDocument.Parse(ReadFeaturesDefinition(id));
         var feature = document.RootElement.GetProperty("features").EnumerateArray().FirstOrDefault(item => string.Equals(item.GetProperty("id").GetString(), featureId, StringComparison.Ordinal));
-        if (feature.ValueKind == JsonValueKind.Undefined) throw new InvalidOperationException("Feature 不存在");
-        if (!string.Equals(feature.GetProperty("mode").GetString(), "action", StringComparison.Ordinal)) throw new InvalidOperationException("该 Feature 当前不支持执行");
+        if (feature.ValueKind == JsonValueKind.Undefined) throw new PluginValidationException("Feature 不存在");
+        if (!string.Equals(feature.GetProperty("mode").GetString(), "action", StringComparison.Ordinal)) throw new PluginValidationException("该 Feature 当前不支持执行");
         IPluginRuntimeInstance? instance;
         lock (gate) runtimes.TryGetValue(plugin.Id, out instance);
         if (instance is not IPluginRuntimeActionFeatures features) return new(false, "插件未提供点击执行功能能力");
@@ -329,10 +377,11 @@ public sealed class PluginManager : IDisposable
             else logger.LogWarning("插件「{PluginName}」功能「{FeatureName}」执行失败", pluginName, featureName);
             return result;
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogError(exception, "执行插件「{PluginName}」功能「{FeatureName}」时发生异常", pluginName, featureName);
-            throw;
+            throw new PluginOperationException("插件功能执行失败，请检查程序日志", exception, logged: true);
         }
     }
 
@@ -340,65 +389,86 @@ public sealed class PluginManager : IDisposable
     {
         ArgumentNullException.ThrowIfNull(callback);
         var plugin = GetPlugin(id);
-        int subscriberCount;
+        var registeredCallback = new Action<string>(json => callback(json));
+        StatusSubscriptions delivery;
+        PluginStatusDelivery.Delivery pending;
         lock (gate)
         {
             if (!stateSubscribers.TryGetValue(plugin.Id, out var subscribers)) stateSubscribers[plugin.Id] = subscribers = [];
-            subscribers.Add(callback);
-            subscriberCount = subscribers.Count;
+            subscribers.Add(registeredCallback);
+            (delivery, pending) = QueueStatusSubscriberCount(plugin.Id, propagateFailure: true, Rollback);
         }
-        try { NotifyStatusSubscriberCount(plugin.Id, subscriberCount); }
+        try { delivery.Queue.Deliver(pending); }
         catch
         {
-            lock (gate)
-            {
-                if (stateSubscribers.TryGetValue(plugin.Id, out var subscribers))
-                {
-                    subscribers.Remove(callback);
-                    if (subscribers.Count == 0) stateSubscribers.Remove(plugin.Id);
-                }
-            }
-            TryNotifyStatusSubscriberCount(plugin.Id, GetStatusSubscriberCount(plugin.Id));
+            Rollback();
             throw;
         }
-        return new StateSubscription(() =>
+        return new StateSubscription(Rollback);
+
+        void Rollback()
         {
-            var remainingSubscribers = 0;
+            StatusSubscriptions rollbackDelivery;
+            PluginStatusDelivery.Delivery rollback;
             lock (gate)
             {
-                if (!stateSubscribers.TryGetValue(plugin.Id, out var subscribers)) return;
-                subscribers.Remove(callback);
-                remainingSubscribers = subscribers.Count;
-                if (remainingSubscribers == 0) stateSubscribers.Remove(plugin.Id);
+                if (!stateSubscribers.TryGetValue(plugin.Id, out var subscribers) || !subscribers.Remove(registeredCallback)) return;
+                if (subscribers.Count == 0) stateSubscribers.Remove(plugin.Id);
+                (rollbackDelivery, rollback) = QueueStatusSubscriberCount(plugin.Id);
             }
-            TryNotifyStatusSubscriberCount(plugin.Id, remainingSubscribers);
+            rollbackDelivery.Queue.Deliver(rollback);
+        }
+    }
+
+    private (StatusSubscriptions, PluginStatusDelivery.Delivery) QueueStatusSubscriberCount(string id, bool propagateFailure = false, Action? rollback = null)
+    {
+        if (!statusDeliveries.TryGetValue(id, out var delivery)) statusDeliveries[id] = delivery = new();
+        runtimes.TryGetValue(id, out var runtime);
+        var count = stateSubscribers.TryGetValue(id, out var subscribers) ? subscribers.Count : 0;
+        var version = ++delivery.Version;
+        var pending = delivery.Queue.Enqueue(_ =>
+        {
+            lock (gate)
+            {
+                if (delivery.Version != version || !runtimes.TryGetValue(id, out var current) || !ReferenceEquals(current, runtime)) return;
+            }
+            try { (runtime as IPluginRuntimeStatusSubscriptions)?.SetStatusSubscriberCount(count); }
+            catch (Exception exception)
+            {
+                rollback?.Invoke();
+                if (propagateFailure) throw;
+                logger.LogWarning(exception, "插件 {PluginId} 更新状态订阅数量失败", id);
+            }
         });
+        return (delivery, pending);
     }
 
-    private void NotifyStatusSubscriberCount(string id, int count)
+    private void NotifyStatusSubscriberCount(string id)
     {
-        IPluginRuntimeStatusSubscriptions? subscriptions;
-        lock (gate) subscriptions = runtimes.TryGetValue(id, out var runtime) ? runtime as IPluginRuntimeStatusSubscriptions : null;
-        subscriptions?.SetStatusSubscriberCount(count);
+        StatusSubscriptions delivery;
+        PluginStatusDelivery.Delivery pending;
+        lock (gate) (delivery, pending) = QueueStatusSubscriberCount(id, propagateFailure: true);
+        delivery.Queue.Deliver(pending);
     }
 
-    private void TryNotifyStatusSubscriberCount(string id, int count)
+    private sealed class StatusSubscriptions
     {
-        try { NotifyStatusSubscriberCount(id, count); }
-        catch (Exception exception) { logger.LogWarning(exception, "插件 {PluginId} 更新状态订阅数量失败", id); }
+        public PluginStatusDelivery Queue { get; } = new();
+        public long Version { get; set; }
     }
 
-    private int GetStatusSubscriberCount(string id)
-    {
-        lock (gate) return stateSubscribers.TryGetValue(id, out var subscribers) ? subscribers.Count : 0;
-    }
-
-    private void PublishState(string id, string json)
+    private void PublishState(string id, IPluginRuntimeInstance runtime, string json)
     {
         Action<string>[] callbacks;
-        lock (gate) callbacks = stateSubscribers.TryGetValue(id, out var subscribers) ? subscribers.ToArray() : [];
+        lock (gate)
+        {
+            if (!runtimes.TryGetValue(id, out var current) || !ReferenceEquals(current, runtime)) return;
+            callbacks = stateSubscribers.TryGetValue(id, out var subscribers) ? subscribers.ToArray() : [];
+        }
         foreach (var callback in callbacks)
         {
+            lock (gate)
+                if (!runtimes.TryGetValue(id, out var current) || !ReferenceEquals(current, runtime)) return;
             try { callback(json); } catch (Exception exception) { logger.LogWarning(exception, "插件 {PluginId} 状态订阅回调失败", id); }
         }
     }
@@ -453,9 +523,10 @@ public sealed class PluginManager : IDisposable
             MarkLoaded(id);
             plugin = GetPlugin(id);
             instance = runtime.Start(plugin);
-            if (instance is IPluginRuntimeStatus status) status.StateChanged += json => PublishState(plugin.Id, json);
+            var startedInstance = instance;
+            if (instance is IPluginRuntimeStatus status) status.StateChanged += json => PublishState(plugin.Id, startedInstance, json);
             lock (gate) runtimes[plugin.Id] = instance;
-            NotifyStatusSubscriberCount(plugin.Id, GetStatusSubscriberCount(plugin.Id));
+            NotifyStatusSubscriberCount(plugin.Id);
             UpdatePlugin(plugin with { State = PluginState.Running, Errors = [] });
         }
         catch (Exception exception)
@@ -497,7 +568,9 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public void Scan()
+    public void Scan() => Scan(throwOnFailure: true);
+
+    private void Scan(bool throwOnFailure)
     {
         lock (lifecycleGate)
         {
@@ -518,7 +591,7 @@ public sealed class PluginManager : IDisposable
                 NotifyLifecycleWaiters();
             }
         }
-        try { ScanCore(); }
+        try { ScanCore(throwOnFailure); }
         finally
         {
             lock (lifecycleGate)
@@ -529,7 +602,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private void ScanCore()
+    private void ScanCore(bool throwOnFailure)
     {
         try
         {
@@ -598,7 +671,11 @@ public sealed class PluginManager : IDisposable
                 || !current.Directory.Equals(plugin.Directory, StringComparison.OrdinalIgnoreCase)))
             {
                 StopCore(plugin.Id);
-                lock (gate) stateSubscribers.Remove(plugin.Id);
+                lock (gate)
+                {
+                    stateSubscribers.Remove(plugin.Id);
+                    statusDeliveries.Remove(plugin.Id);
+                }
             }
             lock (gate) plugins = next;
             logger.LogInformation("插件扫描完成，发现 {Count} 个插件目录", next.Length);
@@ -606,15 +683,18 @@ public sealed class PluginManager : IDisposable
                 && (!previousById.TryGetValue(plugin.Id, out var original)
                     || !original.Directory.Equals(plugin.Directory, StringComparison.OrdinalIgnoreCase)))) StartCore(plugin.Id);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogError(exception, "扫描插件目录失败");
+            if (throwOnFailure) throw;
         }
     }
 
     private PluginInfo? Discover(string directory, IReadOnlyDictionary<string, PluginInfo> previous, List<PluginInfo> skippedPlugins)
     {
         try { return DiscoverCore(directory, previous: previous, skippedPlugins: skippedPlugins); }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "跳过无法读取的插件目录 {Directory}", directory);
@@ -826,7 +906,7 @@ public sealed class PluginManager : IDisposable
     {
         var plugin = GetPlugin(id);
         if (!plugin.CanChangeEnabled)
-            throw new InvalidOperationException(string.Join("；", plugin.Errors));
+            throw new PluginValidationException(string.Join("；", plugin.Errors));
         if (enabled)
         {
             StartCore(plugin.Id, enable: true);
@@ -894,8 +974,12 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private PluginLifecycleState? ReadLifecycleState(string dataDirectory) =>
-        configurationStore.Read(Path.Combine(dataDirectory, "plugin.json"))?.Deserialize<PluginLifecycleState>(JsonOptions);
+    private PluginLifecycleState? ReadLifecycleState(string dataDirectory)
+    {
+        try { return configurationStore.Read(Path.Combine(dataDirectory, "plugin.json"))?.Deserialize<PluginLifecycleState>(JsonOptions); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法读取插件设置，请检查配置文件和程序日志", exception); }
+    }
 
     private void WriteLifecycleEnabled(PluginInfo plugin, bool enabled)
     {
@@ -914,15 +998,20 @@ public sealed class PluginManager : IDisposable
     private void UpdateLifecycleState(PluginInfo plugin, Func<PluginLifecycleState, PluginLifecycleState> update)
     {
         var path = Path.Combine(plugin.DataDirectory, "plugin.json");
-        configurationStore.Update(path, current =>
+        try
         {
-            var state = current.Deserialize<PluginLifecycleState>(JsonOptions) ?? new PluginLifecycleState();
-            var next = JsonSerializer.SerializeToNode(update(state), LifecycleJsonOptions)!.AsObject();
-            foreach (var property in current)
-                if (!next.Any(item => item.Key.Equals(property.Key, StringComparison.OrdinalIgnoreCase)))
-                    next.Add(property.Key, property.Value?.DeepClone());
-            return next;
-        });
+            configurationStore.Update(path, current =>
+            {
+                var state = current.Deserialize<PluginLifecycleState>(JsonOptions) ?? new PluginLifecycleState();
+                var next = JsonSerializer.SerializeToNode(update(state), LifecycleJsonOptions)!.AsObject();
+                foreach (var property in current)
+                    if (!next.Any(item => item.Key.Equals(property.Key, StringComparison.OrdinalIgnoreCase)))
+                        next.Add(property.Key, property.Value?.DeepClone());
+                return next;
+            });
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) { throw new PluginOperationException("无法保存插件设置，请检查数据目录和程序日志", exception); }
     }
 
     private sealed record PluginLifecycleState(bool Enabled = false, PluginStatusDisplaySettings? StatusDisplay = null, PluginFeatureDisplaySettings? FeatureDisplay = null, PluginSettingsDisplaySettings? SettingsDisplay = null);

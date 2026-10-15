@@ -14,39 +14,82 @@ public static class PluginConfigurationResponse
             ?? throw new InvalidOperationException("settings.json 必须是数组");
         var configuration = JsonNode.Parse(configurationJson) as JsonObject
             ?? throw new InvalidOperationException("插件配置格式无效");
-        foreach (var setting in definition.OfType<JsonObject>())
+        RemoveSensitiveDefaults(definition);
+        return (definition.ToJsonString(JsonOptions), ProjectFields(definition, configuration).ToJsonString(JsonOptions));
+    }
+
+    private static void RemoveSensitiveDefaults(JsonArray fields)
+    {
+        foreach (var field in fields.OfType<JsonObject>())
         {
-            var name = setting["name"]!.GetValue<string>();
-            if (setting["type"]?.GetValue<string>() != "collection")
-                MaskField(setting, [configuration]);
-            else if (setting["mode"]?.GetValue<string>() == "fixed")
+            if (field["masked"]?.GetValue<bool>() == true) field.Remove("default");
+            if (field["type"]?.GetValue<string>() != "collection") continue;
+            if (field["mode"]?.GetValue<string>() == "fixed")
             {
-                var items = configuration[name] as JsonObject;
-                foreach (var item in ((JsonArray)setting["items"]!).OfType<JsonObject>())
-                    MaskFields((JsonArray)item["fields"]!, [(items?[item["name"]!.GetValue<string>()] as JsonObject)]);
+                foreach (var item in ((JsonArray)field["items"]!).OfType<JsonObject>())
+                    RemoveSensitiveDefaults((JsonArray)item["fields"]!);
             }
-            else
-                MaskFields((JsonArray)setting["item"]!["fields"]!,
-                    (configuration[name] as JsonArray)?.OfType<JsonObject>().ToArray() ?? []);
+            else RemoveSensitiveDefaults((JsonArray)field["item"]!["fields"]!);
         }
-        return (definition.ToJsonString(JsonOptions), configuration.ToJsonString(JsonOptions));
     }
 
-    private static void MaskFields(JsonArray fields, JsonObject?[] values)
+    private static JsonObject ProjectFields(JsonArray fields, JsonObject source)
     {
-        foreach (var field in fields.OfType<JsonObject>()) MaskField(field, values);
-    }
-
-    private static void MaskField(JsonObject field, JsonObject?[] values)
-    {
-        if (field["masked"]?.GetValue<bool>() != true) return;
-        field.Remove("default");
-        var name = field["name"]!.GetValue<string>();
-        foreach (var value in values)
+        var result = new JsonObject();
+        foreach (var field in fields.OfType<JsonObject>())
         {
-            if (value is null) continue;
-            var text = value[name] is JsonValue secret && secret.TryGetValue<string>(out var stored) ? stored : null;
-            value[name] = new string('•', text?.Length ?? 0);
+            var name = field["name"]!.GetValue<string>();
+            if (field["type"]?.GetValue<string>() == "collection")
+            {
+                if (field["mode"]?.GetValue<string>() == "fixed" && source[name] is JsonObject fixedItems)
+                {
+                    var projected = new JsonObject();
+                    foreach (var item in ((JsonArray)field["items"]!).OfType<JsonObject>())
+                    {
+                        var itemName = item["name"]!.GetValue<string>();
+                        if (fixedItems[itemName] is JsonObject values)
+                            projected[itemName] = ProjectFields((JsonArray)item["fields"]!, values);
+                    }
+                    result[name] = projected;
+                }
+                else if (field["mode"]?.GetValue<string>() == "dynamic" && source[name] is JsonArray dynamicItems)
+                {
+                    var projected = new JsonArray();
+                    foreach (var item in dynamicItems.OfType<JsonObject>())
+                    {
+                        var values = ProjectFields((JsonArray)field["item"]!["fields"]!, item);
+                        if (item["__winpilot"] is JsonObject metadata)
+                        {
+                            var projectedMetadata = new JsonObject();
+                            foreach (var key in new[] { "id", "remark" })
+                                if (metadata[key]?.GetValueKind() == JsonValueKind.String)
+                                    projectedMetadata[key] = metadata[key]!.DeepClone();
+                            values["__winpilot"] = projectedMetadata;
+                        }
+                        projected.Add(values);
+                    }
+                    result[name] = projected;
+                }
+                continue;
+            }
+            var masked = field["masked"]?.GetValue<bool>() == true;
+            if (!source.TryGetPropertyValue(name, out var value))
+            {
+                if (masked) result[name] = "";
+                continue;
+            }
+            if (!IsFieldValue(field["type"]!.GetValue<string>(), value)) continue;
+            result[name] = masked ? JsonValue.Create(new string('•', value!.GetValue<string>().Length)) : value!.DeepClone();
         }
+        return result;
     }
+
+    private static bool IsFieldValue(string type, JsonNode? value) => type switch
+    {
+        "text" or "textarea" or "select" => value?.GetValueKind() == JsonValueKind.String,
+        "number" => value?.GetValueKind() == JsonValueKind.Number,
+        "checkbox" => value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
+        "multi-checkbox" => value is JsonArray items && items.All(item => item?.GetValueKind() == JsonValueKind.String),
+        _ => false
+    };
 }

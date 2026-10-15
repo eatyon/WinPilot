@@ -61,7 +61,7 @@ public sealed class PluginPageSessionTest
     {
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
         var id = sessions.Open("plugin", "page", _ => { });
-        await Assert.ThrowsAsync<InvalidOperationException>(() => sessions.UploadAsync(id, _ =>
+        await Assert.ThrowsAsync<PluginOperationException>(() => sessions.UploadAsync(id, _ =>
         {
             Assert.Fail("不支持上传的页面不应读取上传数据");
             return Task.FromResult(new WinPilot.PluginContract.PluginPageUpload("chunk", "{}", new byte[] { 1 }));
@@ -161,5 +161,35 @@ public sealed class PluginPageSessionTest
     private sealed class Resource(Action cleanup) : IDisposable
     {
         public void Dispose() => cleanup();
+    }
+
+    [Fact]
+    public async Task PageSession_ForwardsMessagesAndRejectsAfterClose()
+    {
+        using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+        var id = sessions.Open("test-plugin", "test-page", session => session.RegisterMessageHandler((message, _) => Task.FromResult("reply:" + message)));
+
+        Assert.Equal("reply:request", await sessions.SendAsync(id, "request", CancellationToken.None));
+
+        sessions.Close(id);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => sessions.SendAsync(id, "request", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PageSession_CloseAllCancelsActiveRequestsAndRemovesSessions()
+    {
+        using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+        var id = sessions.Open("test-plugin", "test-page", session =>
+            session.RegisterMessageHandler(async (_, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return "unreachable";
+            }));
+        var request = sessions.SendAsync(id, "request", CancellationToken.None);
+
+        sessions.CloseAll();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => sessions.SendAsync(id, "request", CancellationToken.None));
     }
 }

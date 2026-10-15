@@ -32,11 +32,16 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
             opened(session);
             return session.Id;
         }
+        catch (OperationCanceledException)
+        {
+            Close(session.Id);
+            throw;
+        }
         catch (Exception exception)
         {
             logger.LogError(exception, "打开插件功能页面失败，插件 ID：{PluginId}，功能 ID：{FeatureId}，会话 ID：{SessionId}", pluginId, featureId, session.Id);
             Close(session.Id);
-            throw;
+            throw new PluginOperationException("插件功能页打开失败，请检查程序日志", exception, logged: true);
         }
     }
 
@@ -55,7 +60,7 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
     {
         Session session;
         lock (gate) session = sessions.TryGetValue(id, out var current) ? current : throw new KeyNotFoundException("插件页面会话不存在");
-        return SendCoreAsync(session, message, cancellationToken);
+        return session.SendAsync(message, cancellationToken);
     }
 
     public void Touch(string id)
@@ -72,17 +77,6 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
         Session session;
         lock (gate) session = sessions.TryGetValue(id, out var current) ? current : throw new KeyNotFoundException("插件页面会话不存在");
         return session.UploadAsync(readUpload, cancellationToken);
-    }
-
-    private async Task<string> SendCoreAsync(Session session, string message, CancellationToken cancellationToken)
-    {
-        try { return await session.SendAsync(message, cancellationToken); }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, "处理插件功能页面消息失败，插件 ID：{PluginId}，会话 ID：{SessionId}", session.PluginId, session.Id);
-            throw;
-        }
     }
 
     public void CloseByPlugin(string pluginId) =>
@@ -156,12 +150,24 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
             lock (gate)
             {
                 if (closed) throw new KeyNotFoundException("插件页面会话不存在");
-                handler = messageHandler ?? throw new InvalidOperationException("插件页面未注册消息处理器");
+                handler = messageHandler ?? throw new PluginOperationException("插件页面消息能力不可用，请检查程序日志", new InvalidOperationException("插件页面未注册消息处理器"));
                 linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
                 activeRequests++;
                 Touch();
             }
-            try { using (linked) return await handler(message, linked.Token); }
+            try
+            {
+                using (linked)
+                {
+                    try { return await handler(message, linked.Token); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception exception)
+                    {
+                        logger.LogError(exception, "处理插件功能页面消息失败，插件 ID：{PluginId}，会话 ID：{SessionId}", PluginId, Id);
+                        throw new PluginOperationException("插件页面消息处理失败，请检查程序日志", exception, logged: true);
+                    }
+                }
+            }
             finally { CompleteRequest(); }
         }
         public void RegisterUploadHandler(Func<WinPilot.PluginContract.PluginPageUpload, CancellationToken, Task<string>> handler)
@@ -181,7 +187,7 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
             lock (gate)
             {
                 if (closed) throw new KeyNotFoundException("插件页面会话不存在");
-                handler = uploadHandler ?? throw new InvalidOperationException("插件页面未注册上传处理器");
+                handler = uploadHandler ?? throw new PluginOperationException("插件页面上传能力不可用，请检查程序日志", new InvalidOperationException("插件页面未注册上传处理器"));
                 linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
                 activeRequests++;
                 Touch();
@@ -191,14 +197,18 @@ public sealed class PluginPageSessionManager(ILogger<PluginPageSessionManager> l
                 using (linked)
                 {
                     linked.Token.ThrowIfCancellationRequested();
-                    var upload = await readUpload(linked.Token);
+                    WinPilot.PluginContract.PluginPageUpload upload;
+                    try { upload = await readUpload(linked.Token); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (BadHttpRequestException) { throw; }
+                    catch (Exception exception) { throw new PluginOperationException("无法读取插件上传数据，请检查程序日志", exception); }
                     linked.Token.ThrowIfCancellationRequested();
                     try { return await handler(upload, linked.Token); }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception exception)
                     {
                         logger.LogError(exception, "处理插件功能页面上传失败，插件 ID：{PluginId}，会话 ID：{SessionId}", PluginId, Id);
-                        throw;
+                        throw new PluginOperationException("插件页面上传处理失败，请检查程序日志", exception, logged: true);
                     }
                 }
             }

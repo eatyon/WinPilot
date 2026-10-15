@@ -3,6 +3,8 @@ using WinPilot.Core;
 using WinPilot.Core.Plugins;
 using WinPilot.Features.Plugins;
 
+using static WinPilot.Test.PluginTestSupport;
+
 namespace WinPilot.Test;
 
 public sealed partial class PluginManagerTest
@@ -22,7 +24,8 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(invalid, "plugin.dll"), "");
             File.WriteAllText(Path.Combine(invalid, "manifest.json"), manifest);
             if (features is not null) File.WriteAllText(Path.Combine(invalid, "features.json"), features);
-            var manager = CreatePluginManager(paths, new RecordingPluginRuntime());
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+            using var manager = CreatePluginManager(paths, new RecordingPluginRuntime(), pages);
             Assert.Equal("valid", Assert.Single(manager.GetPlugins()).Id);
             manager.Stop("valid");
         }
@@ -37,7 +40,8 @@ public sealed partial class PluginManagerTest
         {
             WritePlugin(paths, "plugin", "plugin", "");
             var runtime = new FailingSubscriptionsRuntime();
-            var manager = CreatePluginManager(paths, runtime);
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+            using var manager = CreatePluginManager(paths, runtime, pages);
             Assert.Equal(PluginState.Failed, manager.GetPlugin("plugin").State);
             Assert.Equal(1, runtime.Disposed);
             manager.Stop("plugin");
@@ -53,7 +57,8 @@ public sealed partial class PluginManagerTest
         try
         {
             WritePlugin(paths, "plugin", "plugin", "");
-            var manager = CreatePluginManager(paths, new RecordingPluginRuntime());
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+            using var manager = CreatePluginManager(paths, new RecordingPluginRuntime(), pages);
             using (File.Open(Path.Combine(paths.PluginsDirectory, "plugin", "plugin.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
             {
                 Assert.NotNull(Record.Exception(() => manager.Delete("plugin", false)));
@@ -73,6 +78,7 @@ public sealed partial class PluginManagerTest
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
         Task<PluginManager.PluginPageFeatureSession>? opening = null;
         Task? stopping = null;
+        PluginManager? manager = null;
         try
         {
             WritePlugin(paths, "plugin", "plugin", "");
@@ -82,7 +88,7 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(directory, "features.json"), """{"features":[{"id":"page","name":"Page","mode":"page","entry":"index.js"}]}""");
             File.WriteAllText(Path.Combine(directory, "manifest.json"), """{"id":"plugin","name":"Plugin","version":"1.0.0","main":"plugin.dll","features_ui":"features.json"}""");
             var runtime = new BlockingPageRuntime(release);
-            var manager = new PluginManager(paths, NullLogger<PluginManager>.Instance, runtime, sessions);
+            manager = new PluginManager(paths, NullLogger<PluginManager>.Instance, runtime, sessions);
             opening = Task.Run(() => manager.OpenPageFeatureSession("plugin", "page"));
             await runtime.Entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
             stopping = Task.Run(() => manager.Stop("plugin"));
@@ -95,10 +101,21 @@ public sealed partial class PluginManagerTest
         }
         finally
         {
-            release.Set();
-            if (opening is not null) await opening;
-            if (stopping is not null) await stopping;
-            TryDeleteDirectory(paths.ApplicationDirectory);
+            try
+            {
+                release.Set();
+                try { if (opening is not null) await opening.WaitAsync(TimeSpan.FromSeconds(5)); }
+                finally { if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5)); }
+            }
+            finally
+            {
+                try { manager?.Dispose(); }
+                finally
+                {
+                    try { sessions.Dispose(); }
+                    finally { TryDeleteDirectory(paths.ApplicationDirectory); }
+                }
+            }
         }
     }
 
@@ -110,7 +127,8 @@ public sealed partial class PluginManagerTest
         {
             WritePlugin(paths, "plugin", "plugin", "");
             var runtime = new FailingSubscriptionsRuntime(true);
-            var manager = CreatePluginManager(paths, runtime);
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+            using var manager = CreatePluginManager(paths, runtime, pages);
             Assert.Throws<InvalidOperationException>(() => manager.SubscribeState("plugin", _ => { }));
             Assert.Throws<InvalidOperationException>(() => manager.SubscribeState("plugin", _ => { }));
             Assert.Equal(new[] { 0, 1, 0, 1, 0 }, runtime.Counts);

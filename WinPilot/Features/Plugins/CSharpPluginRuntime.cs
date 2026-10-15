@@ -203,6 +203,8 @@ internal sealed class CSharpPluginPageBridge : IPluginPageApi, IDisposable
 
 public sealed class PluginStatusBridge : IPluginStatus, IDisposable
 {
+    private readonly object gate = new();
+    private readonly PluginStatusDelivery delivery = new();
     private string? statusJson;
     private int subscriberCount;
     public string? StatusJson => Volatile.Read(ref statusJson);
@@ -214,9 +216,15 @@ public sealed class PluginStatusBridge : IPluginStatus, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var normalized = document.RootElement.GetRawText();
-        if (string.Equals(Volatile.Read(ref statusJson), normalized, StringComparison.Ordinal)) return;
-        Volatile.Write(ref statusJson, normalized);
-        StateChanged?.Invoke(normalized);
+        PluginStatusDelivery.Delivery pending;
+        lock (gate)
+        {
+            if (string.Equals(statusJson, normalized, StringComparison.Ordinal)) return;
+            Volatile.Write(ref statusJson, normalized);
+            var callback = StateChanged;
+            pending = delivery.Enqueue(_ => callback?.Invoke(normalized));
+        }
+        delivery.Deliver(pending);
     }
 
     public void SetStatusSubscriberCount(int count)

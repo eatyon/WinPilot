@@ -1,5 +1,8 @@
 using System.Text;
+using System.Buffers;
+using System.IO.Pipelines;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
@@ -42,7 +45,7 @@ public sealed class PluginStatusStreamTest : IDisposable
     public async Task InitialStatusFailureAlwaysRemovesSubscription()
     {
         runtime.Instance.FailStatusRead = true;
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        await Assert.ThrowsAsync<PluginOperationException>(() =>
             PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", new DefaultHttpContext(), manager));
         Assert.Equal(0, runtime.Instance.Subscribers);
     }
@@ -96,6 +99,85 @@ public sealed class PluginStatusStreamTest : IDisposable
         await streaming.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(0, runtime.Instance.Subscribers);
         Assert.False(context.RequestAborted.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task InitialAndSubsequentStatusEventsFlushBeforeWaitingForNextEvent()
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var initialFlushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextFlushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stream = new FlushStream((count, token) =>
+        {
+            Assert.Equal(cancellation.Token, token);
+            if (count == 1) initialFlushed.TrySetResult();
+            else nextFlushed.TrySetResult();
+            return Task.CompletedTask;
+        });
+        var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
+        using var body = new FlushBodyFeature(stream);
+        context.Features.Set<IHttpResponseBodyFeature>(body);
+        var streaming = PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", context, manager);
+        try
+        {
+            await initialFlushed.Task.WaitAsync(cancellation.Token);
+            Assert.Equal(1, runtime.Instance.Subscribers);
+            Assert.Equal("text/event-stream", context.Response.ContentType);
+            Assert.Equal("no-cache", context.Response.Headers.CacheControl.ToString());
+            runtime.Instance.Publish(1);
+            await nextFlushed.Task.WaitAsync(cancellation.Token);
+            Assert.Equal(2, stream.FlushCount);
+            Assert.Equal(new[] { "data: {\"sequence\":0}", "data: {\"sequence\":1}" },
+                Encoding.UTF8.GetString(body.ReadWrittenBytes()).Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
+        }
+        finally { cancellation.Cancel(); await streaming.WaitAsync(TimeSpan.FromSeconds(10)); }
+        Assert.Equal(0, runtime.Instance.Subscribers);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task FlushFailureAlwaysRemovesSubscription(int failingFlush)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var stream = new FlushStream((count, _) =>
+        {
+            if (count == failingFlush) throw new IOException("连接已断开");
+            runtime.Instance.Publish(1);
+            return Task.CompletedTask;
+        });
+        var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
+        using var body = new FlushBodyFeature(stream);
+        context.Features.Set<IHttpResponseBodyFeature>(body);
+        await Assert.ThrowsAsync<IOException>(() => PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", context, manager)
+            .WaitAsync(cancellation.Token));
+        Assert.Equal(failingFlush, stream.FlushCount);
+        Assert.Equal(0, runtime.Instance.Subscribers);
+    }
+
+    private sealed class FlushStream(Func<int, CancellationToken, Task> flush) : MemoryStream
+    {
+        public int FlushCount { get; private set; }
+        public override Task FlushAsync(CancellationToken cancellationToken) => flush(++FlushCount, cancellationToken);
+    }
+
+    private sealed class FlushBodyFeature(Stream stream) : IHttpResponseBodyFeature, IDisposable
+    {
+        private readonly Pipe pipe = new();
+        public Stream Stream => stream;
+        public PipeWriter Writer => pipe.Writer;
+        public void DisableBuffering() { }
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CompleteAsync() => Task.CompletedTask;
+        public Task SendFileAsync(string path, long offset, long? count, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public byte[] ReadWrittenBytes()
+        {
+            Assert.True(pipe.Reader.TryRead(out var result));
+            var bytes = result.Buffer.ToArray();
+            pipe.Reader.AdvanceTo(result.Buffer.End);
+            return bytes;
+        }
+        public void Dispose() { pipe.Writer.Complete(); pipe.Reader.Complete(); }
     }
 
     public void Dispose()

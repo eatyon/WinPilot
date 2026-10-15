@@ -16,7 +16,7 @@ public static class PluginSettingOptionSources
     public static IReadOnlyList<PluginSettingOption> GetOptions(string source) => source switch
     {
         NotificationChannels => ChannelOptions,
-        _ => throw new InvalidOperationException($"不支持的配置选项来源：{source}")
+        _ => throw new PluginValidationException($"不支持的配置选项来源：{source}")
     };
 
     public static string WithSelectedOptions(string definitionJson, string? configurationJson, JsonSerializerOptions? options = null)

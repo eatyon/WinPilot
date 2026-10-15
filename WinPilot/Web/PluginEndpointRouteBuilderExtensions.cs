@@ -1,6 +1,7 @@
 using WinPilot.Features.Plugins;
 using System.Buffers;
 using System.Threading.Channels;
+using Microsoft.Net.Http.Headers;
 
 namespace WinPilot.Web;
 
@@ -8,85 +9,111 @@ public static class PluginEndpointRouteBuilderExtensions
 {
     private const int MaxPageMessageBytes = 64 * 1024;
     private const int MaxPageUploadBytes = 1024 * 1024;
+    private const string ReadmeContentType = "text/plain; charset=utf-8";
 
     public static IEndpointRouteBuilder MapPluginEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/plugins", (PluginManager plugins) => Results.Ok(plugins.GetPlugins()));
-        endpoints.MapGet("/api/plugins/{id}", async (string id, bool? waitForLifecycle, PluginManager plugins, CancellationToken cancellationToken) =>
+        var routes = endpoints.MapGroup("").AddEndpointFilter<PluginExceptionEndpointFilter>();
+        routes.MapGet("/api/plugins", (PluginManager plugins) => Results.Ok(plugins.GetPlugins()));
+        routes.MapGet("/api/plugins/{id}", async (string id, bool? waitForLifecycle, PluginManager plugins, CancellationToken cancellationToken) =>
         {
             if (waitForLifecycle != true) return Execute(() => Results.Ok(plugins.GetPlugin(id)));
             try { return Results.Ok(await plugins.GetPluginAfterLifecycleAsync(id, cancellationToken)); }
+            catch (ArgumentException exception) when (exception.ParamName == "id") { return InvalidPluginId(); }
             catch (FileNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
         });
-        endpoints.MapMethods("/api/plugins/{id}/readme", ["HEAD"], (string id, PluginManager plugins) => Execute(() => plugins.HasReadme(id) ? Results.Ok() : Results.NotFound()));
-        endpoints.MapGet("/api/plugins/{id}/readme", (string id, PluginManager plugins) => Execute(() => Results.Text(plugins.ReadReadme(id), "text/plain; charset=utf-8")));
-        endpoints.MapPost("/api/plugins/{id}/enable", (string id, PluginManager plugins) => Execute(() => { plugins.Enable(id); return Results.Ok(plugins.GetPlugin(id)); }));
-        endpoints.MapPost("/api/plugins/{id}/disable", (string id, PluginManager plugins) => Execute(() => { plugins.Disable(id); return Results.Ok(plugins.GetPlugin(id)); }));
-        endpoints.MapDelete("/api/plugins/{id}", (string id, bool deleteData, PluginManager plugins) => Execute(() => { plugins.Delete(id, deleteData); return Results.NoContent(); }));
-        endpoints.MapPost("/api/plugins/scan", (PluginManager plugins) => { plugins.Scan(); return Results.Ok(plugins.GetPlugins()); });
-        endpoints.MapGet("/api/plugins/{id}/configuration", (string id, PluginManager plugins, HttpContext context) => Execute(() => ReadConfiguration(id, plugins, context, false)));
-        endpoints.MapPut("/api/plugins/{id}/configuration", (string id, System.Text.Json.JsonElement content, PluginManager plugins) => Execute(() => { plugins.WriteConfigurationAndRestart(id, content.GetRawText()); return Results.Ok(content); }));
-        endpoints.MapGet("/api/plugins/{id}/status", (string id, PluginManager plugins) => Execute(() => Results.Content(plugins.GetStatus(id) ?? "{}", "application/json")));
-        endpoints.MapGet("/api/plugins/{id}/settings/display/status", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetStatusDisplaySettings(id))));
-        endpoints.MapPut("/api/plugins/{id}/settings/display/status", (string id, PluginManager.PluginStatusDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteStatusDisplaySettings(id, settings))));
-        endpoints.MapGet("/api/plugins/{id}/settings/display/features", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetFeatureDisplaySettings(id))));
-        endpoints.MapPut("/api/plugins/{id}/settings/display/features", (string id, PluginManager.PluginFeatureDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteFeatureDisplaySettings(id, settings))));
-        endpoints.MapGet("/api/plugins/{id}/settings/display/configuration", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetSettingsDisplaySettings(id))));
-        endpoints.MapPut("/api/plugins/{id}/settings/display/configuration", (string id, PluginManager.PluginSettingsDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteSettingsDisplaySettings(id, settings))));
-        endpoints.MapGet("/api/plugins/{id}/configuration/schema", (string id, PluginManager plugins, HttpContext context) => Execute(() => ReadConfiguration(id, plugins, context, true)));
-        endpoints.MapGet("/api/plugins/options/settings/{source}", (string source) => Execute(() => Results.Ok(PluginSettingOptionSources.GetOptions(source))));
-        endpoints.MapGet("/api/plugins/{id}/features", (string id, PluginManager plugins) => Execute(() => Results.Content(plugins.ReadFeaturesDefinition(id), "application/json")));
-        endpoints.MapPost("/api/plugins/{id}/features/{featureId}/execute", (string id, string featureId, PluginManager plugins) => Execute(() => Results.Ok(plugins.ExecuteFeature(id, featureId))));
-        endpoints.MapPost("/api/plugins/{id}/features/{featureId}/page-sessions", (string id, string featureId, PluginManager plugins, PluginWebResourceService resources) => Execute(() =>
+        routes.MapMethods("/api/plugins/{id}/readme", ["HEAD"], (string id, PluginManager plugins, HttpContext context) => Execute(() =>
+        {
+            if (!plugins.HasReadme(id)) return Results.NotFound();
+            context.Response.ContentType = ReadmeContentType;
+            return Results.Ok();
+        }));
+        routes.MapGet("/api/plugins/{id}/readme", (string id, PluginManager plugins) => Execute(() => Results.Text(plugins.ReadReadme(id), ReadmeContentType)));
+        routes.MapPost("/api/plugins/{id}/enable", (string id, PluginManager plugins) => Execute(() => { plugins.Enable(id); return Results.Ok(plugins.GetPlugin(id)); }));
+        routes.MapPost("/api/plugins/{id}/disable", (string id, PluginManager plugins) => Execute(() => { plugins.Disable(id); return Results.Ok(plugins.GetPlugin(id)); }));
+        routes.MapDelete("/api/plugins/{id}", (string id, bool deleteData, PluginManager plugins) => Execute(() => { plugins.Delete(id, deleteData); return Results.NoContent(); }));
+        routes.MapPost("/api/plugins/scan", (PluginManager plugins) =>
+        {
+            try { plugins.Scan(); return Results.Ok(plugins.GetPlugins()); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "插件扫描失败", detail: "无法扫描插件目录，请检查目录权限和程序日志");
+            }
+        });
+        routes.MapGet("/api/plugins/{id}/configuration", (string id, PluginManager plugins, HttpContext context) => Execute(() => ReadConfiguration(id, plugins, context, false)));
+        routes.MapPut("/api/plugins/{id}/configuration", (string id, System.Text.Json.JsonElement content, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteConfigurationAndRestart(id, content.GetRawText()))));
+        routes.MapGet("/api/plugins/{id}/status", (string id, PluginManager plugins) => Execute(() => Results.Content(plugins.GetStatus(id) ?? "{}", "application/json")));
+        routes.MapGet("/api/plugins/{id}/settings/display/status", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetStatusDisplaySettings(id))));
+        routes.MapPut("/api/plugins/{id}/settings/display/status", (string id, PluginManager.PluginStatusDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteStatusDisplaySettings(id, settings))));
+        routes.MapGet("/api/plugins/{id}/settings/display/features", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetFeatureDisplaySettings(id))));
+        routes.MapPut("/api/plugins/{id}/settings/display/features", (string id, PluginManager.PluginFeatureDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteFeatureDisplaySettings(id, settings))));
+        routes.MapGet("/api/plugins/{id}/settings/display/configuration", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetSettingsDisplaySettings(id))));
+        routes.MapPut("/api/plugins/{id}/settings/display/configuration", (string id, PluginManager.PluginSettingsDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteSettingsDisplaySettings(id, settings))));
+        routes.MapGet("/api/plugins/{id}/configuration/schema", (string id, PluginManager plugins, HttpContext context) => Execute(() => ReadConfiguration(id, plugins, context, true)));
+        routes.MapGet("/api/plugins/options/settings/{source}", (string source) => Execute(() => Results.Ok(PluginSettingOptionSources.GetOptions(source))));
+        routes.MapGet("/api/plugins/{id}/features", (string id, PluginManager plugins) => Execute(() => Results.Content(plugins.ReadFeaturesDefinition(id), "application/json")));
+        routes.MapPost("/api/plugins/{id}/features/{featureId}/execute", (string id, string featureId, PluginManager plugins) => Execute(() => Results.Ok(plugins.ExecuteFeature(id, featureId))));
+        routes.MapPost("/api/plugins/{id}/features/{featureId}/page-sessions", (string id, string featureId, PluginManager plugins, PluginWebResourceService resources) => Execute(() =>
         {
             var version = resources.GetVersion(id, refresh: true);
             var session = plugins.OpenPageFeatureSession(id, featureId);
             return Results.Ok(new { session.Id, session.PluginName, session.Feature, WebVersion = version });
         }));
-        endpoints.MapPost("/api/plugin-page-sessions/{sessionId}/messages", async (string sessionId, HttpRequest request, PluginManager plugins, HttpContext context) =>
+        routes.MapPost("/api/plugin-page-sessions/{sessionId}/messages", async (string sessionId, HttpRequest request, PluginManager plugins, HttpContext context) =>
         {
             if (request.ContentLength > MaxPageMessageBytes) return PageMessageTooLarge();
+            var message = await ReadPageMessageAsync(request, context.RequestAborted);
+            if (message is null) return PageMessageTooLarge();
             try
             {
-                var message = await ReadPageMessageAsync(request, context.RequestAborted);
-                if (message is null) return PageMessageTooLarge();
                 var response = await plugins.SendPageMessageAsync(sessionId, message, context.RequestAborted);
                 return Results.Content(response, "application/json");
             }
             catch (KeyNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
-            catch (InvalidOperationException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件页面消息失败", detail: exception.Message); }
+            catch (PluginValidationException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件页面消息失败", detail: exception.Message); }
         });
-        endpoints.MapPost("/api/plugin-page-sessions/{sessionId}/uploads", async (string sessionId, HttpRequest request, PluginManager plugins, CancellationToken cancellationToken) =>
+        routes.MapPost("/api/plugin-page-sessions/{sessionId}/uploads", async (string sessionId, HttpRequest request, PluginManager plugins, CancellationToken cancellationToken) =>
         {
-            if (request.ContentType != "application/octet-stream") return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+            if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType)
+                || !string.Equals(contentType.MediaType.Value, "application/octet-stream", StringComparison.OrdinalIgnoreCase))
+                return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
             var parameters = request.Query["parameters"].ToString();
             var command = request.Query["command"].ToString();
             if (string.IsNullOrWhiteSpace(command) || command.Length > 128 || parameters.Length > 4096) return Results.BadRequest(new { detail = "插件上传参数无效或过长" });
-            try
-            {
-                using var document = System.Text.Json.JsonDocument.Parse(string.IsNullOrEmpty(parameters) ? "{}" : parameters);
-                if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return Results.BadRequest(new { detail = "插件上传参数无效" });
-                var response = await plugins.UploadPageAsync(sessionId, async token =>
-                {
-                    var content = await ReadPageBodyAsync(request, MaxPageUploadBytes, token);
-                    if (content is null) throw new BadHttpRequestException("单次上传不能超过 1 MB，请分块上传", StatusCodes.Status413PayloadTooLarge);
-                    if (content.Length == 0) throw new BadHttpRequestException("插件上传数据为空");
-                    return new(command, document.RootElement.GetRawText(), content);
-                }, cancellationToken);
-                return Results.Content(response, "application/json");
-            }
-            catch (KeyNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
+            System.Text.Json.JsonDocument document;
+            try { document = System.Text.Json.JsonDocument.Parse(string.IsNullOrEmpty(parameters) ? "{}" : parameters); }
             catch (System.Text.Json.JsonException) { return Results.BadRequest(new { detail = "插件上传参数无效" }); }
-            catch (BadHttpRequestException exception) { return Results.Problem(statusCode: exception.StatusCode, title: "插件上传失败", detail: exception.Message); }
-            catch (InvalidOperationException exception) { return Results.Problem(statusCode: 400, title: "插件上传失败", detail: exception.Message); }
+            using (document)
+            {
+                if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return Results.BadRequest(new { detail = "插件上传参数无效" });
+                try
+                {
+                    var response = await plugins.UploadPageAsync(sessionId, async token =>
+                    {
+                        var content = await ReadPageBodyAsync(request, MaxPageUploadBytes, token);
+                        if (content is null) throw new BadHttpRequestException("单次上传不能超过 1 MB，请分块上传", StatusCodes.Status413PayloadTooLarge);
+                        if (content.Length == 0) throw new BadHttpRequestException("插件上传数据为空");
+                        return new(command, document.RootElement.GetRawText(), content);
+                    }, cancellationToken);
+                    return Results.Content(response, "application/json");
+                }
+                catch (KeyNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
+                catch (BadHttpRequestException exception) { return Results.Problem(statusCode: exception.StatusCode, title: "插件上传失败", detail: exception.Message); }
+                catch (PluginValidationException exception) { return Results.Problem(statusCode: 400, title: "插件上传失败", detail: exception.Message); }
+            }
         });
-        endpoints.MapDelete("/api/plugin-page-sessions/{sessionId}", (string sessionId, PluginManager plugins) => Execute(() => { plugins.ClosePageSession(sessionId); return Results.NoContent(); }));
-        endpoints.MapPost("/api/plugin-page-sessions/{sessionId}/heartbeat", (string sessionId, PluginManager plugins) => Execute(() => { plugins.TouchPageSession(sessionId); return Results.NoContent(); }));
-        endpoints.MapGet("/api/plugins/{id}/events", StreamPluginStatusAsync);
-        endpoints.MapPost("/api/plugins/{id}/web/log", (string id, PluginWebLog message, PluginManager plugins, ILoggerFactory loggerFactory) => Execute(() => { var plugin = plugins.GetPlugin(id); if (!plugin.Enabled) throw new InvalidOperationException("plugin_disabled"); var logger = loggerFactory.CreateLogger($"Plugin:{plugin.Manifest?.Name ?? plugin.Id}"); logger.Log(message.Level?.ToLowerInvariant() switch { "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information }, "[Plugin:{PluginId}] {Message}", plugin.Id, message.Message ?? string.Empty); return Results.Ok(new { accepted = true }); }));
-        endpoints.MapGet("/plugin-assets/{id}/v/{version}/{**path}", (HttpContext context, string id, string version, string? path, PluginWebResourceService resources) =>
+        routes.MapDelete("/api/plugin-page-sessions/{sessionId}", (string sessionId, PluginManager plugins) => Execute(() => { plugins.ClosePageSession(sessionId); return Results.NoContent(); }));
+        routes.MapPost("/api/plugin-page-sessions/{sessionId}/heartbeat", (string sessionId, PluginManager plugins) =>
+        {
+            try { plugins.TouchPageSession(sessionId); return Results.NoContent(); }
+            catch (KeyNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
+        });
+        routes.MapGet("/api/plugins/{id}/events", StreamPluginStatusAsync);
+        routes.MapPost("/api/plugins/{id}/web/log", (string id, PluginWebLog message, PluginManager plugins, ILoggerFactory loggerFactory) => Execute(() => { var plugin = plugins.GetPlugin(id); if (!plugin.Enabled) return Results.Problem(statusCode: 400, title: "插件操作失败", detail: "插件已禁用", extensions: new Dictionary<string, object?> { ["code"] = "plugin_disabled" }); var logger = loggerFactory.CreateLogger($"Plugin:{plugin.Manifest?.Name ?? plugin.Id}"); logger.Log(message.Level?.ToLowerInvariant() switch { "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information }, "[Plugin:{PluginId}] {Message}", plugin.Id, message.Message ?? string.Empty); return Results.Ok(new { accepted = true }); }));
+        routes.MapGet("/plugin-assets/{id}/v/{version}/{**path}", (HttpContext context, string id, string version, string? path, PluginWebResourceService resources) =>
             ServePluginAsset(context, id, path, resources, version));
-        endpoints.MapGet("/plugin-assets/{id}/{**path}", (HttpContext context, string id, string? path, PluginWebResourceService resources) =>
+        routes.MapGet("/plugin-assets/{id}/{**path}", (HttpContext context, string id, string? path, PluginWebResourceService resources) =>
             ServePluginAsset(context, id, path, resources));
         return endpoints;
     }
@@ -101,15 +128,23 @@ public static class PluginEndpointRouteBuilderExtensions
         });
         IDisposable subscription;
         try { subscription = plugins.SubscribeState(id, json => channel.Writer.TryWrite(json)); }
+        catch (ArgumentException exception) when (exception.ParamName == "id") { return InvalidPluginId(); }
         catch (FileNotFoundException) { return Results.NotFound(); }
         try
         {
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-cache";
             var current = plugins.GetStatus(id);
-            if (current is not null) await context.Response.WriteAsync($"data: {current}\n\n", context.RequestAborted);
+            if (current is not null)
+            {
+                await context.Response.WriteAsync($"data: {current}\n\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+            }
             await foreach (var json in channel.Reader.ReadAllAsync(context.RequestAborted))
+            {
                 await context.Response.WriteAsync($"data: {json}\n\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+            }
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
         finally { subscription.Dispose(); channel.Writer.TryComplete(); }
@@ -144,6 +179,7 @@ public static class PluginEndpointRouteBuilderExtensions
             context.Response.Headers.ContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
             return Results.File(resolved.Value.Path, resolved.Value.ContentType);
         }
+        catch (ArgumentException exception) when (exception.ParamName == "id") { return InvalidPluginId(); }
         catch (FileNotFoundException) { return Results.NotFound(); }
     }
 
@@ -180,12 +216,13 @@ public static class PluginEndpointRouteBuilderExtensions
     private static IResult Execute(Func<IResult> action)
     {
         try { return action(); }
-        catch (KeyNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
+        catch (ArgumentException exception) when (exception.ParamName == "id") { return InvalidPluginId(); }
         catch (FileNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
-        catch (InvalidOperationException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件操作失败", detail: exception.Message); }
-        catch (InvalidDataException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件配置无效", detail: exception.Message); }
-        catch (System.Text.Json.JsonException) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件配置无效", detail: "插件配置内容不符合当前版本要求"); }
+        catch (PluginValidationException exception) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件操作失败", detail: exception.Message); }
     }
+
+    private static IResult InvalidPluginId() =>
+        Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "插件操作失败", detail: "插件 ID 不能为空");
 
     private sealed record PluginWebLog(string? Level, string? Message);
 }

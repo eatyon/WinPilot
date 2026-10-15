@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using WinPilot.Core;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -42,15 +43,11 @@ internal sealed class PluginConfigurationStore
         var content = configuration.ToJsonString(JsonOptions);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryFile = path + ".tmp";
-        try
+        FileOperationRecovery.WithCleanup(() =>
         {
             File.WriteAllText(temporaryFile, content);
             File.Move(temporaryFile, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryFile)) File.Delete(temporaryFile);
-        }
+        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
     }
 
     private static JsonObject? ReadCore(string path)

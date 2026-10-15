@@ -3,40 +3,12 @@ using System.Text.Json;
 using WinPilot.Features.Plugins;
 using Microsoft.Extensions.Logging.Abstractions;
 
+using static WinPilot.Test.PluginTestSupport;
+
 namespace WinPilot.Test;
 
 public sealed partial class PluginManagerTest
 {
-
-    [Fact]
-    public async Task PageSession_ForwardsMessagesAndRejectsAfterClose()
-    {
-        using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
-        var id = sessions.Open("test-plugin", "test-page", session => session.RegisterMessageHandler((message, _) => Task.FromResult("reply:" + message)));
-
-        Assert.Equal("reply:request", await sessions.SendAsync(id, "request", CancellationToken.None));
-
-        sessions.Close(id);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => sessions.SendAsync(id, "request", CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task PageSession_CloseAllCancelsActiveRequestsAndRemovesSessions()
-    {
-        using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
-        var id = sessions.Open("test-plugin", "test-page", session =>
-            session.RegisterMessageHandler(async (_, cancellationToken) =>
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                return "unreachable";
-            }));
-        var request = sessions.SendAsync(id, "request", CancellationToken.None);
-
-        sessions.CloseAll();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => sessions.SendAsync(id, "request", CancellationToken.None));
-    }
 
     [Fact]
     public async Task ScanPreservesExistingPageSessionsAndClosesRemovedPluginSessions()
@@ -104,7 +76,8 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(directory, "features.json"), "{ \"features\": [{ \"id\": \"refresh\", \"name\": \"刷新\", \"mode\": \"action\", \"confirm\": false }, { \"id\": \"clear-cache\", \"name\": \"清理缓存\", \"mode\": \"action\" }, { \"id\": \"advanced-tools\", \"name\": \"高级功能\", \"mode\": \"action\" }] }");
 
             var runtime = new RecordingPluginRuntime();
-            var manager = CreatePluginManager(paths, runtime);
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+            using var manager = CreatePluginManager(paths, runtime, pages);
 
             using var features = JsonDocument.Parse(manager.ReadFeaturesDefinition("features-example"));
             Assert.Equal(["action", "action", "action"], features.RootElement.GetProperty("features").EnumerateArray().Select(feature => feature.GetProperty("mode").GetString()));
@@ -147,7 +120,9 @@ public sealed partial class PluginManagerTest
             Directory.CreateDirectory(Path.Combine(directory, "web", "tools"));
             File.WriteAllText(Path.Combine(directory, "web", "tools", "second.js"), "");
 
-            var manager = CreatePluginManager(paths, new RecordingPluginRuntime());
+            using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
+
+            using var manager = CreatePluginManager(paths, new RecordingPluginRuntime(), pages);
             var plugin = Assert.Single(manager.GetPlugins());
 
             Assert.Equal("page-features", plugin.Id);

@@ -79,6 +79,7 @@ public static class PluginSettingsSchema
             ValidateMasked(setting, type, name);
             ValidateOptionsSource(setting, type, name);
             if (type != "collection") ValidateFieldDefinition(setting, type, name);
+            else ValidateRequired(setting, name);
             if (!names.Add(name)) throw new InvalidOperationException($"配置项名称重复：{name}");
             if (type == "collection") ValidateCollectionDefinition(setting);
         }
@@ -113,12 +114,12 @@ public static class PluginSettingsSchema
         else if (mode == "dynamic")
         {
             if (!setting.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("fields", out _)) throw new InvalidOperationException("Dynamic Collection 必须声明 item.fields");
-            if (setting.TryGetProperty("items", out _)) throw new InvalidOperationException("Dynamic Collection 不允许声明 items"); ValidateFields(item);
+            if (setting.TryGetProperty("items", out _)) throw new InvalidOperationException("Dynamic Collection 不允许声明 items"); ValidateFields(item, dynamic: true);
         }
         else throw new InvalidOperationException("Collection mode 只能是 fixed 或 dynamic");
     }
 
-    private static void ValidateFields(JsonElement owner)
+    private static void ValidateFields(JsonElement owner, bool dynamic = false)
     {
         if (!owner.TryGetProperty("fields", out var fields) || fields.ValueKind != JsonValueKind.Array || fields.GetArrayLength() == 0) throw new InvalidOperationException("Collection 必须声明非空 fields 数组");
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -126,6 +127,7 @@ public static class PluginSettingsSchema
         {
             if (field.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("Collection fields 必须包含对象");
             var name = RequiredString(field, "name", "Collection 字段缺少 name");
+            if (dynamic && name == "__winpilot") throw new InvalidOperationException("Dynamic Collection 字段不能使用宿主保留名称 __winpilot");
             if (!names.Add(name)) throw new InvalidOperationException($"Collection 字段 name 重复：{name}");
             var type = RequiredString(field, "type", $"Collection 字段 {name} 缺少 type");
             if (!FieldTypes.Contains(type)) throw new InvalidOperationException($"Collection 字段 {name} 类型无效或不支持嵌套 Collection：{type}");
@@ -184,6 +186,8 @@ public static class PluginSettingsSchema
 
     private static void ValidateFieldDefinition(JsonElement field, string type, string name)
     {
+        ValidateRequired(field, name);
+        if (field.TryGetProperty("options", out var options)) ValidateOptions(options, name);
         if (field.TryGetProperty("default", out var value) && !IsValidFieldValue(type, value))
             throw new InvalidOperationException($"配置项 {name} 的默认值类型无效");
         foreach (var key in new[] { "min", "max", "step" })
@@ -199,6 +203,29 @@ public static class PluginSettingsSchema
         if (field.TryGetProperty("min", out var min) && field.TryGetProperty("max", out var max) && min.GetDouble() > max.GetDouble())
             throw new InvalidOperationException($"配置项 {name} 的 min 不能大于 max");
         ValidateNumberValue(field, field.TryGetProperty("default", out value) ? value : JsonSerializer.SerializeToElement(0), name);
+    }
+
+    private static void ValidateRequired(JsonElement field, string name)
+    {
+        if (field.TryGetProperty("required", out var required) && required.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new InvalidOperationException($"配置项 {name} 的 required 必须是布尔值");
+    }
+
+    private static void ValidateOptions(JsonElement options, string name)
+    {
+        if (options.ValueKind != JsonValueKind.Array) throw new InvalidOperationException($"配置项 {name} 的 options 必须是数组");
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var option in options.EnumerateArray())
+        {
+            string value;
+            if (option.ValueKind == JsonValueKind.String) value = option.GetString()!;
+            else if (option.ValueKind == JsonValueKind.Object
+                && option.TryGetProperty("value", out var key) && key.ValueKind == JsonValueKind.String
+                && option.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String)
+                value = key.GetString()!;
+            else throw new InvalidOperationException($"配置项 {name} 的 options 必须包含字符串或带有字符串 value、label 的对象");
+            if (!values.Add(value)) throw new InvalidOperationException($"配置项 {name} 的 options 存在重复值：{value}");
+        }
     }
 
     private static void ValidateNumberValue(JsonElement field, JsonElement value, string name)

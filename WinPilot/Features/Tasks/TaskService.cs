@@ -266,6 +266,7 @@ public sealed class TaskService : BackgroundService
     {
         try
         {
+            if (!extensions.IsCurrent(fired)) return;
             WinPilotTask[] matches;
             lock (gate)
                 matches = tasks.Values.Where(task => task.Enabled && task.Trigger.Type == TaskTriggerType.Extension && task.Trigger.PluginId?.Equals(fired.PluginId, StringComparison.OrdinalIgnoreCase) == true && task.Trigger.TriggerId?.Equals(fired.TriggerId, StringComparison.OrdinalIgnoreCase) == true && MatchesTriggerParameters(task.Trigger.Parameters, fired.Variables)).ToArray();

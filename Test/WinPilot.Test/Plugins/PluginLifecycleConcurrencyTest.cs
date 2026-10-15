@@ -11,7 +11,7 @@ public sealed class PluginLifecycleConcurrencyTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OtherPluginsCanStartIndependentlyButReloadWaitsForActiveLifecycle(bool reload)
+    public async Task OtherPluginsCanStartIndependentlyButScanWaitsForActiveLifecycle(bool scan)
     {
         var paths = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "winpilot-lifecycle", Guid.NewGuid().ToString("N")));
         paths.EnsurePluginsDirectory();
@@ -47,8 +47,8 @@ public sealed class PluginLifecycleConcurrencyTest
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            other = Task.Run(() => { if (reload) manager.Scan(); else manager.Start("second"); });
-            if (reload)
+            other = Task.Run(() => { if (scan) manager.Scan(); else manager.Start("second"); });
+            if (scan)
             {
                 await Task.Delay(100);
                 Assert.False(secondEntered.Task.IsCompleted);

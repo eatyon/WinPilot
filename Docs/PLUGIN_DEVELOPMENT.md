@@ -7,6 +7,7 @@ WinPilot 通过 C# DLL 加载插件，插件实现 `WinPilot.PluginContract.ICSh
 - [开发环境与目录](#开发环境与目录)
 - [最小可用插件](#最小可用插件)
 - [构建与安装](#构建与安装)
+- [契约兼容边界](#契约兼容边界)
 - [生命周期与数据](#生命周期与数据)
 - [配置声明](#配置声明)
 - [状态与功能](#状态与功能)
@@ -185,6 +186,34 @@ User/Plugin/ExamplePlugin/
 
 插件根目录可附带 `README.md`，宿主会在插件信息页展示，文件不能超过 512 KiB。用户使用说明放在这里，页面脚本与样式仍放在 `web/`
 
+## 契约兼容边界
+
+插件独立构建并以预编译 DLL 分发，源码兼容不等于二进制兼容。宿主加载时使用自己的 `WinPilot.PluginContract`，不会重新编译插件
+
+### 破坏性改动
+
+以下改动可能使已有 DLL 无法加载或调用，使用受影响成员的插件必须适配并重新编译：
+
+- 删除或修改公开接口成员，包括参数、返回类型
+- 给插件必须实现的接口新增抽象成员
+- 修改公开构造函数签名，包括追加可选参数；不保留旧签名时，即使插件源码仍可编译，旧 DLL 也不兼容
+
+以下属于行为或数据契约破坏，DLL 可能仍能加载，但调用方必须调整：
+
+- 重命名 JSON 字段、修改字段类型、枚举含义或参数默认语义
+- 改变错误或取消语义，导致调用方必须调整处理方式
+
+行为或数据变化需要同步调整插件调用、声明及必要的数据处理；仅重新编译不能修复语义差异。插件代码调整后应重新构建并分发
+
+新增独立可选能力，或保留旧入口与行为的扩展，不算破坏性改动；未使用新能力的插件不因此要求重新编译
+
+### 最低版本与发布规则
+
+- 插件使用新契约成员、构造签名或宿主行为时，将 `winpilot_version` 提高到首次支持这些要求的宿主版本，并验证该版本
+- 二进制契约发生破坏时，受影响插件必须对照目标契约重新编译；仅提高 `winpilot_version` 不能修复旧 DLL
+- `winpilot_version` 只限制最低宿主版本，不表示所有更高版本都兼容，也不能代替预编译 DLL 的加载与功能验证
+- 当前使用 `System.Version` 比较最低版本，不能表达同一数字版本下的 beta 能力差异；不要填写预发布后缀。依赖 beta 新能力时，在插件发布说明中注明实际验证的宿主版本
+
 ## 生命周期与数据
 
 ### 目录与配置
@@ -233,6 +262,10 @@ User/Plugin/ExamplePlugin/
 - `mode: "dynamic"`：通过 `item.fields` 声明字段，配置存为数组；宿主为每项维护 `__winpilot.id` 和非空 `__winpilot.remark`，插件读取时应保留这些元数据
 
 缺失字段会由宿主补充默认值；未指定默认值时，数字为 0、布尔值为 false、多选为空数组，其他普通字段为空字符串
+
+宿主配置读取入口 `GET /api/plugins/{id}/configuration` 按当前声明在内存中补默认值，不改写已有文件；配置保存入口补齐并校验后落盘，响应返回该次保存的规范值。首次发现插件且 `config.json` 不存在时，宿主按声明初始化文件
+
+`context.Storage.ReadConfig()` 和 `ReadConfig<T>()` 直接读取文件，不经过上述声明补齐路径；泛型读取只负责反序列化，缺失属性使用插件类型自身的初始值或 .NET 默认值，不会自动读取 `settings.json` 的 `default`
 
 ## 状态与功能
 
@@ -627,6 +660,7 @@ if (context.Tasks.Actions is { } taskActions)
 
 动作参数类型包括 Text、Number、Select、Checkbox、Textarea、MultiCheckbox，Key 在同一动作内不能重复。回调应校验自己的业务边界，遵守取消令牌；正常完成返回 Success，业务失败返回带 Error 的其他状态，宿主会按任务的失败策略继续或停止后续动作
 
+
 ### 通知变量
 
 变量名需要符合 `^[\$&][a-z][a-z0-9-]*(\.[a-z][a-z0-9_-]*)+$`，文字使用 `$`，图片使用 `&`，例如 `$example.status` 和 `&example.preview`。变量名在所有插件间唯一，建议使用插件自己的前缀
@@ -753,6 +787,15 @@ if (context.Commands is { } commands)
 | `SendNotification` | `content`、`channel`、`image`，图片使用 `PluginImageContent` |
 
 任务动作还可以返回 `PluginHostActionPlan`，由任务执行器处理后续宿主动作。Plan 的 Steps 不能为空，参数值使用 `"$param.target"` 这类字符串引用该动作的参数；直接调用 `context.Host.Actions.ExecuteAsync` 不会解析这些占位符。声明动作时同时提供 HostActionPlan 和回调，宿主优先执行声明中的 Plan，不调用该动作回调
+
+两种入口的部分缺省值不同，声明 Plan 与回调返回的 Plan 使用相同规则：
+
+| 未提供的参数键 | 直接调用 `Host.Actions.ExecuteAsync` | 任务 Plan |
+| --- | --- | --- |
+| `StartProgram.silent` | true | false |
+| `Shell.shell` | `cmd` | 无默认值，执行时拒绝 |
+
+表中仅指缺失参数键，不代表显式 null 或空字符串也采用默认值。跨入口复用步骤时应显式填写 `silent` 和 `shell`，不要依赖入口差异
 
 Host.Actions 和 Host.Processes 为可空接口，调用前检查是否可用。Security 提供当前安全模式状态，但直接调用宿主动作接口不会自动代替插件完成业务权限判断，需要限制的插件操作应主动检查该状态。插件 DLL 在宿主进程内运行，具有宿主进程的权限，当前加载机制不是权限沙箱
 
