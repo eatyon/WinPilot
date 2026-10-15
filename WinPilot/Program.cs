@@ -78,7 +78,7 @@ internal static class Program
         builder.Services.AddSingleton<KeyboardInputService>();
         builder.Services.AddSingleton<FileSystemService>();
         builder.Services.AddSingleton(_ => new LogQueryService(paths));
-        builder.Services.AddSingleton(_ => new ProgramTagService(paths));
+        builder.Services.AddSingleton<ProgramTagService>();
         builder.Services.AddSingleton<IProgramManager, WindowsProgramManager>();
         builder.Services.AddSingleton<WindowsProcessEventListener>();
         builder.Services.AddSingleton<TaskService>();

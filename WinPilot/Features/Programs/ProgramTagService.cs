@@ -5,7 +5,7 @@ using WinPilot.Core.Programs;
 
 namespace WinPilot.Features.Programs;
 
-public sealed class ProgramTagService(PortableDataPaths paths)
+public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTagService>? logger = null)
 {
     private readonly object gate = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -21,10 +21,20 @@ public sealed class ProgramTagService(PortableDataPaths paths)
         {
             if (!Directory.Exists(paths.TagsDirectory)) return [];
 
-            return Directory.EnumerateFiles(paths.TagsDirectory, "*.json")
-                .Select(Read)
-                .OrderBy(tag => tag.Name, StringComparer.CurrentCultureIgnoreCase)
-                .ToArray();
+            var tags = new Dictionary<string, ProgramTag>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in Directory.EnumerateFiles(paths.TagsDirectory, "*.json"))
+            {
+                try
+                {
+                    var tag = Read(file);
+                    if (!tags.TryAdd(tag.Name, tag)) throw new InvalidDataException("标签名称重复");
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    logger?.LogError(exception, "无法读取标签文件 {File}", file);
+                }
+            }
+            return tags.Values.OrderBy(tag => tag.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
         }
     }
 
@@ -44,7 +54,7 @@ public sealed class ProgramTagService(PortableDataPaths paths)
         {
             Validate(tag);
             var file = GetTagFilePath(tag.Name);
-            if (File.Exists(file)) throw new InvalidOperationException("同名标签已存在");
+            if (File.Exists(file)) throw new ResourceNameConflictException("同名标签已存在");
 
             Directory.CreateDirectory(paths.TagsDirectory);
             Write(file, tag, false);
@@ -62,7 +72,7 @@ public sealed class ProgramTagService(PortableDataPaths paths)
             var nextFile = GetTagFilePath(tag.Name);
             if (!string.Equals(originalFile, nextFile, StringComparison.OrdinalIgnoreCase) && File.Exists(nextFile))
             {
-                throw new InvalidOperationException("同名标签已存在");
+                throw new ResourceNameConflictException("同名标签已存在");
             }
 
             if (string.Equals(originalFile, nextFile, StringComparison.OrdinalIgnoreCase))
@@ -72,12 +82,8 @@ public sealed class ProgramTagService(PortableDataPaths paths)
             else
             {
                 File.Move(originalFile, nextFile);
-                try { Write(nextFile, tag, true); }
-                catch
-                {
-                    File.Move(nextFile, originalFile);
-                    throw;
-                }
+                FileOperationRecovery.WithRollback(() => Write(nextFile, tag, true),
+                    () => File.Move(nextFile, originalFile));
             }
         }
     }
@@ -96,10 +102,14 @@ public sealed class ProgramTagService(PortableDataPaths paths)
     {
         try
         {
-            return JsonSerializer.Deserialize<ProgramTag>(File.ReadAllText(file), JsonOptions)
+            var tag = JsonSerializer.Deserialize<ProgramTag>(File.ReadAllText(file), JsonOptions)
                 ?? throw new InvalidDataException("标签文件内容无效");
+            Validate(tag);
+            if (!string.Equals(Path.GetFileNameWithoutExtension(file), tag.Name, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("标签名称与文件名不一致");
+            return tag;
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
             throw new InvalidDataException($"无法读取标签文件：{Path.GetFileName(file)}", exception);
         }
@@ -108,15 +118,11 @@ public sealed class ProgramTagService(PortableDataPaths paths)
     private static void Write(string file, ProgramTag tag, bool overwrite)
     {
         var temporaryFile = file + $".{Guid.NewGuid():N}.tmp";
-        try
+        FileOperationRecovery.WithCleanup(() =>
         {
             File.WriteAllText(temporaryFile, JsonSerializer.Serialize(tag, JsonOptions));
             File.Move(temporaryFile, file, overwrite);
-        }
-        finally
-        {
-            if (File.Exists(temporaryFile)) File.Delete(temporaryFile);
-        }
+        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
     }
 
     private string GetTagFilePath(string name)

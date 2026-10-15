@@ -1,15 +1,18 @@
 using System.Net;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Cronos;
 using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
 using WinPilot.Features.Notifications;
-using WinPilot.Features.Plugins;
 using WinPilot.Features.Tasks;
+using WinPilot.Features.Plugins;
 using WinPilot.PluginContract;
 using WinPilot.Web;
 
@@ -17,6 +20,173 @@ namespace WinPilot.Test;
 
 public sealed partial class TaskServiceTest
 {
+    [Fact]
+    public async Task TaskSaveResponsesMatchNormalizedPersistenceWithoutChangingStatusOrLocation()
+    {
+        await using var fixture = new TaskServiceFixture();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        foreach (var create in new[] { true, false })
+        {
+            var task = new
+            {
+                name = "Normalized", enabled = false,
+                trigger = new { type = "ProcessStarted", processPaths = new[] { " C:\\app.exe ", "c:\\APP.exe", " " } },
+                actions = new[] { new { type = "SendNotification", notificationTitle = (string?)null, notificationContent = "content", notificationChannel = (string?)null } }
+            };
+            using var response = create ? await client.PostAsJsonAsync("/api/tasks", task) : await client.PutAsJsonAsync("/api/tasks/Normalized", task);
+            Assert.Equal(create ? HttpStatusCode.Created : HttpStatusCode.OK, response.StatusCode);
+            if (create) Assert.Equal("/api/tasks/Normalized", response.Headers.Location!.OriginalString);
+            else Assert.Null(response.Headers.Location);
+            var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            var saved = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Normalized.json")))!;
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(saved, json));
+            Assert.Equal("C:\\app.exe", Assert.Single(json["trigger"]!["processPaths"]!.AsArray())!.GetValue<string>());
+            Assert.False(json["actions"]![0]!.AsObject().ContainsKey("notificationTitle"));
+            Assert.Equal("content", json["actions"]![0]!["notificationContent"]!.GetValue<string>());
+            Assert.False(json["actions"]![0]!.AsObject().ContainsKey("notificationChannel"));
+        }
+        var original = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Normalized.json"));
+        using var rejected = await client.PutAsJsonAsync("/api/tasks/Normalized", new
+        {
+            name = "Normalized", enabled = false, trigger = new { type = "WinPilotStartup" }, actions = new[] { new { type = "Delay", delaySeconds = 0 } }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Equal(original, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Normalized.json")));
+        using var deleted = await client.DeleteAsync("/api/tasks/Normalized");
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Equal("", await deleted.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData(false, "healthy")]
+    [InlineData(true, "healthy")]
+    [InlineData(false, "other")]
+    [InlineData(true, "other")]
+    public async Task LoadingRejectsMismatchedTaskIdentityWithoutOverwritingOrRenamingFiles(bool writeAliasFirst, string aliasName)
+    {
+        string alias = "", healthy = "";
+        await using var fixture = new TaskServiceFixture(initialize: paths =>
+        {
+            Directory.CreateDirectory(paths.TasksDirectory);
+            string Content(string name, string program) => JsonSerializer.Serialize(TaskPersistenceFile.From(
+                new(name, false, new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.StartProgram, ProgramPath: program)])));
+            alias = Content(aliasName, "alias.exe");
+            healthy = Content("healthy", "app.exe");
+            if (writeAliasFirst) File.WriteAllText(Path.Combine(paths.TasksDirectory, "alias.json"), alias);
+            File.WriteAllText(Path.Combine(paths.TasksDirectory, "healthy.json"), healthy);
+            if (!writeAliasFirst) File.WriteAllText(Path.Combine(paths.TasksDirectory, "alias.json"), alias);
+        });
+        var task = Assert.Single(fixture.Tasks.GetAll());
+        Assert.Equal("healthy", task.Name);
+        Assert.Equal("app.exe", Assert.Single(task.Actions).ProgramPath);
+        Assert.IsType<InvalidDataException>(Assert.Single(fixture.Logger.Exceptions));
+        Assert.Contains(fixture.Logger.Messages, message => message.Contains("alias.json", StringComparison.Ordinal));
+        Assert.Equal(alias, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "alias.json")));
+        Assert.Equal(healthy, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "healthy.json")));
+        Assert.Equal(2, Directory.GetFiles(fixture.Paths.TasksDirectory).Length);
+        fixture.Tasks.Delete("healthy");
+        Assert.Empty(fixture.Tasks.GetAll());
+        Assert.Equal(alias, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "alias.json")));
+    }
+
+    [Fact]
+    public async Task LoadingAcceptsCaseOnlyTaskNameDifferences()
+    {
+        await using var fixture = new TaskServiceFixture(initialize: paths =>
+        {
+            Directory.CreateDirectory(paths.TasksDirectory);
+            var task = new WinPilotTask("NAME", false, new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]);
+            File.WriteAllText(Path.Combine(paths.TasksDirectory, "Name.json"), JsonSerializer.Serialize(TaskPersistenceFile.From(task)));
+        });
+        Assert.Equal("NAME", Assert.Single(fixture.Tasks.GetAll()).Name);
+        Assert.Empty(fixture.Logger.Exceptions);
+        fixture.Tasks.SetEnabled("name", true);
+        Assert.Single(Directory.GetFiles(fixture.Paths.TasksDirectory));
+    }
+
+    [Theory]
+    [InlineData(false, "[]", true)]
+    [InlineData(true, "[]", false)]
+    [InlineData(false, "[\"one\"]", true)]
+    [InlineData(true, "[\"one\"]", true)]
+    [InlineData(false, "[\"missing\"]", false)]
+    [InlineData(true, "[\"missing\"]", false)]
+    [InlineData(false, "\"\"", false)]
+    [InlineData(false, "{}", false)]
+    [InlineData(false, "[\"\"]", false)]
+    [InlineData(false, "[1]", false)]
+    [InlineData(false, "[null]", false)]
+    public async Task OptionalMultiCheckboxAllowsEmptyArrayAndStillValidatesSelectedOptions(bool required, string json, bool valid)
+    {
+        await using var fixture = new TaskServiceFixture();
+        using var scope = fixture.Extensions.CreateScope("choices", "Choices");
+        using var document = JsonDocument.Parse(json);
+        var values = new Dictionary<string, object?> { ["choices"] = document.RootElement.Clone() };
+        var called = 0;
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((IPluginTaskActionApi)scope).Register([
+            new("choose", "Choose", [new("choices", "Choices", PluginActionParameterType.MultiCheckbox,
+                Required: required, Options: [new("one", "One")])])], (parameters, _, _) =>
+            {
+                Assert.Equal(json, ((JsonElement)parameters["choices"]!).GetRawText());
+                called++;
+                return Task.FromResult(PluginTaskActionResult.Success());
+            });
+        ((IPluginTaskActionApi)scope).Register([new("complete", "Complete")], (_, _, _) =>
+        {
+            complete.TrySetResult();
+            return Task.FromResult(PluginTaskActionResult.Success());
+        });
+        fixture.Tasks.Create(new("Choices", true, new(TaskTriggerType.WinPilotStartup), [
+            new(TaskActionType.Extension, PluginId: "choices", ActionId: "choose", Parameters: values, ContinueOnFailure: true),
+            new(TaskActionType.Extension, PluginId: "choices", ActionId: "complete")]));
+        fixture.Tasks.RunNow("Choices");
+        await complete.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(valid ? 1 : 0, called);
+        if (valid) Assert.Empty(fixture.Logger.Exceptions);
+        else Assert.IsType<InvalidOperationException>(Assert.Single(fixture.Logger.Exceptions));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExpiredTriggerCannotStartCurrentTaskEvenWithCurrentGenerationToken(bool useCurrentToken)
+    {
+        await using var fixture = new TaskServiceFixture();
+        using var previous = fixture.Extensions.CreateScope("test", "Test");
+        previous.Register([new("trigger", "Previous trigger")]);
+        PluginTaskTriggerFired? received = null;
+        fixture.Extensions.Triggered += fired => received = fired;
+        var trigger = new PluginTriggerEvent("trigger", DateTimeOffset.UtcNow, new Dictionary<string, object?>());
+        previous.Emit(trigger);
+        Assert.NotNull(received);
+        var expired = received;
+        using var current = fixture.Extensions.CreateScope("test", "Test");
+        previous.Dispose();
+        current.Register([new("trigger", "Current trigger")]);
+        current.Emit(trigger);
+        Assert.NotNull(received);
+        var currentToken = received.CancellationToken;
+        fixture.Tasks.Create(new("current", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "trigger"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var replay = useCurrentToken ? expired with { CancellationToken = currentToken } : expired;
+        typeof(TaskService).GetMethod("ExtensionTriggered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(fixture.Tasks, [replay]);
+        Assert.Equal(0, fixture.Programs.Launches);
+        current.Emit(trigger);
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.Empty(fixture.Logger.Exceptions);
+    }
+
     [Theory]
     [InlineData(TaskActionType.Keyboard, null, "发送按键「F11」")]
     [InlineData(TaskActionType.Keyboard, "Ctrl", "发送按键「Ctrl + F11」")]
@@ -149,6 +319,46 @@ public sealed partial class TaskServiceTest
     }
 
     [Theory]
+    [InlineData("POST", "trigger", "触发条件不能为空")]
+    [InlineData("PUT", "trigger", "触发条件不能为空")]
+    [InlineData("POST", "actions", "任务动作不能为空")]
+    [InlineData("PUT", "actions", "任务动作不能为空")]
+    [InlineData("POST", "actions[0]", "动作不能为空")]
+    [InlineData("PUT", "actions[0]", "动作不能为空")]
+    public async Task TaskApiRejectsNullStructureBeforeChangingTasks(string method, string field, string message)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Existing", enabled: false);
+        var file = Path.Combine(fixture.Paths.TasksDirectory, "Existing.json");
+        var original = File.ReadAllText(file);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        var trigger = field == "trigger" ? "null" : """{"type":"WinPilotStartup"}""";
+        var actions = field == "actions" ? "null" : field == "actions[0]" ? "[null]" : """[{"type":"Delay","delaySeconds":1}]""";
+        using var request = new HttpRequestMessage(new HttpMethod(method), method == "POST" ? "/api/tasks" : "/api/tasks/Existing")
+        {
+            Content = new StringContent($$"""{"name":"Invalid","enabled":false,"trigger":{{trigger}},"actions":{{actions}}}""", System.Text.Encoding.UTF8, "application/json")
+        };
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(400, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(message, Assert.Single(problem.RootElement.GetProperty("errors").GetProperty(field).EnumerateArray()).GetString());
+        Assert.Equal("Existing", Assert.Single(fixture.Tasks.GetAll()).Name);
+        Assert.Equal(original, File.ReadAllText(file));
+        Assert.Single(Directory.GetFiles(fixture.Paths.TasksDirectory));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public async Task DelayMustBePositive(int seconds)
@@ -159,6 +369,156 @@ public sealed partial class TaskServiceTest
             [new(TaskActionType.Delay, DelaySeconds: seconds)])));
 
         Assert.Equal("请输入有效的延迟秒数", error.Message);
+        Assert.Empty(fixture.Tasks.GetAll());
+    }
+
+    [Theory]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    [InlineData("DELETE")]
+    [InlineData("POST")]
+    public async Task MissingTaskResourceReturns404WithoutChangingOtherTasks(string method)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Existing", enabled: false);
+        var original = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json"));
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        var route = "/api/tasks/Missing" + (method == "PATCH" ? "/enabled" : method == "POST" ? "/run" : "");
+        using var request = new HttpRequestMessage(new HttpMethod(method), route);
+        if (method == "PUT") request.Content = JsonContent.Create(new WinPilotTask("Missing", false,
+            new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.Delay, DelaySeconds: 1)]));
+        if (method == "PATCH") request.Content = JsonContent.Create(new { enabled = true });
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(404, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("操作失败", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal("任务不存在", problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal("Existing", Assert.Single(fixture.Tasks.GetAll()).Name);
+        Assert.Equal(original, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json")));
+        Assert.Single(Directory.GetFiles(fixture.Paths.TasksDirectory));
+    }
+
+    [Theory]
+    [InlineData("POST", false)]
+    [InlineData("PUT", false)]
+    [InlineData("POST", true)]
+    [InlineData("PUT", true)]
+    public async Task DuplicateTaskNameReturns409AndPreservesTasksAndFiles(string method, bool fileOnly)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Original", enabled: false);
+        if (fileOnly) File.WriteAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json"), "invalid task file");
+        else fixture.Create("Existing", enabled: false);
+        var files = Directory.GetFiles(fixture.Paths.TasksDirectory).ToDictionary(path => path, File.ReadAllText);
+        var names = fixture.Tasks.GetAll().Select(task => task.Name).ToArray();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(new HttpMethod(method), method == "POST" ? "/api/tasks" : "/api/tasks/Original")
+        {
+            Content = JsonContent.Create(new WinPilotTask("eXisting", false, new(TaskTriggerType.WinPilotStartup),
+                [new(TaskActionType.Delay, DelaySeconds: 1)]))
+        };
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(409, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("操作失败", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(fileOnly ? "同名任务文件已存在" : "同名任务已存在", problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(names, fixture.Tasks.GetAll().Select(task => task.Name));
+        Assert.Equal(files.Count, Directory.GetFiles(fixture.Paths.TasksDirectory).Length);
+        foreach (var file in files) Assert.Equal(file.Value, File.ReadAllText(file.Key));
+    }
+
+    [Theory]
+    [InlineData("POST", "name", "任务名称无效")]
+    [InlineData("PUT", "name", "任务名称无效")]
+    [InlineData("POST", "actions", "至少需要一个动作")]
+    [InlineData("PUT", "actions", "至少需要一个动作")]
+    [InlineData("POST", "delay", "请输入有效的延迟秒数")]
+    [InlineData("PUT", "delay", "请输入有效的延迟秒数")]
+    public async Task TaskValidationErrorsRemain400BeforeResourceConflictChecks(string method, string field, string message)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Existing", enabled: false);
+        var original = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json"));
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        var task = new WinPilotTask(field == "name" ? " " : "Existing", false, new(TaskTriggerType.WinPilotStartup),
+            field == "actions" ? [] : [new(TaskActionType.Delay, DelaySeconds: field == "delay" ? 0 : 1)]);
+        using var request = new HttpRequestMessage(new HttpMethod(method), method == "POST" ? "/api/tasks" : "/api/tasks/Existing")
+        {
+            Content = JsonContent.Create(task)
+        };
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(400, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(message, problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(original, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json")));
+        Assert.Single(fixture.Tasks.GetAll());
+    }
+
+    [Fact]
+    public async Task TaskResourceSuccessResponsesPreserve201200204AndLocation()
+    {
+        await using var fixture = new TaskServiceFixture();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        var task = new WinPilotTask("Original", false, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]);
+        using var created = await client.PostAsJsonAsync("/api/tasks", task);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("/api/tasks/Original", created.Headers.Location?.OriginalString);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        Assert.Equal("Original", createdJson.RootElement.GetProperty("name").GetString());
+        var renamed = task with { Name = "Renamed" };
+        using var updated = await client.PutAsJsonAsync("/api/tasks/Original", renamed);
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        using var updatedJson = JsonDocument.Parse(await updated.Content.ReadAsStringAsync());
+        Assert.Equal("Renamed", updatedJson.RootElement.GetProperty("name").GetString());
+        using var enabled = await client.PatchAsJsonAsync("/api/tasks/Renamed/enabled", new { enabled = true });
+        Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+        using var enabledJson = JsonDocument.Parse(await enabled.Content.ReadAsStringAsync());
+        Assert.True(enabledJson.RootElement.GetProperty("enabled").GetBoolean());
+        using var running = await client.PostAsync("/api/tasks/Renamed/run", null);
+        Assert.Equal(HttpStatusCode.NoContent, running.StatusCode);
+        Assert.Empty(await running.Content.ReadAsByteArrayAsync());
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using var deleted = await client.DeleteAsync("/api/tasks/Renamed");
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Empty(await deleted.Content.ReadAsByteArrayAsync());
         Assert.Empty(fixture.Tasks.GetAll());
     }
 
@@ -262,11 +622,13 @@ public sealed partial class TaskServiceTest
             [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
         fixture.Tasks.RunNow("Example");
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Task? stopping = null;
         if (dispose) fixture.Tasks.Dispose();
-        else await fixture.Tasks.StopAsync(CancellationToken.None);
+        else { stopping = fixture.Tasks.StopAsync(CancellationToken.None); Assert.False(stopping.IsCompleted); }
         Assert.True(operationToken.IsCancellationRequested);
         fixture.Logger.ActionCancelled = true;
         release.SetResult();
+        if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5));
         await fixture.Logger.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         fixture.Tasks.RunNow("Example");
         Assert.Equal(0, fixture.Programs.Launches);
@@ -287,7 +649,7 @@ public sealed partial class TaskServiceTest
         File.WriteAllText(target, invalidContent);
         var replacement = original with { Name = "Unloaded" };
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
+        var exception = Assert.Throws<WinPilot.Core.ResourceNameConflictException>(() =>
         {
             if (operation == "create") fixture.Tasks.Create(replacement);
             else fixture.Tasks.Update(original.Name, replacement);
@@ -321,6 +683,43 @@ public sealed partial class TaskServiceTest
         Assert.Equal(content, File.ReadAllText(file));
         Assert.False(File.Exists(Path.Combine(fixture.Paths.TasksDirectory, "Renamed.json")));
         Assert.Empty(Directory.GetFiles(fixture.Paths.TasksDirectory, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task FailedRenameAndRollbackKeepBothFailuresAndDoNotUpdateMemory()
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Example");
+        var original = Assert.Single(fixture.Tasks.GetAll());
+        var file = Path.Combine(fixture.Paths.TasksDirectory, "Example.json");
+        var renamed = Path.Combine(fixture.Paths.TasksDirectory, "Renamed.json");
+        var content = File.ReadAllText(file);
+        var failure = new IOException("受控保存失败");
+        var value = new FailingPersistenceValue(() =>
+        {
+            File.WriteAllText(file, "external");
+            throw failure;
+        });
+        var replacement = original with
+        {
+            Name = "Renamed",
+            Trigger = new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "trigger",
+                Parameters: new Dictionary<string, object?> { ["value"] = value })
+        };
+
+        var error = Assert.Throws<AggregateException>(() => fixture.Tasks.Update(original.Name, replacement));
+        Assert.Equal(2, error.InnerExceptions.Count);
+        Assert.Same(failure, error.InnerExceptions[0]);
+        Assert.IsAssignableFrom<IOException>(error.InnerExceptions[1]);
+        Assert.Equal(original, Assert.Single(fixture.Tasks.GetAll()));
+        Assert.Equal(content, File.ReadAllText(renamed));
+        Assert.Equal("external", File.ReadAllText(file));
+        Assert.Empty(Directory.GetFiles(fixture.Paths.TasksDirectory, "*.tmp"));
+    }
+
+    private sealed class FailingPersistenceValue(Action fail)
+    {
+        public int Value { get { fail(); return 0; } }
     }
 
     [Theory]
@@ -419,6 +818,221 @@ public sealed partial class TaskServiceTest
         Assert.Equal(2, fixture.Programs.Launches);
     }
 
+    [Fact]
+    public async Task CronWithoutNextOccurrenceDoesNotBlockLaterDueTasks()
+    {
+        await using var fixture = new TaskServiceFixture();
+        var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2030, 1, 15)));
+        Assert.Null(CronExpression.Parse("0 0 31 2 *").GetNextOccurrence(time, TimeZoneInfo.Local));
+        fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "* * * * *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        Assert.Equal(new[] { "a-unreachable", "b-healthy" }, fixture.Tasks.GetAll().Select(task => task.Name));
+
+        var failure = Record.Exception(() => fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None));
+        var launchesAfterFailure = fixture.Programs.Launches;
+        fixture.Tasks.SetEnabled("a-unreachable", false);
+        fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None);
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.True(failure is null && launchesAfterFailure == 1,
+            $"轮询异常：{failure?.GetType().Name}：{failure?.Message}；后续到期任务执行次数：{launchesAfterFailure}；禁用异常任务后同一时刻执行次数：{fixture.Programs.Launches}");
+    }
+
+    [Fact]
+    public async Task CronTaskFailureDoesNotBlockLaterDueTasks()
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "* * * * *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var injected = 0;
+        probe.BeforeLog = (level, message) =>
+        {
+            if (level == LogLevel.Warning && message.Contains("a-unreachable", StringComparison.Ordinal))
+            {
+                injected++;
+                throw new InvalidOperationException("受控单任务异常");
+            }
+        };
+        fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None);
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None);
+        Assert.Equal(1, injected);
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.Equal("受控单任务异常", Assert.Single(probe.Exceptions).Message);
+    }
+
+    [Fact]
+    public async Task CronWithoutNextOccurrenceStopsSchedulingAndWarnsOnce()
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        for (var index = 0; index < 10; index++) fixture.Tasks.PollCron(time.AddMinutes(index), CancellationToken.None);
+        var warning = Assert.Single(probe.Warnings);
+        Assert.Contains("任务「unreachable」", warning);
+        Assert.Contains("0 0 31 2 *", warning);
+        Assert.Contains("已停止该任务调度", warning);
+        Assert.Empty(probe.Exceptions);
+        Assert.Equal(0, fixture.Programs.Launches);
+        Assert.True(Assert.Single(fixture.Tasks.GetAll()).Enabled);
+    }
+
+    [Theory]
+    [InlineData("edit")]
+    [InlineData("reenable")]
+    [InlineData("rename")]
+    [InlineData("recreate")]
+    public async Task CronStoppedSchedulingIsClearedByTaskChanges(string operation)
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        Assert.Single(probe.Warnings);
+        var task = Assert.Single(fixture.Tasks.GetAll());
+        switch (operation)
+        {
+            case "edit": fixture.Tasks.Update(task.Name, task); break;
+            case "reenable":
+                fixture.Tasks.SetEnabled(task.Name, false);
+                fixture.Tasks.SetEnabled(task.Name, true);
+                break;
+            case "rename": fixture.Tasks.Update(task.Name, task with { Name = "renamed" }); break;
+            case "recreate":
+                fixture.Tasks.Delete(task.Name);
+                fixture.Tasks.Create(task);
+                break;
+        }
+        fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None);
+        fixture.Tasks.PollCron(time.AddMinutes(2), CancellationToken.None);
+        Assert.Equal(2, probe.Warnings.Count);
+        Assert.Empty(probe.Exceptions);
+        Assert.Equal(0, fixture.Programs.Launches);
+        task = Assert.Single(fixture.Tasks.GetAll());
+        fixture.Tasks.Update(task.Name, task with { Trigger = new(TaskTriggerType.Cron, Cron: "* * * * *") });
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        fixture.Tasks.PollCron(time.AddMinutes(1), CancellationToken.None);
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, fixture.Programs.Launches);
+    }
+
+    [Fact]
+    public async Task CronLastDueOccurrenceRunsBeforeSchedulingStops()
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        var expression = CronExpression.Parse("0 0 31 12 *");
+        var time = new DateTimeOffset(9999, 12, 30, 0, 0, 0, TimeSpan.Zero);
+        var due = expression.GetNextOccurrence(time, TimeZoneInfo.Local);
+        Assert.NotNull(due);
+        Assert.Null(expression.GetNextOccurrence(due.Value.AddSeconds(1), TimeZoneInfo.Local));
+        fixture.Tasks.Create(new("last", true, new(TaskTriggerType.Cron, Cron: "0 0 31 12 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        fixture.Tasks.PollCron(due.Value, CancellationToken.None);
+        await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fixture.Tasks.PollCron(due.Value.AddSeconds(1), CancellationToken.None);
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.Single(probe.Warnings);
+        Assert.Empty(probe.Exceptions);
+    }
+
+    [Fact]
+    public async Task CronPollingPropagatesServiceCancellationWithoutSchedulingTasks()
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Tasks.Create(new("enabled", true, new(TaskTriggerType.Cron, Cron: "* * * * *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
+        fixture.Tasks.PollCron(time, CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var error = Assert.Throws<OperationCanceledException>(() => fixture.Tasks.PollCron(time.AddMinutes(1), cancellation.Token));
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(0, fixture.Programs.Launches);
+        Assert.Empty(fixture.Logger.Exceptions);
+    }
+
+    [Fact]
+    public async Task CronPollingFailureKeepsPollingInterval()
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        probe.BeforeLog = (level, message) =>
+        {
+            if (level == LogLevel.Warning && message.Contains("已停止该任务调度", StringComparison.Ordinal))
+            {
+                fixture.Tasks.SetEnabled("unreachable", false);
+                fixture.Tasks.SetEnabled("unreachable", true);
+                throw new InvalidOperationException("受控单任务异常");
+            }
+            if (level == LogLevel.Error && message.Contains("Cron 调度失败", StringComparison.Ordinal))
+                throw new InvalidOperationException("受控轮询边界异常");
+        };
+        fixture.Tasks.NotifyPluginsLoaded();
+        try
+        {
+            await fixture.Tasks.StartAsync(CancellationToken.None);
+            var observed = await probe.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.All(observed.Exceptions, exception =>
+            {
+                Assert.IsType<InvalidOperationException>(exception);
+                Assert.Equal("受控轮询边界异常", exception.Message);
+            });
+            Assert.True(observed.Interval >= TimeSpan.FromSeconds(1),
+                $"两次任务监听失败的间隔：{observed.Interval.TotalMilliseconds:F3} ms，应保留至少 1000 ms 的轮询延时");
+        }
+        finally
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var stopping = fixture.Tasks.StopAsync(cancellation.Token);
+            probe.Release();
+            await stopping;
+        }
+    }
+
+    [Fact]
+    public async Task CronBackgroundPollingStopsAfterWarningWithoutWaitingForAnotherTick()
+    {
+        using var probe = new CronFailureProbeLogger();
+        await using var fixture = new TaskServiceFixture(logger: probe);
+        var warned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        probe.BeforeLog = (level, message) =>
+        {
+            if (level == LogLevel.Warning && message.Contains("已停止该任务调度", StringComparison.Ordinal)) warned.TrySetResult();
+        };
+        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 31 2 *"),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        fixture.Tasks.NotifyPluginsLoaded();
+        try
+        {
+            await fixture.Tasks.StartAsync(CancellationToken.None);
+            await warned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await fixture.Tasks.StopAsync(cancellation.Token);
+        }
+        Assert.Single(probe.Warnings);
+        Assert.Empty(probe.Exceptions);
+        Assert.True(fixture.Tasks.ExecuteTask?.IsCompleted);
+    }
+
     [Theory]
     [InlineData("app", "C:\\tools\\app.exe", true)]
     [InlineData("APP", "c:\\TOOLS\\APP.exe", true)]
@@ -455,20 +1069,6 @@ public sealed partial class TaskServiceTest
         fixture.Tasks.RunNow("已关闭");
         Assert.Equal(2, fixture.Programs.Launches);
         Assert.False(fixture.Tasks.GetAll().Single(task => task.Name == "已关闭").Enabled);
-    }
-
-    private sealed class RecordingNotifications(Func<CancellationToken, Task<IReadOnlyList<NotificationChannelResult>>>? send = null) : INotificationService
-    {
-        internal TaskCompletionSource<(NotificationMessage Message, string? Channel, bool IgnoreEnabled)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal byte[]? ImageBytes { get; private set; }
-        internal CancellationToken Token { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
-        {
-            ImageBytes = message.ImagePath is null ? null : File.ReadAllBytes(message.ImagePath);
-            Token = cancellationToken;
-            Sent.TrySetResult((message, channel, ignoreChannelEnabled));
-            return send?.Invoke(cancellationToken) ?? Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)]);
-        }
     }
 
     [Theory]
@@ -745,34 +1345,48 @@ public sealed partial class TaskServiceTest
         Assert.False(File.Exists(path));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ExpiredTriggerCannotStartCurrentTaskEvenWithCurrentGenerationToken(bool useCurrentToken)
+    private sealed class CronFailureProbeLogger : ILogger<TaskService>, IDisposable
     {
-        await using var fixture = new TaskServiceFixture();
-        using var previous = fixture.Extensions.CreateScope("test", "Test");
-        previous.Register([new("trigger", "Previous trigger")]);
-        PluginTaskTriggerFired? received = null;
-        fixture.Extensions.Triggered += fired => received = fired;
-        var trigger = new PluginTriggerEvent("trigger", DateTimeOffset.UtcNow, new Dictionary<string, object?>());
-        previous.Emit(trigger);
-        Assert.NotNull(received);
-        var expired = received;
-        using var current = fixture.Extensions.CreateScope("test", "Test");
-        previous.Dispose();
-        current.Register([new("trigger", "Current trigger")]);
-        current.Emit(trigger);
-        Assert.NotNull(received);
-        var currentToken = received.CancellationToken;
-        fixture.Tasks.Create(new("current", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "trigger"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
-        var replay = useCurrentToken ? expired with { CancellationToken = currentToken } : expired;
-        typeof(TaskService).GetMethod("ExtensionTriggered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .Invoke(fixture.Tasks, [replay]);
-        Assert.Equal(0, fixture.Programs.Launches);
-        current.Emit(trigger);
-        Assert.Equal(1, fixture.Programs.Launches);
-        Assert.Empty(fixture.Logger.Exceptions);
+        private readonly ManualResetEventSlim release = new(false);
+        private readonly List<Exception> exceptions = [];
+        private long firstFailure;
+        internal Action<LogLevel, string>? BeforeLog { get; set; }
+        internal System.Collections.Concurrent.ConcurrentQueue<string> Warnings { get; } = new();
+        internal System.Collections.Concurrent.ConcurrentQueue<Exception> Exceptions { get; } = new();
+        internal TaskCompletionSource<(TimeSpan Interval, Exception[] Exceptions)> Observed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel level) => true;
+        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            BeforeLog?.Invoke(level, message);
+            if (level == LogLevel.Warning) Warnings.Enqueue(message);
+            if (exception is not null) Exceptions.Enqueue(exception);
+            if (level != LogLevel.Error || exception is null || message != "任务监听失败" || exceptions.Count >= 2) return;
+            var timestamp = Stopwatch.GetTimestamp();
+            exceptions.Add(exception);
+            if (exceptions.Count == 1) firstFailure = timestamp;
+            else
+            {
+                Observed.TrySetResult((Stopwatch.GetElapsedTime(firstFailure, timestamp), exceptions.ToArray()));
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Cron 复现测试未释放日志握手");
+            }
+        }
+        internal void Release() => release.Set();
+        public void Dispose() => release.Dispose();
+    }
+
+    private sealed class RecordingNotifications(Func<CancellationToken, Task<IReadOnlyList<NotificationChannelResult>>>? send = null) : INotificationService
+    {
+        internal TaskCompletionSource<(NotificationMessage Message, string? Channel, bool IgnoreEnabled)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal byte[]? ImageBytes { get; private set; }
+        internal CancellationToken Token { get; private set; }
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
+        {
+            ImageBytes = message.ImagePath is null ? null : File.ReadAllBytes(message.ImagePath);
+            Token = cancellationToken;
+            Sent.TrySetResult((message, channel, ignoreChannelEnabled));
+            return send?.Invoke(cancellationToken) ?? Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)]);
+        }
     }
 }

@@ -1,3 +1,4 @@
+using WinPilot.Core;
 using WinPilot.Core.Programs;
 using WinPilot.Features.Programs;
 
@@ -24,21 +25,26 @@ public static class ProgramEndpointRouteBuilderExtensions
         }));
 
         endpoints.MapGet("/api/programs/tags", (ProgramTagService service) => Results.Ok(service.GetAll()));
-        endpoints.MapPost("/api/programs/tags", (ProgramTag tag, ProgramTagService service) => Execute(() => { service.Create(tag); return Results.Created($"/api/programs/tags/{Uri.EscapeDataString(tag.Name)}", tag); }));
-        endpoints.MapPut("/api/programs/tags/{name}", (string name, ProgramTag tag, ProgramTagService service) => Execute(() => { service.Update(name, tag); return Results.Ok(tag); }));
-        endpoints.MapDelete("/api/programs/tags/{name}", (string name, ProgramTagService service) => Execute(() => { service.Delete(name); return Results.NoContent(); }));
+        endpoints.MapPost("/api/programs/tags", (ProgramTag tag, ProgramTagService service) => Execute(() => { service.Create(tag); return Results.Created($"/api/programs/tags/{Uri.EscapeDataString(tag.Name)}", tag); }, tagResource: true));
+        endpoints.MapPut("/api/programs/tags/{name}", (string name, ProgramTag tag, ProgramTagService service) => Execute(() => { service.Update(name, tag); return Results.Ok(tag); }, tagResource: true));
+        endpoints.MapDelete("/api/programs/tags/{name}", (string name, ProgramTagService service) => Execute(() => { service.Delete(name); return Results.NoContent(); }, tagResource: true));
         endpoints.MapPost("/api/programs/tags/{name}/launch", (string name, ProgramTagService service, IProgramManager manager) => Execute(() =>
         {
             var tag = service.Get(name);
-            manager.Launch(new ProgramLaunchRequest(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, tag.RunElevated, tag.Silent));
-            return Results.NoContent();
-        }));
+            return Execute(() =>
+            {
+                manager.Launch(new ProgramLaunchRequest(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, tag.RunElevated, tag.Silent));
+                return Results.NoContent();
+            });
+        }, tagResource: true));
         return endpoints;
     }
 
-    private static IResult Execute(Func<IResult> action)
+    private static IResult Execute(Func<IResult> action, bool tagResource = false)
     {
         try { return action(); }
+        catch (ResourceNameConflictException exception) when (tagResource) { return Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "操作失败", detail: exception.Message); }
+        catch (FileNotFoundException exception) when (tagResource) { return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "操作失败", detail: exception.Message); }
         catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException) { return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "操作失败", detail: exception.Message); }
     }
 

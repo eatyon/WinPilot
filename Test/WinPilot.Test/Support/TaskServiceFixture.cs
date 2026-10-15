@@ -28,9 +28,13 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal WinPilot.Features.Plugins.PluginTaskExtensionRegistry Extensions { get; } = new(new(), new(), new());
     internal TaskLogger Logger { get; } = new();
     internal TaskService Tasks { get; }
-    internal TaskServiceFixture(INotificationService? notifications = null) => Tasks = new(paths, Programs, new ProgramTagService(paths),
-        new KeyboardInputService(keyboard), terminals, new DesktopScreenshotService(new Screenshot()),
-        notifications ?? new Notifications(), processEvents, Logger, Extensions);
+    internal TaskServiceFixture(INotificationService? notifications = null, Microsoft.Extensions.Logging.ILogger<TaskService>? logger = null, Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null, Action<PortableDataPaths>? initialize = null)
+    {
+        initialize?.Invoke(paths);
+        Tasks = new(paths, Programs, new ProgramTagService(paths),
+            new KeyboardInputService(keyboard), terminals, new DesktopScreenshotService(new Screenshot()),
+            notifications ?? new Notifications(), processEvents, logger ?? Logger, Extensions, lifetime: lifetime);
+    }
     internal void Create(string name, bool enabled = true, bool delay = false) => Tasks.Create(new(name, enabled,
         new(TaskTriggerType.WinPilotStartup), delay
             ? [new(TaskActionType.Delay, DelaySeconds: 1), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]

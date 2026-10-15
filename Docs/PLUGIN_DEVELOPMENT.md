@@ -660,6 +660,7 @@ if (context.Tasks.Actions is { } taskActions)
 
 动作参数类型包括 Text、Number、Select、Checkbox、Textarea、MultiCheckbox，Key 在同一动作内不能重复。回调应校验自己的业务边界，遵守取消令牌；正常完成返回 Success，业务失败返回带 Error 的其他状态，宿主会按任务的失败策略继续或停止后续动作
 
+动作参数的 `DefaultValue` 是执行兜底值：宿主为本次执行复制参数，在获取动态选项后、校验前，仅对缺失的参数键补入非 null 默认值，再统一校验并交给回调、声明 Plan 或回调返回的 Plan。显式 null、空字符串、false、0、空数组不会触发补值；可变默认集合按次复制，不写回任务文件，也不用于触发筛选参数
 
 ### 通知变量
 

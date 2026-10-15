@@ -114,6 +114,20 @@ public sealed class FileOperationRecoveryTest
         finally { Directory.Delete(directory, true); }
     }
 
+    [Theory]
+    [InlineData(typeof(TaskEndpointRouteBuilderExtensions))]
+    [InlineData(typeof(ProgramEndpointRouteBuilderExtensions))]
+    [InlineData(typeof(PluginEndpointRouteBuilderExtensions))]
+    public void AggregateFailuresAreNotMappedToBusinessErrors(Type endpointType)
+    {
+        var failure = new AggregateException(new InvalidOperationException("保存失败"), new IOException("回滚失败"));
+        var method = endpointType.GetMethod("Execute", BindingFlags.NonPublic | BindingFlags.Static)!;
+        Func<IResult> action = () => throw failure;
+        object?[] arguments = endpointType == typeof(ProgramEndpointRouteBuilderExtensions) ? [action, true] : [action];
+        var error = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, arguments));
+        Assert.Same(failure, error.InnerException);
+    }
+
     private static void Run(bool rollback, Action operation, Action recovery)
     {
         if (rollback) FileOperationRecovery.WithRollback(operation, recovery);

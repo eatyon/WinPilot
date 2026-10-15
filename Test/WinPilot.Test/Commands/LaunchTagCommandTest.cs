@@ -169,13 +169,30 @@ public sealed class LaunchTagCommandTest
     {
         using var fixture = new Fixture();
         fixture.Tags.Create(Tag("Chrome"));
-        File.WriteAllText(Path.Combine(fixture.Paths.TagsDirectory, "broken.json"), "{");
+        var file = Path.Combine(fixture.Paths.TagsDirectory, "Chrome.json");
+        File.WriteAllText(file, "{");
         var replies = new List<string>();
         using var processor = fixture.Processor();
         await processor.ProcessAsync(Message("启动标签Chrome", text => replies.Add(text)), "", CancellationToken.None);
-        Assert.Contains("无法读取标签", Assert.Single(replies));
+        Assert.Contains("未找到标签「Chrome」", Assert.Single(replies));
         Assert.DoesNotContain(fixture.Paths.ApplicationDirectory, replies[0]);
         Assert.Empty(fixture.Programs.Requests);
+        Assert.Equal("{", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public async Task UnrelatedCorruptConfigurationDoesNotBlockValidTagLaunch()
+    {
+        using var fixture = new Fixture();
+        fixture.Tags.Create(Tag("Chrome"));
+        var file = Path.Combine(fixture.Paths.TagsDirectory, "broken.json");
+        File.WriteAllText(file, "{");
+        var replies = new List<string>();
+        using var processor = fixture.Processor();
+        await processor.ProcessAsync(Message("启动标签Chrome", text => replies.Add(text)), "", CancellationToken.None);
+        Assert.Equal("已提交「启动标签 Chrome」命令", Assert.Single(replies));
+        Assert.Single(fixture.Programs.Requests);
+        Assert.Equal("{", File.ReadAllText(file));
     }
 
     [Fact]

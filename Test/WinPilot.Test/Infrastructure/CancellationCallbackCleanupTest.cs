@@ -21,6 +21,101 @@ namespace WinPilot.Test;
 
 public sealed class CancellationCallbackCleanupTest
 {
+    [Theory]
+    [InlineData("update-disable", false)]
+    [InlineData("update-disable", true)]
+    [InlineData("rename", false)]
+    [InlineData("rename", true)]
+    [InlineData("disable", false)]
+    [InlineData("disable", true)]
+    [InlineData("delete", false)]
+    [InlineData("delete", true)]
+    public async Task CompletedTaskMutationReturnsSuccessWhenCancellationCallbackThrows(string operation, bool throwCallback)
+    {
+        var logger = new CallbackLogger<TaskService>();
+        await using var fixture = new TaskServiceFixture(logger: logger);
+        using var scope = fixture.Extensions.CreateScope("cleanup-test", "Cleanup test");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new InvalidOperationException("测试单任务取消回调失败");
+        var callbacks = 0;
+        CancellationToken executionToken = default;
+        ((IPluginTaskActionApi)scope).Register([new("block", "等待清理")], async (_, _, token) =>
+        {
+            executionToken = token;
+            using var registration = token.Register(() =>
+            {
+                Interlocked.Increment(ref callbacks);
+                if (throwCallback) throw failure;
+            });
+            started.TrySetResult();
+            await release.Task;
+            return PluginTaskActionResult.Success();
+        });
+        var task = fixture.Tasks.Create(new("original", true, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block"),
+             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        await using var app = builder.Build();
+        app.MapTaskEndpoints();
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(Assert.Single(app.Urls)) };
+        try
+        {
+            fixture.Tasks.RunNow(task.Name);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var next = operation == "rename" ? task with { Name = "renamed" } : task with { Enabled = false };
+            using var response = operation switch
+            {
+                "delete" => await client.DeleteAsync("/api/tasks/original"),
+                "disable" => await client.PatchAsJsonAsync("/api/tasks/original/enabled", new { enabled = false }),
+                _ => await client.PutAsJsonAsync("/api/tasks/original", next)
+            };
+            Assert.Equal(operation == "delete" ? HttpStatusCode.NoContent : HttpStatusCode.OK, response.StatusCode);
+            Assert.True(executionToken.IsCancellationRequested);
+            Assert.Equal(1, callbacks);
+            AssertWarning(logger.Entries, failure, throwCallback);
+            if (throwCallback) Assert.Contains("original", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "original.json");
+            var listed = await client.GetFromJsonAsync<JsonArray>("/api/tasks");
+            if (operation == "delete")
+            {
+                Assert.Empty(fixture.Tasks.GetAll());
+                Assert.Empty(listed!);
+                Assert.False(File.Exists(originalFile));
+                Assert.Equal("", await response.Content.ReadAsStringAsync());
+            }
+            else
+            {
+                var current = Assert.Single(fixture.Tasks.GetAll());
+                Assert.Equal(next.Name, current.Name);
+                Assert.Equal(next.Enabled, current.Enabled);
+                var saved = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fixture.Paths.TasksDirectory, next.Name + ".json")));
+                var returned = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+                Assert.True(JsonNode.DeepEquals(saved, returned));
+                Assert.True(JsonNode.DeepEquals(saved, Assert.Single(listed!)));
+                Assert.True(JsonNode.DeepEquals(saved, System.Text.Json.JsonSerializer.SerializeToNode(TaskPersistenceFile.From(current), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+                {
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                })));
+                if (operation == "rename") Assert.False(File.Exists(originalFile));
+            }
+        }
+        finally
+        {
+            release.TrySetResult();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await fixture.Tasks.StopAsync(timeout.Token);
+        }
+        Assert.Equal(0, fixture.Programs.Launches);
+        Assert.Throws<ObjectDisposedException>(() => executionToken.WaitHandle);
+        AssertWarning(logger.Entries, failure, throwCallback);
+    }
 
     [Theory]
     [InlineData(false, false)]
@@ -81,6 +176,85 @@ public sealed class CancellationCallbackCleanupTest
             foreach (var registration in registrations) registration.Dispose();
             sessions.RevokeAll();
             sessions.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task TaskShutdownContinuesThroughAllStagesWhenCallbackThrows(bool dispose, bool throwCallback)
+    {
+        var logger = new CallbackLogger<TaskService>();
+        var serviceStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        logger.OnMessage = message => { if (message == "任务服务已启动") serviceStarted.TrySetResult(); };
+        await using var fixture = new TaskServiceFixture(logger: logger);
+        using var scope = fixture.Extensions.CreateScope("cleanup-test", "Cleanup test");
+        var failure = new InvalidOperationException("测试任务取消回调失败");
+        var started = Enumerable.Range(0, 3).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokens = new ConcurrentDictionary<string, CancellationToken>();
+        var registrations = new ConcurrentBag<CancellationTokenRegistration>();
+        ((IPluginTaskActionApi)scope).Register([new("block", "等待清理")], async (_, context, token) =>
+        {
+            var taskName = Assert.IsType<string>(context.TaskName);
+            tokens[taskName] = token;
+            registrations.Add(token.Register(() =>
+            {
+                if (throwCallback && taskName == "Cleanup0") throw failure;
+            }));
+            started[int.Parse(taskName["Cleanup".Length..])].TrySetResult();
+            await release.Task;
+            return PluginTaskActionResult.Success();
+        });
+        for (var index = 0; index < 3; index++)
+            fixture.Tasks.Create(new($"Cleanup{index}", true, new(TaskTriggerType.WinPilotStartup),
+                [new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block")]));
+        try
+        {
+            await fixture.Tasks.StartAsync(CancellationToken.None);
+            await serviceStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var index = 0; index < 3; index++) fixture.Tasks.RunNow($"Cleanup{index}");
+            await Task.WhenAll(started.Select(signal => signal.Task)).WaitAsync(TimeSpan.FromSeconds(5));
+            var listenerField = typeof(TaskService).GetField("processListenerStarted", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var pathsField = typeof(TaskService).GetField("processPaths", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var processPaths = (Dictionary<int, string>)pathsField.GetValue(fixture.Tasks)!;
+            listenerField.SetValue(fixture.Tasks, true);
+            processPaths[123456] = "cleanup-marker";
+
+            if (dispose) fixture.Tasks.Dispose();
+            else
+            {
+                var stopping = fixture.Tasks.StopAsync(CancellationToken.None);
+                Assert.False(stopping.IsCompleted);
+                release.TrySetResult();
+                await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.Equal(3, tokens.Count);
+            Assert.All(tokens.Values, token => Assert.True(token.IsCancellationRequested));
+            Assert.False((bool)listenerField.GetValue(fixture.Tasks)!);
+            Assert.Empty(processPaths);
+            var serviceToken = (CancellationToken)typeof(TaskService).GetField("serviceToken", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Tasks)!;
+            Assert.True(serviceToken.IsCancellationRequested);
+            Assert.Contains(logger.Entries, entry => entry.Message == "任务触发所需的 Windows 进程监听已停止");
+            AssertWarning(logger.Entries, failure, throwCallback);
+            if (throwCallback) Assert.Contains("Cleanup0", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+        }
+        finally
+        {
+            foreach (var registration in registrations) registration.Dispose();
+            release.TrySetResult();
+            var running = (System.Collections.IDictionary)typeof(TaskService).GetField("runningTasks", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Tasks)!;
+            var gate = typeof(TaskService).GetField("gate", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Tasks)!;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (true)
+            {
+                lock (gate) if (running.Count == 0) break;
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
         }
     }
 

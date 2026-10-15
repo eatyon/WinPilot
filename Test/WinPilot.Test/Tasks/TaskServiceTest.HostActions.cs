@@ -306,6 +306,38 @@ public sealed partial class TaskServiceTest
         Assert.Empty(fixture.Programs.Requests);
     }
 
+    [Fact]
+    public async Task HostPlanDelayDoesNotApplyNativeTaskUpperLimit()
+    {
+        await using var fixture = new TaskServiceFixture();
+        using var scope = fixture.Extensions.CreateScope("host", "Host");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((IPluginTaskActionApi)scope).Register([new("plan", "Plan")], async (_, _, _) =>
+        {
+            started.TrySetResult();
+            await release.Task;
+            return PluginTaskActionResult.Success(new PluginHostActionPlan([
+                new(PluginHostActionType.Delay, new Dictionary<string, object?> { ["delaySeconds"] = 86401 })]));
+        });
+        fixture.Tasks.Create(new("HostPlan", true, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.Extension, PluginId: "host", ActionId: "plan")]));
+        fixture.Tasks.RunNow("HostPlan");
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var stopping = fixture.Tasks.StopAsync(CancellationToken.None);
+            fixture.Logger.ActionCancelled = true;
+            release.TrySetResult();
+            await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            await fixture.Logger.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Contains("任务「HostPlan」已取消", fixture.Logger.Messages);
+            Assert.Empty(fixture.Logger.Exceptions);
+        }
+        finally { release.TrySetResult(); }
+    }
+
     private static async Task<Exception?> RunHostPlanAsync(TaskServiceFixture fixture, PluginHostActionStep step,
         IReadOnlyDictionary<string, object?>? parameters = null, IReadOnlyList<PluginActionParameterDefinition>? schema = null, bool returnedPlan = false)
     {

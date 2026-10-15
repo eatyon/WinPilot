@@ -1,11 +1,124 @@
 using WinPilot.Core;
 using WinPilot.Core.Programs;
 using WinPilot.Features.Programs;
+using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace WinPilot.Test;
 
 public sealed class ProgramTagServiceTest
 {
+    [Theory]
+    [InlineData("{")]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("{\"Name\":\"broken\",\"ProgramPath\":\"\"}")]
+    public void GetAllIsolatesDamagedFilesAndReportsOriginalErrorWithoutChangingFiles(string damaged)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            var logger = new TagLogger();
+            using var services = new ServiceCollection().AddSingleton<ILogger<ProgramTagService>>(logger).BuildServiceProvider();
+            var service = ActivatorUtilities.CreateInstance<ProgramTagService>(services, paths);
+            service.Create(new("healthy", "app.exe", "", "", false));
+            var file = Path.Combine(paths.TagsDirectory, "broken.json");
+            File.WriteAllText(file, damaged);
+            Assert.Equal("healthy", Assert.Single(service.GetAll()).Name);
+            var error = Assert.Single(logger.Errors);
+            Assert.Contains("broken.json", error.Message);
+            Assert.IsType<InvalidDataException>(error.Exception);
+            Assert.Equal(damaged, File.ReadAllText(file));
+            Assert.Throws<InvalidDataException>(() => service.Get("broken"));
+            Assert.Equal(2, Directory.GetFiles(paths.TagsDirectory).Length);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void GetAllSkipsTemporarilyUnreadableFileWithoutDiscardingOtherTags()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            var logger = new TagLogger();
+            using var services = new ServiceCollection().AddSingleton<ILogger<ProgramTagService>>(logger).BuildServiceProvider();
+            var service = ActivatorUtilities.CreateInstance<ProgramTagService>(services, paths);
+            service.Create(new("healthy", "app.exe", "", "", false));
+            service.Create(new("locked", "locked.exe", "", "", false));
+            var file = Path.Combine(paths.TagsDirectory, "locked.json");
+            var original = File.ReadAllText(file);
+            using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.Equal("healthy", Assert.Single(service.GetAll()).Name);
+                var error = Assert.Single(logger.Errors);
+                Assert.Contains("locked.json", error.Message);
+                Assert.IsAssignableFrom<IOException>(error.Exception);
+            }
+            Assert.Equal(2, service.GetAll().Count);
+            Assert.Equal(original, File.ReadAllText(file));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData(false, "healthy")]
+    [InlineData(true, "healthy")]
+    [InlineData(false, "other")]
+    [InlineData(true, "other")]
+    public void MismatchedFileIdentityCannotIntroduceOrOverwriteTagNames(bool writeAliasFirst, string aliasName)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = PortableDataPaths.Create(directory);
+            var service = new ProgramTagService(paths);
+            Directory.CreateDirectory(paths.TagsDirectory);
+            var file = Path.Combine(paths.TagsDirectory, "alias.json");
+            var alias = JsonSerializer.Serialize(new ProgramTag(aliasName, "alias.exe", "", "", false));
+            if (writeAliasFirst) File.WriteAllText(file, alias);
+            service.Create(new("healthy", "app.exe", "", "", false));
+            if (!writeAliasFirst) File.WriteAllText(file, alias);
+            var healthy = Assert.Single(service.GetAll());
+            Assert.Equal("healthy", healthy.Name);
+            Assert.Equal("app.exe", healthy.ProgramPath);
+            Assert.Throws<InvalidDataException>(() => service.Get("alias"));
+            Assert.Equal(alias, File.ReadAllText(file));
+            Assert.Equal(2, Directory.GetFiles(paths.TagsDirectory).Length);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void CaseOnlyRenameStillMatchesWindowsFileIdentity()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var service = new ProgramTagService(PortableDataPaths.Create(directory));
+            var tag = new ProgramTag("Name", "app.exe", "", "", false);
+            service.Create(tag);
+            service.Update("Name", tag with { Name = "NAME" });
+            Assert.Equal("NAME", service.Get("name").Name);
+            Assert.Equal("NAME", Assert.Single(service.GetAll()).Name);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    private sealed class TagLogger : ILogger<ProgramTagService>
+    {
+        internal List<(Exception Exception, string Message)> Errors { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel level) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (level == LogLevel.Error && exception is not null) Errors.Add((exception, formatter(state, exception)));
+        }
+    }
+
     [Fact]
     public void Get_ReadsOnlyTheRequestedTag()
     {
