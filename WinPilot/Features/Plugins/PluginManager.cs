@@ -10,7 +10,7 @@ public sealed class PluginManager : IDisposable
 {
     private const int MaxReadmeBytes = 512 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-    private static readonly JsonSerializerOptions StorageJsonOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly JsonSerializerOptions ConfigurationJsonOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private static readonly JsonSerializerOptions LifecycleJsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly PortableDataPaths paths;
     private readonly ILogger<PluginManager> logger;
@@ -21,8 +21,8 @@ public sealed class PluginManager : IDisposable
     private readonly object lifecycleGate = new();
     private readonly HashSet<string> activeLifecycles = new(StringComparer.OrdinalIgnoreCase);
     private TaskCompletionSource? lifecycleWaiters;
-    private int pendingReloads;
-    private bool reloading;
+    private int pendingScans;
+    private bool scanning;
     private bool disposed;
     private IReadOnlyList<PluginInfo> plugins = [];
     private readonly Dictionary<string, IPluginRuntimeInstance> runtimes = new(StringComparer.OrdinalIgnoreCase);
@@ -34,7 +34,7 @@ public sealed class PluginManager : IDisposable
         this.logger = logger;
         this.runtime = runtime;
         this.pageSessions = pageSessions;
-        Reload();
+        Scan();
     }
 
     public IReadOnlyList<PluginInfo> GetPlugins()
@@ -62,7 +62,7 @@ public sealed class PluginManager : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ObjectDisposedException.ThrowIf(disposed, this);
-                if (!reloading && pendingReloads == 0 && !activeLifecycles.Contains(id)) return GetPlugin(id);
+                if (!scanning && pendingScans == 0 && !activeLifecycles.Contains(id)) return GetPlugin(id);
                 lifecycleWaiters ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
                 completion = lifecycleWaiters.Task;
             }
@@ -176,21 +176,21 @@ public sealed class PluginManager : IDisposable
         logger.LogInformation("插件「{PluginName}」已删除，插件数据处理：{DeleteData}", plugin.Manifest?.Name ?? plugin.Id, deleteData ? "删除" : "保留");
     }
 
-    public string ReadStorage(string id)
+    public string ReadConfiguration(string id)
     {
         var plugin = GetPlugin(id);
         var path = Path.Combine(plugin.DataDirectory, "config.json");
         return PluginSettingsSchema.ApplyDefaults(ReadSettingsDefinition(id),
-            configurationStore.Read(path) ?? new JsonObject()).ToJsonString(StorageJsonOptions);
+            configurationStore.Read(path) ?? new JsonObject()).ToJsonString(ConfigurationJsonOptions);
     }
 
-    public void WriteStorage(string id, string content)
-        => RunLifecycle(id, () => WriteStorageCore(id, content));
+    public void WriteConfiguration(string id, string content)
+        => RunLifecycle(id, () => WriteConfigurationCore(id, content));
 
-    public void WriteStorageAndRestart(string id, string content)
-        => RunLifecycle(id, () => { WriteStorageCore(id, content); RestartCore(id); });
+    public void WriteConfigurationAndRestart(string id, string content)
+        => RunLifecycle(id, () => { WriteConfigurationCore(id, content); RestartCore(id); });
 
-    private void WriteStorageCore(string id, string content)
+    private void WriteConfigurationCore(string id, string content)
     {
         ArgumentNullException.ThrowIfNull(content);
         var plugin = GetPlugin(id);
@@ -198,7 +198,7 @@ public sealed class PluginManager : IDisposable
         var submitted = JsonNode.Parse(content) as JsonObject
             ?? throw new InvalidOperationException("插件配置格式无效，请重新打开配置");
         var configuration = PluginSettingsSchema.ApplyDefaults(definition, submitted);
-        PluginSettingsSchema.ValidateStorage(definition, configuration.ToJsonString());
+        PluginSettingsSchema.ValidateConfiguration(definition, configuration.ToJsonString());
         configurationStore.Update(Path.Combine(plugin.DataDirectory, "config.json"),
             _ => configuration);
     }
@@ -277,8 +277,6 @@ public sealed class PluginManager : IDisposable
     }
 
     public PluginFeatureExecutionResult ExecuteFeature(string id, string featureId) => InvokeFeature(id, featureId);
-
-    public string OpenPageFeature(string id, string featureId) => OpenPageFeatureSession(id, featureId).Id;
 
     public PluginPageFeatureSession OpenPageFeatureSession(string id, string featureId)
         => RunLifecycle(id, () => OpenPageFeatureSessionCore(id, featureId));
@@ -411,12 +409,7 @@ public sealed class PluginManager : IDisposable
         public void Dispose() => Interlocked.Exchange(ref disposeAction, null)?.Invoke();
     }
 
-    public void Load(string id)
-    {
-        RunLifecycle(id, () => LoadCore(id));
-    }
-
-    private void LoadCore(string id)
+    private void MarkLoaded(string id)
     {
         var plugin = GetPlugin(id);
         if (plugin.State == PluginState.Invalid) throw new InvalidOperationException("无效插件不能加载");
@@ -457,7 +450,7 @@ public sealed class PluginManager : IDisposable
                 plugin = plugin with { Enabled = true };
                 UpdatePlugin(plugin);
             }
-            LoadCore(id);
+            MarkLoaded(id);
             plugin = GetPlugin(id);
             instance = runtime.Start(plugin);
             if (instance is IPluginRuntimeStatus status) status.StateChanged += json => PublishState(plugin.Id, json);
@@ -504,39 +497,39 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public void Reload()
+    public void Scan()
     {
         lock (lifecycleGate)
         {
-            pendingReloads++;
+            pendingScans++;
             try
             {
-                while (reloading || activeLifecycles.Count > 0)
+                while (scanning || activeLifecycles.Count > 0)
                 {
                     ObjectDisposedException.ThrowIf(disposed, this);
                     Monitor.Wait(lifecycleGate);
                 }
                 ObjectDisposedException.ThrowIf(disposed, this);
-                reloading = true;
+                scanning = true;
             }
             finally
             {
-                pendingReloads--;
+                pendingScans--;
                 NotifyLifecycleWaiters();
             }
         }
-        try { ReloadCore(); }
+        try { ScanCore(); }
         finally
         {
             lock (lifecycleGate)
             {
-                reloading = false;
+                scanning = false;
                 NotifyLifecycleWaiters();
             }
         }
     }
 
-    private void ReloadCore()
+    private void ScanCore()
     {
         try
         {
@@ -797,7 +790,7 @@ public sealed class PluginManager : IDisposable
     {
         lock (lifecycleGate)
         {
-            while (reloading || pendingReloads > 0 || activeLifecycles.Contains(id))
+            while (scanning || pendingScans > 0 || activeLifecycles.Contains(id))
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
                 Monitor.Wait(lifecycleGate);
@@ -856,7 +849,7 @@ public sealed class PluginManager : IDisposable
             if (disposed) return;
             disposed = true;
             NotifyLifecycleWaiters();
-            while (reloading || activeLifecycles.Count > 0) Monitor.Wait(lifecycleGate);
+            while (scanning || activeLifecycles.Count > 0) Monitor.Wait(lifecycleGate);
         }
         StopAll();
     }

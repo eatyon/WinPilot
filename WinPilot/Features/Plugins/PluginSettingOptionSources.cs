@@ -19,14 +19,14 @@ public static class PluginSettingOptionSources
         _ => throw new InvalidOperationException($"不支持的配置选项来源：{source}")
     };
 
-    public static string WithSelectedOptions(string definitionJson, string? storageJson, JsonSerializerOptions? options = null)
+    public static string WithSelectedOptions(string definitionJson, string? configurationJson, JsonSerializerOptions? options = null)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray ?? throw new InvalidOperationException("settings.json 必须是数组");
-        var storage = string.IsNullOrWhiteSpace(storageJson) ? null : JsonNode.Parse(storageJson) as JsonObject;
+        var configuration = string.IsNullOrWhiteSpace(configurationJson) ? null : JsonNode.Parse(configurationJson) as JsonObject;
         foreach (var item in definition.OfType<JsonObject>())
         {
             if (item["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name)) continue;
-            HydrateField(item, [storage?[name]]);
+            HydrateField(item, [configuration?[name]]);
         }
         return definition.ToJsonString(options);
     }

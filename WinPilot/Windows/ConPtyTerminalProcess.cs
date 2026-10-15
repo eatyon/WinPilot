@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace WinPilot.Features.Terminal;
+namespace WinPilot.Windows;
 
 internal sealed class ConPtyTerminalProcess : IAsyncDisposable
 {

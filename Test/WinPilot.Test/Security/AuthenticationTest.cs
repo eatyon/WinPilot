@@ -160,28 +160,6 @@ public sealed class AuthenticationTest
     }
 
     [Fact]
-    public void LanBinding_FollowsUserSettingRegardlessOfPasswordState()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));
-        try
-        {
-            var settings = new WinPilotSettings { LanAccessEnabled = true };
-            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
-
-            var paths = PortableDataPaths.Create(root);
-            Directory.CreateDirectory(paths.DataDirectory);
-            File.WriteAllText(paths.AuthenticationFile, "not valid json");
-            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
-
-            var store = new AuthStore(paths);
-            store.SetInitialPassword("a secure passphrase");
-            Assert.True(WebAccessPolicy.CanListenOnLan(settings));
-            Assert.False(WebAccessPolicy.CanListenOnLan(new WinPilotSettings { LanAccessEnabled = false }));
-        }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
-    }
-
-    [Fact]
     public void AuthStore_RejectsLegacyOrUnexpectedFields()
     {
         var root = Path.Combine(Path.GetTempPath(), "WinPilot.Auth.Test", Guid.NewGuid().ToString("N"));

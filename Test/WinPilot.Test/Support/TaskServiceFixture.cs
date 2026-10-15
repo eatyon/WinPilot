@@ -1,3 +1,4 @@
+using WinPilot.Windows;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
 using WinPilot.Core.Desktop;
@@ -20,12 +21,15 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal PortableDataPaths Paths => paths;
     private readonly TerminalSessionManager terminals = new(NullLogger<TerminalSessionManager>.Instance);
     private readonly WindowsProcessEventListener processEvents = new(NullLogger<WindowsProcessEventListener>.Instance);
+    internal TerminalSessionManager Terminals => terminals;
+    private readonly Keyboard keyboard = new();
+    internal IReadOnlyList<KeyboardKey>? SentKeys => keyboard.Keys;
     internal ProgramManager Programs { get; } = new();
     internal WinPilot.Features.Plugins.PluginTaskExtensionRegistry Extensions { get; } = new(new(), new(), new());
     internal TaskLogger Logger { get; } = new();
     internal TaskService Tasks { get; }
     internal TaskServiceFixture(INotificationService? notifications = null) => Tasks = new(paths, Programs, new ProgramTagService(paths),
-        new KeyboardInputService(new Keyboard()), terminals, new DesktopScreenshotService(new Screenshot()),
+        new KeyboardInputService(keyboard), terminals, new DesktopScreenshotService(new Screenshot()),
         notifications ?? new Notifications(), processEvents, Logger, Extensions);
     internal void Create(string name, bool enabled = true, bool delay = false) => Tasks.Create(new(name, enabled,
         new(TaskTriggerType.WinPilotStartup), delay
@@ -44,6 +48,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal sealed class ProgramManager : IProgramManager
     {
         internal int Launches;
+        internal System.Collections.Concurrent.ConcurrentQueue<ProgramLaunchRequest> Requests { get; } = new();
         internal bool FailFirst;
         internal TaskCompletionSource Launched { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal IReadOnlyList<RunningProgram> RunningPrograms { get; set; } = [];
@@ -51,6 +56,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         internal TaskCompletionSource<(IReadOnlyList<int> Ids, bool Force)> Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Launch(ProgramLaunchRequest request)
         {
+            Requests.Enqueue(request);
             var count = Interlocked.Increment(ref Launches);
             if (FailFirst && count == 1) throw new FileNotFoundException();
             Launched.TrySetResult();
@@ -64,10 +70,15 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         public ProgramUsage GetUsage(IReadOnlyList<int> ids, CancellationToken token) => throw new NotSupportedException();
         public void Close(IReadOnlyList<int> ids, bool force) => Closed.TrySetResult((ids, force));
     }
-    private sealed class Keyboard : IKeyboardInputSimulator { public void Send(IReadOnlyList<KeyboardKey> keys) { } }
+    private sealed class Keyboard : IKeyboardInputSimulator
+    {
+        internal IReadOnlyList<KeyboardKey>? Keys { get; private set; }
+        public void Send(IReadOnlyList<KeyboardKey> keys) => Keys = keys.ToArray();
+    }
     internal sealed class TaskLogger : Microsoft.Extensions.Logging.ILogger<TaskService>
     {
         internal System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
+        internal System.Collections.Concurrent.ConcurrentQueue<Exception> Exceptions { get; } = new();
         internal volatile bool ActionCancelled;
         internal TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -76,6 +87,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
             TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             Messages.Enqueue(formatter(state, exception));
+            if (exception is not null) Exceptions.Enqueue(exception);
             if (ActionCancelled) Cancelled.TrySetResult();
         }
     }

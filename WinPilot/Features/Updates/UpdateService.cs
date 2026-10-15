@@ -5,7 +5,7 @@ using WinPilot.Core;
 
 namespace WinPilot.Features.Updates;
 
-public sealed class UpdateCheckService : IDisposable
+public sealed class UpdateService : IDisposable
 {
     private readonly HttpClient httpClient;
     private readonly UpdateReleaseCatalog releases;
@@ -19,12 +19,12 @@ public sealed class UpdateCheckService : IDisposable
     private readonly object installStatusGate = new();
     private UpdateInstallStatus installStatus = new("Idle", 0, null, "");
     private int installRunning;
-    private readonly ILogger<UpdateCheckService> logger;
+    private readonly ILogger<UpdateService> logger;
 
-    public UpdateCheckService(ILogger<UpdateCheckService> logger, PortableDataPaths paths)
+    public UpdateService(ILogger<UpdateService> logger, PortableDataPaths paths)
         : this(logger, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, paths.ConfigurationFile) { }
 
-    internal UpdateCheckService(ILogger<UpdateCheckService> logger, HttpClient httpClient, string? configurationFile = null, string? currentVersion = null)
+    internal UpdateService(ILogger<UpdateService> logger, HttpClient httpClient, string? configurationFile = null, string? currentVersion = null)
     {
         this.logger = logger;
         this.httpClient = httpClient;

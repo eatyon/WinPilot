@@ -6,7 +6,7 @@ using WinPilot.Features.Updates;
 
 namespace WinPilot.Test;
 
-public sealed class UpdateCheckServiceTest
+public sealed class UpdateServiceTest
 {
     [Theory]
     [InlineData(-1, true, true, false, false)]
@@ -139,8 +139,8 @@ public sealed class UpdateCheckServiceTest
         Assert.Equal(2, calls);
     }
 
-    private static UpdateCheckService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
-        => new(NullLogger<UpdateCheckService>.Instance, new HttpClient(new Handler(send)), currentVersion: "1.0.0");
+    private static UpdateService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
+        => new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), currentVersion: "1.0.0");
 
     private static HttpResponseMessage Release(string tag, bool package, bool digest)
     {

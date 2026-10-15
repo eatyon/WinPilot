@@ -297,8 +297,8 @@ public sealed class UpdateSourceTest
         Assert.Equal(UpdateSource.Cnb, service.GetSettings().Source);
     }
 
-    private static UpdateCheckService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send, string? file = null, string currentVersion = "1.0.0")
-        => new(NullLogger<UpdateCheckService>.Instance, new HttpClient(new Handler(send)), file, currentVersion);
+    private static UpdateService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send, string? file = null, string currentVersion = "1.0.0")
+        => new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), file, currentVersion);
 
     private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(body)) };
 

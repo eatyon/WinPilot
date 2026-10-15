@@ -84,7 +84,7 @@ public static class PluginSettingsSchema
         }
     }
 
-    public static void ValidateStorage(string definitionJson, string contentJson)
+    public static void ValidateConfiguration(string definitionJson, string contentJson)
     {
         using var definition = JsonDocument.Parse(definitionJson); using var content = JsonDocument.Parse(contentJson);
         if (content.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidOperationException("插件配置格式无效，请重新打开配置");

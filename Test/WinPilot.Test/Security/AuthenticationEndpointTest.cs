@@ -52,7 +52,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         builder.Services.AddSingleton<TerminalSessionManager>();
         builder.Services.AddSingleton<PluginPageSessionManager>();
         builder.Services.AddSingleton<SafeModeService>();
-        builder.Services.AddSingleton<UpdateCheckService>();
+        builder.Services.AddSingleton<UpdateService>();
         app = builder.Build();
         app.Use(async (context, next) =>
         {

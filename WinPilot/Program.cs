@@ -60,7 +60,7 @@ internal static class Program
         builder.Logging.AddProvider(fileLoggerProvider);
         builder.Logging.SetMinimumLevel(LogLevel.Debug);
         builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
-        var listenHost = WebAccessPolicy.CanListenOnLan(settings) ? "0.0.0.0" : "127.0.0.1";
+        var listenHost = settings.LanAccessEnabled ? "0.0.0.0" : "127.0.0.1";
         builder.WebHost.UseUrls($"http://{listenHost}:{settings.Port}");
         builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         builder.Services.AddResponseCompression(options =>
@@ -117,7 +117,7 @@ internal static class Program
         builder.Services.AddSingleton<SecurityEventNotifier>();
         builder.Services.AddSingleton<SafeModeService>();
         builder.Services.AddSingleton<WebFacadeService>();
-        builder.Services.AddSingleton<UpdateCheckService>();
+        builder.Services.AddSingleton<UpdateService>();
 
         var app = builder.Build();
         var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
@@ -186,7 +186,7 @@ internal static class Program
             _ = app.Services.GetRequiredService<PluginManager>();
             app.Services.GetRequiredService<TaskService>().NotifyPluginsLoaded();
             if (args.Length == 1 && args[0] == "--update-completed")
-                loggerFactory.CreateLogger<UpdateCheckService>().LogInformation("更新完成，版本：{Version}", WinPilotVersion.DisplayVersion);
+                loggerFactory.CreateLogger<UpdateService>().LogInformation("更新完成，版本：{Version}", WinPilotVersion.DisplayVersion);
             Application.Run(trayContext);
         }
         catch (Exception exception) when (IsAddressAlreadyInUse(exception))

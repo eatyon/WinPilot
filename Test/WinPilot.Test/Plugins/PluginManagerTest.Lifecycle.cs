@@ -70,7 +70,7 @@ public sealed partial class PluginManagerTest
                 Assert.Contains(failed.Errors, error => error.Contains("需要 WinPilot 999.0.0 或更高版本"));
             Assert.False(Directory.Exists(Path.Combine(paths.PluginDataDirectory, "other")));
             WritePlugin(paths, "example", "example", "");
-            manager.Reload();
+            manager.Scan();
             manager.Enable("example");
             Assert.Equal(["example"], runtime.StartedIds);
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
@@ -81,7 +81,7 @@ public sealed partial class PluginManagerTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Reload_RefreshesInactivePluginMetadataWithoutStartingIt(bool enabled)
+    public void Scan_RefreshesInactivePluginMetadataWithoutStartingIt(bool enabled)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -102,7 +102,7 @@ public sealed partial class PluginManagerTest
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
 
-            manager.Reload();
+            manager.Scan();
 
             var refreshed = Assert.Single(manager.GetPlugins());
             Assert.Equal(original.Directory, refreshed.Directory);
@@ -114,7 +114,7 @@ public sealed partial class PluginManagerTest
             Assert.Empty(runtime.DisposedIds);
 
             File.WriteAllText(Path.Combine(original.Directory, "features.json"), "invalid");
-            manager.Reload();
+            manager.Scan();
             Assert.Empty(manager.GetPlugins());
             Assert.Empty(runtime.StartedIds);
         }
@@ -122,7 +122,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void Reload_OnlyStartsNewEnabledPluginsAndStopsRemovedPlugins()
+    public void Scan_OnlyStartsNewEnabledPluginsAndStopsRemovedPlugins()
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -141,7 +141,7 @@ public sealed partial class PluginManagerTest
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
 
-            manager.Reload();
+            manager.Scan();
 
             Assert.Same(existing, manager.GetPlugin("existing"));
             Assert.Equal(["new"], runtime.StartedIds);
@@ -155,7 +155,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void Reload_KeepsOriginalForDuplicateIdAndReplacesItAfterDirectoryRemoval()
+    public void Scan_KeepsOriginalForDuplicateIdAndReplacesItAfterDirectoryRemoval()
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -169,14 +169,14 @@ public sealed partial class PluginManagerTest
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
 
-            manager.Reload();
+            manager.Scan();
 
             Assert.Same(original, Assert.Single(manager.GetPlugins()));
             Assert.Empty(runtime.StartedIds);
             Assert.Empty(runtime.DisposedIds);
             Directory.Delete(original.Directory, true);
 
-            manager.Reload();
+            manager.Scan();
 
             Assert.Equal("replacement", Assert.Single(manager.GetPlugins()).DirectoryName);
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
@@ -189,7 +189,7 @@ public sealed partial class PluginManagerTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Reload_InvalidDuplicateCannotDisableOriginalPlugin(bool running)
+    public void Scan_InvalidDuplicateCannotDisableOriginalPlugin(bool running)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -204,7 +204,7 @@ public sealed partial class PluginManagerTest
                 { "id": "example", "name": "重复插件", "version": "1.0.0", "main": "plugin.dll", "winpilot_version": "999.0.0" }
                 """);
 
-            manager.Reload();
+            manager.Scan();
 
             var plugin = Assert.Single(manager.GetPlugins());
             Assert.Equal("original", plugin.DirectoryName);
@@ -218,7 +218,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void Reload_ScanFailurePreservesCurrentInstancesAndList()
+    public void Scan_ScanFailurePreservesCurrentInstancesAndList()
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -234,7 +234,7 @@ public sealed partial class PluginManagerTest
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
 
-            manager.Reload();
+            manager.Scan();
 
             Assert.Same(plugin, Assert.Single(manager.GetPlugins()));
             Assert.Empty(runtime.StartedIds);
@@ -372,7 +372,7 @@ public sealed partial class PluginManagerTest
 
             foreach (var reload in new[] { false, true })
             {
-                if (reload) manager.Reload();
+                if (reload) manager.Scan();
                 Assert.Equal(PluginState.Running, manager.GetPlugin("healthy").State);
                 Assert.Equal(["healthy"], runtime.StartedIds);
                 if (failure == "declaration") Assert.Single(manager.GetPlugins());
@@ -475,7 +475,7 @@ public sealed partial class PluginManagerTest
             foreach (var (id, content) in settings)
                 Assert.Equal(content, File.ReadAllText(Path.Combine(paths.PluginDataDirectory, id, "plugin.json")));
             Assert.Throws<ObjectDisposedException>(() => manager.Start("first"));
-            Assert.Throws<ObjectDisposedException>(() => manager.Reload());
+            Assert.Throws<ObjectDisposedException>(() => manager.Scan());
         }
         finally { TryDeleteDirectory(directory); }
     }
@@ -508,7 +508,7 @@ public sealed partial class PluginManagerTest
                 Directory.Move(directory, directory + "-moved");
             }
             runtime.BlockStart = true;
-            operation = Task.Run(() => { if (reload) manager.Reload(); else manager.Enable("example"); });
+            operation = Task.Run(() => { if (reload) manager.Scan(); else manager.Enable("example"); });
             await runtime.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(PluginState.Loaded, manager.GetPlugin("example").State);
@@ -587,7 +587,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void Reload_DiscoversOnlyValidPlugins()
+    public void Scan_DiscoversOnlyValidPlugins()
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -738,7 +738,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void WriteStorageAndRestart_RestartsOnlyTheEnabledTargetPlugin()
+    public void WriteConfigurationAndRestart_RestartsOnlyTheEnabledTargetPlugin()
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -751,7 +751,7 @@ public sealed partial class PluginManagerTest
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
 
-            manager.WriteStorage("plugin-a", "{}");
+            manager.WriteConfiguration("plugin-a", "{}");
             manager.Restart("plugin-a");
 
             Assert.Equal(["plugin-a"], runtime.DisposedIds);
@@ -761,7 +761,7 @@ public sealed partial class PluginManagerTest
             manager.Disable("plugin-a");
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
-            manager.WriteStorage("plugin-a", "{}");
+            manager.WriteConfiguration("plugin-a", "{}");
             manager.Restart("plugin-a");
 
             Assert.Empty(runtime.DisposedIds);
@@ -777,7 +777,7 @@ public sealed partial class PluginManagerTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Reload_DisablesIncompatiblePluginAndRejectsToggle(bool enabled)
+    public void Scan_DisablesIncompatiblePluginAndRejectsToggle(bool enabled)
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -811,14 +811,14 @@ public sealed partial class PluginManagerTest
             Assert.Contains("需要 WinPilot 999.0.0 或更高版本", plugin.Errors);
             using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "plugin.json")))) Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
 
-            manager.Reload();
+            manager.Scan();
             plugin = Assert.Single(manager.GetPlugins());
             Assert.False(plugin.Enabled);
             Assert.Equal(PluginState.Invalid, plugin.State);
             Assert.Empty(runtime.StartedIds);
 
             File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\" }");
-            manager.Reload();
+            manager.Scan();
             Assert.Equal(PluginState.Disabled, manager.GetPlugin("future-plugin").State);
             Assert.True(manager.GetPlugin("future-plugin").CanChangeEnabled);
             manager.Enable("future-plugin");
@@ -857,7 +857,7 @@ public sealed partial class PluginManagerTest
     [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"plugin.dll\",\"winpilot_version\":\"999.0.0\"}", "需要 WinPilot 999.0.0 或更高版本")]
     [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"missing.dll\"}", "main 必须是插件目录内存在的 DLL 文件")]
     [InlineData("{", "manifest.json 不是有效 JSON")]
-    public void Reload_PreservesRunningPluginAndRestartDisablesItOnValidationFailure(string manifest, string errorMessage)
+    public void Scan_PreservesRunningPluginAndRestartDisablesItOnValidationFailure(string manifest, string errorMessage)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -869,7 +869,7 @@ public sealed partial class PluginManagerTest
             using var manager = CreatePluginManager(paths, runtime, logger);
             File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"), manifest);
 
-            manager.Reload();
+            manager.Scan();
 
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
             Assert.True(manager.GetPlugin("example").Enabled);
@@ -910,7 +910,7 @@ public sealed partial class PluginManagerTest
 
             second.Dispose();
             Assert.Equal([0, 1, 2, 1], runtime.Instances.Single().Counts);
-            manager.Reload();
+            manager.Scan();
             Assert.Single(runtime.Instances);
             Assert.Equal([0, 1, 2, 1], runtime.Instances.Single().Counts);
             first.Dispose();

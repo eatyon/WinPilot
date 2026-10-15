@@ -1,3 +1,4 @@
+using WinPilot.Windows;
 using System.Collections.Concurrent;
 
 namespace WinPilot.Features.Terminal;

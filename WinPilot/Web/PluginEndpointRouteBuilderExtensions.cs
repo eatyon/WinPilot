@@ -23,9 +23,9 @@ public static class PluginEndpointRouteBuilderExtensions
         endpoints.MapPost("/api/plugins/{id}/enable", (string id, PluginManager plugins) => Execute(() => { plugins.Enable(id); return Results.Ok(plugins.GetPlugin(id)); }));
         endpoints.MapPost("/api/plugins/{id}/disable", (string id, PluginManager plugins) => Execute(() => { plugins.Disable(id); return Results.Ok(plugins.GetPlugin(id)); }));
         endpoints.MapDelete("/api/plugins/{id}", (string id, bool deleteData, PluginManager plugins) => Execute(() => { plugins.Delete(id, deleteData); return Results.NoContent(); }));
-        endpoints.MapPost("/api/plugins/scan", (PluginManager plugins) => { plugins.Reload(); return Results.Ok(plugins.GetPlugins()); });
+        endpoints.MapPost("/api/plugins/scan", (PluginManager plugins) => { plugins.Scan(); return Results.Ok(plugins.GetPlugins()); });
         endpoints.MapGet("/api/plugins/{id}/configuration", (string id, PluginManager plugins, HttpContext context) => Execute(() => ReadConfiguration(id, plugins, context, false)));
-        endpoints.MapPut("/api/plugins/{id}/configuration", (string id, System.Text.Json.JsonElement content, PluginManager plugins) => Execute(() => { plugins.WriteStorageAndRestart(id, content.GetRawText()); return Results.Ok(content); }));
+        endpoints.MapPut("/api/plugins/{id}/configuration", (string id, System.Text.Json.JsonElement content, PluginManager plugins) => Execute(() => { plugins.WriteConfigurationAndRestart(id, content.GetRawText()); return Results.Ok(content); }));
         endpoints.MapGet("/api/plugins/{id}/status", (string id, PluginManager plugins) => Execute(() => Results.Content(plugins.GetStatus(id) ?? "{}", "application/json")));
         endpoints.MapGet("/api/plugins/{id}/settings/display/status", (string id, PluginManager plugins) => Execute(() => Results.Ok(plugins.GetStatusDisplaySettings(id))));
         endpoints.MapPut("/api/plugins/{id}/settings/display/status", (string id, PluginManager.PluginStatusDisplaySettings settings, PluginManager plugins) => Execute(() => Results.Ok(plugins.WriteStatusDisplaySettings(id, settings))));
@@ -119,14 +119,14 @@ public static class PluginEndpointRouteBuilderExtensions
     private static IResult ReadConfiguration(string id, PluginManager plugins, HttpContext context, bool readDefinition)
     {
         context.Response.Headers.CacheControl = "no-store";
-        var storage = plugins.ReadStorage(id);
+        var configuration = plugins.ReadConfiguration(id);
         var safeMode = context.RequestServices.GetRequiredService<WinPilot.Features.Security.SafeModeService>().Enabled;
-        if (!readDefinition && !safeMode) return Results.Content(storage, "application/json");
+        if (!readDefinition && !safeMode) return Results.Content(configuration, "application/json");
         var definition = plugins.ReadSettingsDefinition(id);
         if (safeMode)
-            (definition, storage) = PluginConfigurationResponse.MaskSensitiveValues(definition, storage);
+            (definition, configuration) = PluginConfigurationResponse.MaskSensitiveValues(definition, configuration);
         return Results.Content(readDefinition
-            ? PluginSettingOptionSources.WithSelectedOptions(definition, storage, safeMode ? PluginConfigurationResponse.JsonOptions : null) : storage, "application/json");
+            ? PluginSettingOptionSources.WithSelectedOptions(definition, configuration, safeMode ? PluginConfigurationResponse.JsonOptions : null) : configuration, "application/json");
     }
 
     private static IResult ServePluginAsset(HttpContext context, string id, string? path, PluginWebResourceService resources, string? version = null)

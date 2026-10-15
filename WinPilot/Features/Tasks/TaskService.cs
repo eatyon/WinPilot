@@ -1,3 +1,4 @@
+using WinPilot.Windows;
 using System.Diagnostics;
 using System.Security.Principal;
 using System.Text.Encodings.Web;
@@ -413,30 +414,31 @@ public sealed class TaskService : BackgroundService
         var textTemplate = contentImageNames.Length == 0 ? contentTemplate : RemoveVariableLine(contentTemplate, contentImageNames[0]);
         var content = ResolveNotificationContent(textTemplate, resolvedContext);
         var imageTemplate = directImagePath ?? (contentImageNames.Length == 1 ? contentImageNames[0] : null);
-        var (imagePath, temporaryImagePath) = pluginImage is null ? await ResolveNotificationImageAsync(imageTemplate, resolvedContext) : await ResolvePluginImageAsync(pluginImage, context.CancellationToken);
-        try
-        {
-            await SendNotification(new(action.NotificationTitle ?? "WinPilot 通知", content, imagePath), channel, context.CancellationToken, !string.IsNullOrWhiteSpace(channel));
-            if (temporaryImagePath is not null)
-                await Task.Delay(TimeSpan.FromSeconds(2), context.CancellationToken);
-        }
-        finally
-        {
-            if (temporaryImagePath is not null)
-                try
-                {
-                    File.Delete(temporaryImagePath);
-                }
-                catch
-                {
-                }
-        }
+        var (imagePath, image) = pluginImage is null ? ResolveNotificationImageSource(imageTemplate, resolvedContext) : (null, pluginImage);
+        if (pluginImage is not null)
+            PluginNotificationImageValidator.ValidateImageSize(pluginImage);
+        await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, imagePath),
+            context.CancellationToken, channel: channel, ignoreChannelEnabled: !string.IsNullOrWhiteSpace(channel),
+            imageContent: image?.Content, imageContentType: image?.ContentType);
     }
 
-    private static async Task<(string? ImagePath, string? TemporaryImagePath)> ResolvePluginImageAsync(PluginImageContent image, CancellationToken token)
+    private static (string? ImagePath, PluginImageContent? Image) ResolveNotificationImageSource(string? template, PluginTaskRunContext context)
     {
-        var path = await PluginNotificationDelivery.WriteImageAsync(image, token);
-        return (path, path);
+        if (string.IsNullOrWhiteSpace(template))
+            return (null, null);
+        var names = VariableResolver.ExtractNames(template);
+        if (names.Count == 1 && template.Trim().Equals(names[0], StringComparison.OrdinalIgnoreCase) && context.Variables.TryGetValue(names[0], out var value) && value is PluginImageContent image)
+            return image.Content.Length == 0 ? (null, null) : (null, image);
+
+        if (names.Count == 1 && template.Trim().Equals(names[0], StringComparison.OrdinalIgnoreCase) && IsImageVariableReference(names[0]))
+            throw new InvalidOperationException($"图片变量 {names[0]} 不可用");
+        if (names.Any(name => context.Variables.TryGetValue(name, out var value) && value is PluginImageContent))
+            throw new InvalidOperationException("图片变量必须单独填写，不能与其他文字组合");
+        var pathValue = VariableResolver.Resolve(template, context).Trim();
+        if (string.IsNullOrWhiteSpace(pathValue))
+            return (null, null);
+        ValidateImagePath(pathValue);
+        return (pathValue, null);
     }
 
     internal static async Task<(string? ImagePath, string? TemporaryImagePath)> ResolveNotificationImageAsync(string? template, PluginTaskRunContext context)
@@ -556,13 +558,6 @@ public sealed class TaskService : BackgroundService
             Variables = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(variables)
         };
         return VariableResolver.Resolve(template, notificationContext);
-    }
-
-    private async Task SendNotification(NotificationMessage message, string? channel, CancellationToken token, bool ignoreEnabled)
-    {
-        if (string.IsNullOrWhiteSpace(message.Content) && string.IsNullOrWhiteSpace(message.ImagePath))
-            throw new InvalidOperationException("请输入通知内容或通知图片");
-        ValidateNotificationResults(await notifications.SendAsync(message, token, channel, ignoreEnabled));
     }
 
     internal static void ValidateNotificationResults(IReadOnlyList<NotificationChannelResult> results)
@@ -902,37 +897,17 @@ public sealed class TaskService : BackgroundService
     private async Task ExecuteHostStep(PluginHostActionStep step, IReadOnlyDictionary<string, object?> extensionParameters, PluginTaskRunContext context)
     {
         var values = step.Parameters.ToDictionary(pair => pair.Key, pair => ResolvePlanValue(pair.Value, extensionParameters));
+        var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null, includeNotificationTitle: true);
         if (step.Type == PluginHostActionType.SendNotification)
         {
-            var channel = GetString(values, "channel");
-            var image = values.TryGetValue("image", out var imageValue) ? imageValue as PluginImageContent : null;
-            if (values.TryGetValue("image", out imageValue) && imageValue is not null && image is null)
-                throw new InvalidOperationException("image 必须是 PluginImageContent");
-            var notification = new TaskAction(TaskActionType.SendNotification, NotificationTitle: GetString(values, "title") ?? "", NotificationContent: GetString(values, "content") ?? "", NotificationChannel: channel);
-            await SendConfiguredNotification(notification, context, image);
+            await SendConfiguredNotification(action, context, image);
             return;
         }
 
-        var action = step.Type switch
-        {
-            PluginHostActionType.StartProgram => new TaskAction(TaskActionType.StartProgram, ProgramPath: GetString(values, "programPath"), Arguments: GetString(values, "arguments"), WorkingDirectory: GetString(values, "workingDirectory"), RunElevated: GetBool(values, "runElevated"), Silent: GetBool(values, "silent")),
-            PluginHostActionType.Delay => new TaskAction(TaskActionType.Delay, DelaySeconds: GetInt(values, "delaySeconds")),
-            PluginHostActionType.Keyboard => new TaskAction(TaskActionType.Keyboard, Keys: GetStrings(values, "keys")),
-            PluginHostActionType.Shell => new TaskAction(TaskActionType.Shell, Shell: GetString(values, "shell"), Command: GetString(values, "command")),
-            _ => throw new InvalidOperationException("Host Action 类型不支持")
-        };
         await Execute(action, context);
     }
 
     private static object? ResolvePlanValue(object? value, IReadOnlyDictionary<string, object?> parameters) => value is string text && text.StartsWith("$param.", StringComparison.Ordinal) && parameters.TryGetValue(text[7..], out var resolved) ? resolved : value;
-
-    private static string? GetString(IReadOnlyDictionary<string, object?> values, string key) => values.TryGetValue(key, out var value) ? Convert.ToString(value) : null;
-
-    private static bool GetBool(IReadOnlyDictionary<string, object?> values, string key) => values.TryGetValue(key, out var value) && Convert.ToBoolean(value);
-
-    private static int GetInt(IReadOnlyDictionary<string, object?> values, string key) => values.TryGetValue(key, out var value) ? Convert.ToInt32(value) : 0;
-
-    private static IReadOnlyList<string> GetStrings(IReadOnlyDictionary<string, object?> values, string key) => values.TryGetValue(key, out var value) && value is IEnumerable<string> strings ? strings.ToArray() : [];
 
     private static void ValidateActionParameters(IReadOnlyList<PluginActionParameterDefinition> schema, IReadOnlyDictionary<string, object?> values)
     {

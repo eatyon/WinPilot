@@ -47,7 +47,7 @@ public sealed class PluginLifecycleConcurrencyTest
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            other = Task.Run(() => { if (reload) manager.Reload(); else manager.Start("second"); });
+            other = Task.Run(() => { if (reload) manager.Scan(); else manager.Start("second"); });
             if (reload)
             {
                 await Task.Delay(100);
@@ -97,7 +97,7 @@ public sealed class PluginLifecycleConcurrencyTest
                     case 0: manager.Enable("test"); break;
                     case 1: manager.Disable("test"); break;
                     case 2: manager.Restart("test"); break;
-                    case 3: manager.Reload(); break;
+                    case 3: manager.Scan(); break;
                     default: manager.Stop("test"); break;
                 }
             }));

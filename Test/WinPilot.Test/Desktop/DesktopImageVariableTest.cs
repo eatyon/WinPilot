@@ -1,3 +1,4 @@
+using WinPilot.Windows;
 using WinPilot.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core.Desktop;

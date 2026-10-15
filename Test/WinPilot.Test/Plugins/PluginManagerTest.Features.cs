@@ -39,7 +39,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public async Task ReloadPreservesExistingPageSessionsAndClosesRemovedPluginSessions()
+    public async Task ScanPreservesExistingPageSessionsAndClosesRemovedPluginSessions()
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -76,11 +76,11 @@ public sealed partial class PluginManagerTest
                 Assert.Equal("page.js", pageSession.Feature.GetProperty("entry").GetString());
                 Assert.Equal("reply", await manager.SendPageMessageAsync(id, "request", CancellationToken.None));
 
-                manager.Reload();
+                manager.Scan();
 
                 Assert.Equal("reply", await manager.SendPageMessageAsync(id, "request", CancellationToken.None));
                 Directory.Delete(directory, true);
-                manager.Reload();
+                manager.Scan();
                 await Assert.ThrowsAsync<KeyNotFoundException>(() => manager.SendPageMessageAsync(id, "request", CancellationToken.None));
             }
         }
@@ -125,7 +125,7 @@ public sealed partial class PluginManagerTest
     }
 
     [Fact]
-    public void Reload_AllowsMultiplePageFeaturesWithoutManifestWebDeclaration()
+    public void Scan_AllowsMultiplePageFeaturesWithoutManifestWebDeclaration()
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try

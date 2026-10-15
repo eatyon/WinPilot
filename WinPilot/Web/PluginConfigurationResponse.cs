@@ -8,28 +8,28 @@ public static class PluginConfigurationResponse
 {
     internal static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    public static (string Definition, string Storage) MaskSensitiveValues(string definitionJson, string storageJson)
+    public static (string Definition, string Configuration) MaskSensitiveValues(string definitionJson, string configurationJson)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray
             ?? throw new InvalidOperationException("settings.json 必须是数组");
-        var storage = JsonNode.Parse(storageJson) as JsonObject
+        var configuration = JsonNode.Parse(configurationJson) as JsonObject
             ?? throw new InvalidOperationException("插件配置格式无效");
         foreach (var setting in definition.OfType<JsonObject>())
         {
             var name = setting["name"]!.GetValue<string>();
             if (setting["type"]?.GetValue<string>() != "collection")
-                MaskField(setting, [storage]);
+                MaskField(setting, [configuration]);
             else if (setting["mode"]?.GetValue<string>() == "fixed")
             {
-                var items = storage[name] as JsonObject;
+                var items = configuration[name] as JsonObject;
                 foreach (var item in ((JsonArray)setting["items"]!).OfType<JsonObject>())
                     MaskFields((JsonArray)item["fields"]!, [(items?[item["name"]!.GetValue<string>()] as JsonObject)]);
             }
             else
                 MaskFields((JsonArray)setting["item"]!["fields"]!,
-                    (storage[name] as JsonArray)?.OfType<JsonObject>().ToArray() ?? []);
+                    (configuration[name] as JsonArray)?.OfType<JsonObject>().ToArray() ?? []);
         }
-        return (definition.ToJsonString(JsonOptions), storage.ToJsonString(JsonOptions));
+        return (definition.ToJsonString(JsonOptions), configuration.ToJsonString(JsonOptions));
     }
 
     private static void MaskFields(JsonArray fields, JsonObject?[] values)

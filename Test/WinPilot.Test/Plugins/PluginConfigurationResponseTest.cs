@@ -16,11 +16,11 @@ public sealed class PluginConfigurationResponseTest
               {"name":"dynamic","type":"collection","mode":"dynamic","item":{"fields":[{"name":"password","type":"text","masked":true,"default":"password-default"},{"name":"user","type":"text"}]}}
             ]
             """;
-        const string storage = """
+        const string configuration = """
             {"secret":"private","plain":"visible","fixed":{"account":{"token":"private-token"}},"dynamic":[{"password":"private-password","user":"name","__winpilot":{"id":"1","remark":"account"}},{"user":"other"}]}
             """;
-        var result = PluginConfigurationResponse.MaskSensitiveValues(definition, storage);
-        var filtered = JsonNode.Parse(result.Storage)!;
+        var result = PluginConfigurationResponse.MaskSensitiveValues(definition, configuration);
+        var filtered = JsonNode.Parse(result.Configuration)!;
         Assert.Equal(new string('•', "private".Length), filtered["secret"]!.GetValue<string>());
         Assert.Equal("visible", filtered["plain"]!.GetValue<string>());
         Assert.Equal(new string('•', "private-token".Length), filtered["fixed"]!["account"]!["token"]!.GetValue<string>());
@@ -29,7 +29,7 @@ public sealed class PluginConfigurationResponseTest
         Assert.Equal("name", filtered["dynamic"]![0]!["user"]!.GetValue<string>());
         Assert.Equal("1", filtered["dynamic"]![0]!["__winpilot"]!["id"]!.GetValue<string>());
         Assert.Equal(2, filtered["dynamic"]!.AsArray().Count);
-        Assert.DoesNotContain("private", result.Storage);
+        Assert.DoesNotContain("private", result.Configuration);
         Assert.DoesNotContain("secret-default", result.Definition);
         Assert.DoesNotContain("token-default", result.Definition);
         Assert.DoesNotContain("password-default", result.Definition);
@@ -42,10 +42,10 @@ public sealed class PluginConfigurationResponseTest
     [InlineData("token-123")]
     public void MaskedValueRetainsItsLength(string secret)
     {
-        var storage = new JsonObject { ["secret"] = secret }.ToJsonString();
+        var configuration = new JsonObject { ["secret"] = secret }.ToJsonString();
         var result = PluginConfigurationResponse.MaskSensitiveValues(
-            """[{"name":"secret","type":"text","masked":true}]""", storage);
-        var masked = JsonNode.Parse(result.Storage)!["secret"]!.GetValue<string>();
+            """[{"name":"secret","type":"text","masked":true}]""", configuration);
+        var masked = JsonNode.Parse(result.Configuration)!["secret"]!.GetValue<string>();
         Assert.Equal(new string('•', secret.Length), masked);
     }
 
@@ -53,12 +53,12 @@ public sealed class PluginConfigurationResponseTest
     public void PreservesReadableUnicodeAndRequiredJsonEscapes()
     {
         const string definition = """[{"name":"secret","type":"text","masked":true,"label":"隐私项"},{"name":"plain","type":"text"}]""";
-        const string storage = """{"secret":"私密内容","plain":"中文\"路径\\目录\n下一行"}""";
-        var result = PluginConfigurationResponse.MaskSensitiveValues(definition, storage);
+        const string configuration = """{"secret":"私密内容","plain":"中文\"路径\\目录\n下一行"}""";
+        var result = PluginConfigurationResponse.MaskSensitiveValues(definition, configuration);
         Assert.Contains("隐私项", result.Definition);
-        Assert.Contains("••••", result.Storage);
-        Assert.Contains("中文\\\"路径\\\\目录\\n下一行", result.Storage);
-        Assert.Equal("中文\"路径\\目录\n下一行", JsonNode.Parse(result.Storage)!["plain"]!.GetValue<string>());
-        Assert.DoesNotContain("私密内容", result.Storage);
+        Assert.Contains("••••", result.Configuration);
+        Assert.Contains("中文\\\"路径\\\\目录\\n下一行", result.Configuration);
+        Assert.Equal("中文\"路径\\目录\n下一行", JsonNode.Parse(result.Configuration)!["plain"]!.GetValue<string>());
+        Assert.DoesNotContain("私密内容", result.Configuration);
     }
 }

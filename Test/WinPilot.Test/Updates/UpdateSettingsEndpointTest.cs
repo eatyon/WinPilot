@@ -28,7 +28,7 @@ public sealed class UpdateSettingsEndpointTest
             builder.Services.AddSingleton(paths);
             builder.Services.AddSingleton<TerminalSessionManager>();
             builder.Services.AddSingleton<SafeModeService>();
-            builder.Services.AddSingleton(new UpdateCheckService(NullLogger<UpdateCheckService>.Instance, new HttpClient(new Handler()), paths.ConfigurationFile, "1.0.0"));
+            builder.Services.AddSingleton(new UpdateService(NullLogger<UpdateService>.Instance, new HttpClient(new Handler()), paths.ConfigurationFile, "1.0.0"));
             await using var app = builder.Build();
             app.UseMiddleware<SafeModeMiddleware>();
             app.MapHealthEndpoint();

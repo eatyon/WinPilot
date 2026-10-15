@@ -37,7 +37,7 @@ public sealed class PluginConfigurationTest : IDisposable
         var field = new JsonObject { ["name"] = "value", ["type"] = type };
         var definition = new JsonArray(field);
         var content = new JsonObject { ["value"] = JsonNode.Parse(value) };
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(definition.ToJsonString(), content.ToJsonString()));
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(definition.ToJsonString(), content.ToJsonString()));
         field["default"] = JsonNode.Parse(value);
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(definition.ToJsonString()));
         var nested = new JsonArray(new JsonObject
@@ -55,9 +55,9 @@ public sealed class PluginConfigurationTest : IDisposable
         PluginSettingsSchema.ValidateDefinition(schema);
         var defaults = PluginSettingsSchema.ApplyDefaults(schema, new JsonObject());
         Assert.Equal("", defaults["value"]!.GetValue<string>());
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, "{}"));
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, defaults.ToJsonString()));
-        PluginSettingsSchema.ValidateStorage(schema, """{"value":"已填写"}""");
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, "{}"));
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, defaults.ToJsonString()));
+        PluginSettingsSchema.ValidateConfiguration(schema, """{"value":"已填写"}""");
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class PluginConfigurationTest : IDisposable
         Assert.Equal("", config["text"]!.GetValue<string>());
         Assert.Equal(0, config["fixed"]!["group"]!["number"]!.GetValue<int>());
         Assert.Equal(2.5, config["rows"]![0]!["number"]!.GetValue<double>());
-        PluginSettingsSchema.ValidateStorage(schema, config.ToJsonString());
+        PluginSettingsSchema.ValidateConfiguration(schema, config.ToJsonString());
     }
 
     [Theory]
@@ -141,8 +141,8 @@ public sealed class PluginConfigurationTest : IDisposable
                 _ => "{\"value\":" + number + "}"
             };
             PluginSettingsSchema.ValidateDefinition(schema);
-            if (valid) PluginSettingsSchema.ValidateStorage(schema, content);
-            else Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+            if (valid) PluginSettingsSchema.ValidateConfiguration(schema, content);
+            else Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, content));
         }
     }
 
@@ -153,7 +153,7 @@ public sealed class PluginConfigurationTest : IDisposable
     {
         var schema = "[{\"name\":\"value\",\"type\":\"number\"" + constraint + "}]";
         PluginSettingsSchema.ValidateDefinition(schema);
-        PluginSettingsSchema.ValidateStorage(schema, """{"value":0.25}""");
+        PluginSettingsSchema.ValidateConfiguration(schema, """{"value":0.25}""");
     }
 
     [Theory]
@@ -171,7 +171,7 @@ public sealed class PluginConfigurationTest : IDisposable
         };
         foreach (var (content, message) in cases)
         {
-            var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+            var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, content));
             Assert.Equal(expectedName + message, exception.Message);
         }
     }
@@ -205,7 +205,7 @@ public sealed class PluginConfigurationTest : IDisposable
         manager.Enable("healthy");
         Assert.Equal(PluginState.Running, manager.GetPlugin("healthy").State);
         manager.Disable("healthy");
-        manager.Reload();
+        manager.Scan();
         Assert.Equal(2, manager.GetPlugins().Count);
     }
 
@@ -218,7 +218,7 @@ public sealed class PluginConfigurationTest : IDisposable
     public void CollectionStorageErrorsUseDisplayNamesAndActionableMessages(string content, string message)
     {
         const string schema = """[{"name":"rows","label":"路线配置","type":"collection","mode":"dynamic","item":{"fields":[{"name":"value","type":"text"}]}}]""";
-        var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, content));
+        var exception = Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, content));
         Assert.Equal(message, exception.Message);
     }
 
@@ -240,7 +240,7 @@ public sealed class PluginConfigurationTest : IDisposable
         Assert.Equal("已保存", saved["text"]!.GetValue<string>());
         Assert.Equal(42, saved["extra"]!.GetValue<int>());
         Assert.True(saved["rows"]![0]!["enabled"]!.GetValue<bool>());
-        PluginSettingsSchema.ValidateStorage(Definition, saved.ToJsonString());
+        PluginSettingsSchema.ValidateConfiguration(Definition, saved.ToJsonString());
     }
 
     [Fact]
@@ -261,25 +261,25 @@ public sealed class PluginConfigurationTest : IDisposable
         Assert.True(JsonNode.Parse(File.ReadAllText(path))!["toggle"]!.GetValue<bool>());
         const string partial = """{"text":"原值","toggle":false}""";
         File.WriteAllText(path, partial);
-        manager.Reload();
-        var loaded = JsonNode.Parse(manager.ReadStorage("test")!)!;
+        manager.Scan();
+        var loaded = JsonNode.Parse(manager.ReadConfiguration("test")!)!;
         Assert.Equal("原值", loaded["text"]!.GetValue<string>());
         Assert.Equal(0, loaded["count"]!.GetValue<int>());
         Assert.Equal(partial, File.ReadAllText(path));
-        manager.WriteStorage("test", partial);
+        manager.WriteConfiguration("test", partial);
         var written = JsonNode.Parse(File.ReadAllText(path))!;
         Assert.Equal("原值", written["text"]!.GetValue<string>());
         Assert.False(written["toggle"]!.GetValue<bool>());
         Assert.Equal(0, written["count"]!.GetValue<int>());
         Assert.False(File.Exists(path + ".tmp"));
-        manager.WriteStorage("test", """{"count":""}""");
+        manager.WriteConfiguration("test", """{"count":""}""");
         Assert.Equal(0, JsonNode.Parse(File.ReadAllText(path))!["count"]!.GetValue<int>());
         var original = File.ReadAllText(path);
-        Assert.Throws<InvalidOperationException>(() => manager.WriteStorage("test", """{"toggle":"true"}"""));
+        Assert.Throws<InvalidOperationException>(() => manager.WriteConfiguration("test", """{"toggle":"true"}"""));
         Assert.Equal(original, File.ReadAllText(path));
         foreach (var invalid in new[] { "null", "[]", "1" })
         {
-            Assert.Throws<InvalidOperationException>(() => manager.WriteStorage("test", invalid));
+            Assert.Throws<InvalidOperationException>(() => manager.WriteConfiguration("test", invalid));
             Assert.Equal(original, File.ReadAllText(path));
         }
     }
@@ -390,7 +390,7 @@ public sealed class PluginConfigurationTest : IDisposable
                 switch (index % 4)
                 {
                     case 0 when index == 0: manager.Delete("test", true); break;
-                    case 0: manager.WriteStorage("test", "{}"); break;
+                    case 0: manager.WriteConfiguration("test", "{}"); break;
                     case 1: manager.WriteStatusDisplaySettings("test", new(false)); break;
                     case 2: manager.WriteFeatureDisplaySettings("test", new(false)); break;
                     default: manager.WriteSettingsDisplaySettings("test", new(false)); break;

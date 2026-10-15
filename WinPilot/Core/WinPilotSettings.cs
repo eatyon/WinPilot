@@ -16,8 +16,6 @@ public sealed record WinPilotSettings
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static WinPilotSettings Default { get; } = new();
-
     [JsonPropertyName("port")]
     public int Port { get; init; } = 9123;
 

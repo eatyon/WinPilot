@@ -15,7 +15,7 @@ public sealed partial class PluginManagerTest
         const string value = "{\"items\":[{\"__winpilot\":{\"id\":\"item-1\",\"remark\":\"测试\"},\"name\":\"测试\"}]}";
 
         PluginSettingsSchema.ValidateDefinition(schema);
-        PluginSettingsSchema.ValidateStorage(schema, value);
+        PluginSettingsSchema.ValidateConfiguration(schema, value);
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed partial class PluginManagerTest
         const string missingName = "[{\"name\":\"onlineManagement\",\"type\":\"collection\",\"mode\":\"fixed\",\"items\":[{\"fields\":[{\"name\":\"uid\",\"type\":\"text\"}]}]}]";
 
         PluginSettingsSchema.ValidateDefinition(schema);
-        PluginSettingsSchema.ValidateStorage(schema, "{\"onlineManagement\":{\"connection\":{\"uid\":\"123\"}}}");
+        PluginSettingsSchema.ValidateConfiguration(schema, "{\"onlineManagement\":{\"connection\":{\"uid\":\"123\"}}}");
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(missingName));
     }
 
@@ -100,7 +100,7 @@ public sealed partial class PluginManagerTest
     public void CollectionValue_EnforcesMaxItemsRequiredAndEnabled()
     {
         const string schema = "[{\"name\":\"items\",\"type\":\"collection\",\"mode\":\"dynamic\",\"item\":{\"fields\":[{\"name\":\"name\",\"type\":\"text\",\"required\":true}]}}]";
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"\",\"enabled\":true}]}"));
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"\",\"enabled\":true}]}"));
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed partial class PluginManagerTest
     {
         const string schema = "[{\"name\":\"items\",\"type\":\"collection\",\"mode\":\"dynamic\",\"item\":{\"fields\":[{\"name\":\"name\",\"type\":\"text\",\"required\":true}]}}]";
 
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateStorage(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"a\"},{\"id\":\"1\",\"name\":\"b\"}]}"));
+        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"a\"},{\"id\":\"1\",\"name\":\"b\"}]}"));
     }
 
     [Fact]

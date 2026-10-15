@@ -1,3 +1,4 @@
+using WinPilot.Windows;
 using System.Text;
 
 namespace WinPilot.Features.Terminal;

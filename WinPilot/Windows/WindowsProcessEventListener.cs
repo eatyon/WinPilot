@@ -1,6 +1,6 @@
 using System.Management;
 
-namespace WinPilot.Features.Tasks;
+namespace WinPilot.Windows;
 
 public enum WindowsProcessEventType { Started, Exited }
 

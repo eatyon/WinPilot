@@ -47,8 +47,8 @@ public sealed class UpdateDownloadTest : IDisposable
         Assert.True(source.Disposed);
     }
 
-    private static UpdateCheckService Create(Stream source)
-        => new(NullLogger<UpdateCheckService>.Instance, new HttpClient(new Handler(source)), currentVersion: "1.0.0");
+    private static UpdateService Create(Stream source)
+        => new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(source)), currentVersion: "1.0.0");
 
     private sealed class Handler(Stream source) : HttpMessageHandler
     {
