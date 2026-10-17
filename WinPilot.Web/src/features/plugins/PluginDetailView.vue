@@ -354,7 +354,7 @@ onBeforeUnmount(() => {
                 :disabled="executingFeatureId === feature.id"
                 @click="beginFeature(feature)"
               >
-                {{ executingFeatureId === feature.id ? '正在打开…' : featureButtonLabel(feature) }}
+                {{ executingFeatureId === feature.id ? '正在执行…' : featureButtonLabel(feature) }}
               </button>
             </div>
           </article>
