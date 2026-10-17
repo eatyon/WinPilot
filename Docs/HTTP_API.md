@@ -84,7 +84,6 @@
 | ANY，通常 GET | `/api/terminal/ws` | 101，WebSocket JSON 事件 | 400、403 | 需 | 非 WS 请求 400；支持 create/input/interrupt/resize/close；错误发 error，消息上限 16 KiB；断线清理所属会话 |
 | GET | `/api/plugins` | 200 JSON 插件信息数组 | 500 | 需 | 包含状态和错误信息 |
 | GET | `/api/plugins/{id}` | 200 JSON 插件信息 | 400、404、500 | 需 | `waitForLifecycle=true` 等待生命周期操作结束 |
-| HEAD | `/api/plugins/{id}/readme` | 200，无正文，text/plain | 400、404、500 | 需 | 仅检查存在性，不检查大小和 UTF-8 内容 |
 | GET | `/api/plugins/{id}/readme` | 200 text/plain UTF-8 | 400、404、500 | 需 | README 内容，上限 512 KiB |
 | POST | `/api/plugins/{id}/enable` | 200 JSON 插件信息 | 400、404、500 | 需 | 启动失败可返回 200，须检查 state/errors |
 | POST | `/api/plugins/{id}/disable` | 200 JSON 插件信息 | 400、404、500 | 需 | 停止并保存禁用状态 |

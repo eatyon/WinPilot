@@ -39,4 +39,7 @@ public sealed record PluginInfo(
     bool CanChangeEnabled)
 {
     public bool HasError => Errors.Count > 0;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? HasReadme { get; init; }
 }

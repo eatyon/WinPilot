@@ -44,7 +44,7 @@ function fixture(page = 'PluginInfoView.vue', requestGlobals = {}) {
   const members = page === 'PluginsView.vue'
     ? 'load,toggle,onToggle,plugins,changingIds,loading,scanning,requests'
     : page === 'PluginDetailView.vue' ? 'load,toggle,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
-    : 'loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,checkReadme,openReadme,closeReadme,readmeController,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
+    : 'load,plugin,loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,openReadme,closeReadme,readmeController,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
   const scope = vue.effectScope();
   let subject;
   scope.run(() => { subject = evaluate('../../src/features/plugins/' + page, imports, members); });
@@ -104,16 +104,16 @@ test('safe mode clears plugin home configuration and reloads without accepting l
   } finally { f.dispose(); }
 });
 
-test('a cancelled readme availability check cannot hide the new page entry', async () => {
+test('a cancelled plugin detail read cannot hide the new readme entry', async () => {
   const f = fixture();
   try {
-    const first = f.subject.checkReadme('old');
+    const first = f.subject.load();
     f.subject.requests.cancelAll();
-    const second = f.subject.checkReadme('new');
-    f.calls[1].resolve(response({}));
+    const second = f.subject.load();
+    f.calls[1].resolve(response({ id: 'new', hasReadme: true }));
     await second;
     assert.equal(f.subject.readmeAvailable.value, true);
-    f.calls[0].resolve(response({}, false));
+    f.calls[0].resolve(response({ id: 'old', hasReadme: false }));
     await first;
     assert.equal(f.subject.readmeAvailable.value, true);
   } finally { f.dispose(); }
@@ -123,7 +123,7 @@ test('readme loads only on opening, releases content on closing and reloads with
   const f = fixture();
   try {
     assert.equal(f.calls.length, 0);
-    f.subject.readmeAvailable.value = true;
+    f.subject.plugin.value = { hasReadme: true };
     const first = f.subject.openReadme();
     await f.subject.openReadme();
     assert.equal(f.calls.length, 1);
@@ -148,7 +148,7 @@ test('readme loads only on opening, releases content on closing and reloads with
 test('closing or leaving a readme cancels work and late rendering cannot overwrite a reopened dialog', async () => {
   const f = fixture();
   try {
-    f.subject.readmeAvailable.value = true;
+    f.subject.plugin.value = { hasReadme: true };
     const first = f.subject.openReadme();
     f.calls[0].resolve({ ok: true, text: async () => 'old' });
     await setImmediate();
@@ -511,17 +511,22 @@ test('saving display settings cannot proceed after failed configuration save', a
   } finally { f.dispose(); }
 });
 
-test('plugin HEAD checks finish tracking without reading a body', async () => {
+test('plugin details provide readme availability without an extra request', async () => {
   const f = trackedRequestFixture();
-  let bodyReads = 0;
   try {
-    const checking = f.subject.checkReadme('first');
-    assert.equal(f.calls[0].init.method, 'HEAD');
-    f.calls[0].resolve({ ok: true, status: 200, body: null, json: async () => { bodyReads++; return {}; } });
-    await checking;
+    const loading = f.subject.load();
+    assert.equal(f.calls[0].url, '/api/plugins/first');
+    f.calls[0].resolve(response({ id: 'first', hasReadme: true }));
+    await loading;
     assert.equal(f.subject.readmeAvailable.value, true);
-    assert.equal(bodyReads, 0);
+    assert.equal(f.calls.length, 1);
     assert.equal(f.controllers.size, 0);
+    const reloading = f.subject.load();
+    assert.equal(f.subject.readmeAvailable.value, false);
+    f.calls[1].resolve(response({ id: 'first', hasReadme: false }));
+    await reloading;
+    assert.equal(f.subject.readmeAvailable.value, false);
+    assert.equal(f.calls.length, 2);
   } finally { f.dispose(); }
 });
 

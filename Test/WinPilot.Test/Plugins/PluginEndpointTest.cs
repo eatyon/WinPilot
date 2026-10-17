@@ -162,7 +162,7 @@ public sealed class PluginEndpointTest
     [InlineData("oversized")]
     [InlineData("invalid-utf8")]
     [InlineData("missing")]
-    public async Task ReadmeHeadChecksExistenceOnlyAndSharesSuccessfulContentTypeWithGet(string kind)
+    public async Task PluginDetailsReportReadmeExistenceAndContentLoadsOnlyOnRequest(string kind)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -184,23 +184,42 @@ public sealed class PluginEndpointTest
             app.MapPluginEndpoints();
             await app.StartAsync();
             using var client = app.GetTestClient();
+            using var list = await client.GetAsync("/api/plugins");
+            using var listDocument = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+            Assert.False(listDocument.RootElement[0].TryGetProperty("hasReadme", out _));
+            Assert.Null(manager.GetPlugin("example").HasReadme);
+            foreach (var suffix in new[] { "", "?waitForLifecycle=true" })
+            {
+                using var details = await client.GetAsync("/api/plugins/example" + suffix);
+                Assert.Equal(HttpStatusCode.OK, details.StatusCode);
+                using var document = JsonDocument.Parse(await details.Content.ReadAsStringAsync());
+                Assert.Equal(kind != "missing", document.RootElement.GetProperty("hasReadme").GetBoolean());
+                Assert.Equal("example", document.RootElement.GetProperty("id").GetString());
+                Assert.True(document.RootElement.TryGetProperty("state", out _));
+                Assert.True(document.RootElement.TryGetProperty("hasError", out _));
+            }
             using var request = new HttpRequestMessage(HttpMethod.Head, "/api/plugins/example/readme");
             using var head = await client.SendAsync(request);
-            Assert.Equal(kind == "missing" ? HttpStatusCode.NotFound : HttpStatusCode.OK, head.StatusCode);
-            Assert.Empty(await head.Content.ReadAsByteArrayAsync());
-            if (kind != "missing") Assert.Equal("text/plain; charset=utf-8", head.Content.Headers.ContentType?.ToString());
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, head.StatusCode);
+            Assert.Equal(["GET"], head.Content.Headers.Allow);
             if (kind == "valid")
             {
                 using var get = await client.GetAsync("/api/plugins/example/readme");
                 Assert.Equal(HttpStatusCode.OK, get.StatusCode);
-                Assert.Equal(head.Content.Headers.ContentType?.ToString(), get.Content.Headers.ContentType?.ToString());
+                Assert.Equal("text/plain; charset=utf-8", get.Content.Headers.ContentType?.ToString());
                 Assert.Equal("说明文档", await get.Content.ReadAsStringAsync());
-                Assert.NotEqual(new FileInfo(readme).Length, head.Content.Headers.ContentLength);
+                File.Delete(readme);
+                using var refreshedDetails = await client.GetAsync("/api/plugins/example");
+                using var refreshedDocument = JsonDocument.Parse(await refreshedDetails.Content.ReadAsStringAsync());
+                Assert.False(refreshedDocument.RootElement.GetProperty("hasReadme").GetBoolean());
+                using var missing = await client.GetAsync("/api/plugins/example/readme");
+                Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
             }
-            else if (kind is "oversized" or "missing")
+            else
             {
                 using var get = await client.GetAsync("/api/plugins/example/readme");
-                Assert.Equal(kind == "oversized" ? HttpStatusCode.BadRequest : HttpStatusCode.NotFound, get.StatusCode);
+                Assert.Equal(kind == "oversized" ? HttpStatusCode.BadRequest
+                    : kind == "missing" ? HttpStatusCode.NotFound : HttpStatusCode.InternalServerError, get.StatusCode);
             }
         }
         finally { TryDeleteDirectory(directory); }

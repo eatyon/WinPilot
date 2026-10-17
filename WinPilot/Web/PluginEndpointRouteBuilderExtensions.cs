@@ -17,17 +17,11 @@ public static class PluginEndpointRouteBuilderExtensions
         routes.MapGet("/api/plugins", (PluginManager plugins) => Results.Ok(plugins.GetPlugins()));
         routes.MapGet("/api/plugins/{id}", async (string id, bool? waitForLifecycle, PluginManager plugins, CancellationToken cancellationToken) =>
         {
-            if (waitForLifecycle != true) return Execute(() => Results.Ok(plugins.GetPlugin(id)));
-            try { return Results.Ok(await plugins.GetPluginAfterLifecycleAsync(id, cancellationToken)); }
+            if (waitForLifecycle != true) return Execute(() => PluginDetails(plugins.GetPlugin(id), plugins));
+            try { return PluginDetails(await plugins.GetPluginAfterLifecycleAsync(id, cancellationToken), plugins); }
             catch (ArgumentException exception) when (exception.ParamName == "id") { return InvalidPluginId(); }
             catch (FileNotFoundException exception) { return Results.NotFound(new { detail = exception.Message }); }
         });
-        routes.MapMethods("/api/plugins/{id}/readme", ["HEAD"], (string id, PluginManager plugins, HttpContext context) => Execute(() =>
-        {
-            if (!plugins.HasReadme(id)) return Results.NotFound();
-            context.Response.ContentType = ReadmeContentType;
-            return Results.Ok();
-        }));
         routes.MapGet("/api/plugins/{id}/readme", (string id, PluginManager plugins) => Execute(() => Results.Text(plugins.ReadReadme(id), ReadmeContentType)));
         routes.MapPost("/api/plugins/{id}/enable", (string id, PluginManager plugins) => Execute(() => { plugins.Enable(id); return Results.Ok(plugins.GetPlugin(id)); }));
         routes.MapPost("/api/plugins/{id}/disable", (string id, PluginManager plugins) => Execute(() => { plugins.Disable(id); return Results.Ok(plugins.GetPlugin(id)); }));
@@ -150,6 +144,9 @@ public static class PluginEndpointRouteBuilderExtensions
         finally { subscription.Dispose(); channel.Writer.TryComplete(); }
         return Results.Empty;
     }
+
+    private static IResult PluginDetails(Core.Plugins.PluginInfo plugin, PluginManager plugins) =>
+        Results.Ok(plugin with { HasReadme = plugins.HasReadme(plugin.Id) });
 
     private static IResult ReadConfiguration(string id, PluginManager plugins, HttpContext context, bool readDefinition)
     {

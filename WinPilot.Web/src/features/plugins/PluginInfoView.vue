@@ -69,23 +69,13 @@ const selectedFeatureIds = computed({
 const settingsDisplay = ref<PluginSettingsDisplaySettings>({ registerOnHome: true });
 const settingsDefinitions = ref<Definition[]>([]);
 const settingsConfig = ref<Record<string, any>>({});
-const readmeAvailable = ref(false);
+const readmeAvailable = computed(() => plugin.value?.hasReadme === true);
 const readmeOpen = ref(false);
 const readmeLoading = ref(false);
 const readmeHtml = ref('');
 const readmeError = ref('');
 let readmeController: AbortController | undefined;
 let settingsController: AbortController | undefined;
-
-async function checkReadme(pluginId: string) {
-  try {
-    readmeAvailable.value = await requests.run(`/api/plugins/${encodeURIComponent(pluginId)}/readme`, {
-      method: 'HEAD',
-    }, response => response.ok);
-  } catch (cause) {
-    if (requests.active && !isAbortError(cause)) readmeAvailable.value = false;
-  }
-}
 
 function closeReadme() {
   readmeController?.abort();
@@ -315,7 +305,6 @@ async function load() {
   const generation = ++loadGeneration;
   requests.cancelReads();
   closeReadme();
-  readmeAvailable.value = false;
   statusSettingsOpen.value = featureSettingsOpen.value = settingsOpen.value = deleteOpen.value = false;
   plugin.value = undefined;
   error.value = '';
@@ -327,7 +316,6 @@ async function load() {
     if (!requests.active || generation !== loadGeneration) return;
     plugin.value = loadedPlugin;
     await Promise.all([
-      checkReadme(loadedPlugin.id),
       loadedPlugin.manifest?.status_ui ? loadStatusSettings() : Promise.resolve(),
       loadedPlugin.manifest?.features_ui ? loadFeatureSettings() : Promise.resolve(),
       loadedPlugin.manifest?.settings_ui ? loadSettings() : Promise.resolve(),

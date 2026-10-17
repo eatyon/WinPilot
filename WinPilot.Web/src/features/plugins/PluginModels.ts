@@ -28,6 +28,7 @@ export interface PluginInfo {
   enabled: boolean
   errors: string[]
   hasError: boolean
+  hasReadme?: boolean
   canChangeEnabled: boolean
 }
 

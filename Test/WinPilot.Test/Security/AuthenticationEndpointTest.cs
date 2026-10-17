@@ -825,7 +825,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("GET", "/api/settings/test")]
     [InlineData("HEAD", "/api/settings/test")]
     [InlineData("POST", "/api/notifications/diagnostic")]
-    [InlineData("HEAD", "/api/plugins/test/readme")]
+    [InlineData("GET", "/api/plugins/test/readme")]
     [InlineData("GET", "/api/plugins/options/settings/notificationChannels")]
     [InlineData("GET", "/api/programs/tags")]
     [InlineData("POST", "/api/programs/tags/test/launch")]
