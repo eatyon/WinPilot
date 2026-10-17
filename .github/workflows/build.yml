@@ -48,7 +48,7 @@ jobs:
       - name: 运行 C# 测试
         id: dotnet_tests
         shell: pwsh
-        run: dotnet test ./Test/WinPilot.Test/WinPilot.Test.csproj -c Release --no-build --logger "trx" --results-directory ./artifacts/TestResults --blame-hang-timeout 2m
+        run: dotnet test ./Test/WinPilot.Test/WinPilot.Test.csproj -c Release --no-build --logger "trx" --results-directory ./artifacts/TestResults --blame-hang-timeout 2m -- xUnit.ParallelizeTestCollections=false
 
       - name: 保存失败测试报告
         if: ${{ failure() && steps.dotnet_tests.outcome == 'failure' }}

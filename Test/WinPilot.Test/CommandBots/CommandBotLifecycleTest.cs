@@ -220,7 +220,6 @@ public sealed class CommandBotLifecycleTest
         await fixture.Bot.DisposeAsync();
         fixture.Bot.Dispose();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => fixture.Bot.ReconnectAsync(CancellationToken.None));
-        // 已释放服务从配置协调器移除，后续保存不会尝试重启它。
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile,
             settings => settings with { TelegramBotToken = "new-token" }, CancellationToken.None);
     }

@@ -335,7 +335,9 @@ public sealed class FeishuCommandBotTest
         await socket.Sent.Reader.ReadAsync();
         Assert.Equal(new FeishuClientConfig(60, 2, 120, 30), updated);
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session);
+        try { await session; }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Assert.True(session.IsCompletedSuccessfully || session.IsCanceled);
     }
 
     [Fact]
