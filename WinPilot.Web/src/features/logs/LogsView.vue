@@ -132,7 +132,7 @@ async function readEntries(signal: AbortSignal, reset: boolean) {
 <template>
   <section class="logs-view">
     <div class="logs-filters" aria-label="日志筛选">
-      <label class="field-control">
+      <label class="field-control logs-select-control">
         <span>日志日期</span>
         <AppSelect
           v-model="selectedDate"
@@ -141,7 +141,7 @@ async function readEntries(signal: AbortSignal, reset: boolean) {
           @change="loadEntries(true)"
         />
       </label>
-      <div class="field-control logs-level-control">
+      <div class="field-control logs-select-control">
         <span id="logs-level-label">日志级别</span>
         <AppMultiSelect
           :model-value="selectedLevels"
@@ -234,11 +234,11 @@ async function readEntries(signal: AbortSignal, reset: boolean) {
 .log-details summary { color: var(--danger-text); cursor: pointer; font-size: 13px; }
 .log-details pre { max-height: 280px; margin: 9px 0 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
 .log-more-button { display: flex; width: calc(100% - 32px); margin: 16px; }
-.logs-empty { display: grid; min-height: 180px; place-items: center; margin: 0; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); color: var(--text-muted); font-size: 14px; }
-.logs-level-control { flex: 0 0 110px; width: 110px; max-width: 100%; }
+.logs-empty { display: grid; min-height: 88px; place-items: center; margin: 0; padding: 16px 18px; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); color: var(--text-muted); font-size: 14px; }
+.logs-select-control { flex: 0 0 110px; width: 110px; max-width: 100%; }
 @media (max-width: 767px) {
   .logs-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .logs-level-control { width: 100%; min-width: 0; }
+  .logs-select-control { width: 100%; min-width: 0; }
   .logs-search { grid-column: 1 / -1; }
   .logs-filter-button, .logs-refresh-button { width: 100%; }
   .log-entry { padding: 14px; }
