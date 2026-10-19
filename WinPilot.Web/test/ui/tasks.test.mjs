@@ -14,7 +14,7 @@ runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskValidatio
 
 function fixture({ reducedMotion = false } = {}) {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, tasksLoaded, tags, registeredActions, registeredTriggers, pageError, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, triggerLabel, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
+    'tasks, tasksLoaded, tags, registeredActions, registeredTriggers, extensionsLoaded, extensionsLoading, extensionsError, pageError, loadExtensions, actionResources, loadActionResource, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, triggerLabel, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
   const requests = [];
   const toasts = [];
   let unmount;
@@ -40,6 +40,7 @@ function fixture({ reducedMotion = false } = {}) {
   const scope = vue.effectScope();
   scope.run(() => runInNewContext(code, context));
   const subject = context.exports;
+  subject.extensionsLoaded.value = true;
   subject.registeredActions.value = [{ pluginId: 'plugin', actionId: 'action', actionName: '运行任务', available: true, dynamicOptions: true, parameters: [{ key: 'name', type: 'Select', options: [] }] }];
   const action = { type: 'Extension', pluginId: 'plugin', actionId: 'action', parameters: { name: 'saved' } };
   const open = () => { subject.detailTarget.value = { actions: [action, { ...action }] }; };
@@ -240,6 +241,44 @@ test('plugin trigger parameter edits clear trigger errors without clearing actio
   } finally { f.dispose(); }
 });
 
+test('every built-in action clears only its own error on edits and invalid values are checked again', async () => {
+  const cases = [
+    ['StartProgram', 'programPath', 'app.exe', '', '请选择要启动的程序'],
+    ['StartTag', 'tagName', 'tag', '', '请选择快捷标签'],
+    ['CloseProcess', 'processName', 'app.exe', '', '请输入进程名'],
+    ['Delay', 'delaySeconds', 1, 0, '请输入有效的延迟秒数'],
+    ['Shell', 'command', 'echo test', '', '请输入 Shell 命令'],
+    ['Keyboard', 'keys', ['F11'], [], '请选择至少一个按键'],
+    ['SendNotification', 'notificationContent', 'content', '', '请填写通知内容'],
+  ];
+  for (const [type, key, valid, invalid, message] of cases) {
+    const f = fixture();
+    try {
+      f.subject.openTaskEditor();
+      const task = f.subject.editor.value;
+      task.actions[0].type = type;
+      task.actions.push({ ...f.subject.createAction(), type: 'Delay', delaySeconds: '' });
+      const [action, sibling] = task.actions;
+      action[key] = Array.isArray(invalid) ? [...invalid] : invalid;
+      await f.subject.saveTask();
+      assert.equal(f.subject.actionErrors.get(action)?.message, message, type);
+      assert.equal(f.subject.actionErrors.size, 2);
+      if (type === 'Keyboard') action.keys.push('F11');
+      else action[key] = valid;
+      await vue.nextTick();
+      assert.equal(f.subject.actionErrors.has(action), false, type);
+      assert.equal(f.subject.actionErrors.has(sibling), true);
+      assert.equal(f.subject.fieldErrors.value.name, '请输入任务名称');
+      action[key] = invalid;
+      await f.subject.saveTask();
+      await vue.nextTick();
+      assert.equal(f.subject.actionErrors.get(action)?.message, message, type);
+      const resource = type === 'StartTag' ? '/api/programs/tags' : type === 'SendNotification' ? '/api/notifications/channels' : undefined;
+      assert.deepEqual(f.requests.map(request => request.url), resource ? [resource] : []);
+    } finally { f.dispose(); }
+  }
+});
+
 test('plugin action parameter edits including nested multi-select changes clear only that action error', async () => {
   const f = fixture();
   try {
@@ -341,6 +380,27 @@ test('save focuses and shakes only the first invalid task field in form order', 
     await f.subject.saveTask();
     assert.deepEqual(calls, ['cron:scroll', 'cron:focus', 'cron:animate']);
   } finally { f.dispose(); }
+});
+
+test('each built-in action focuses its invalid control rather than its type selector', async () => {
+  for (const [type, changes, field] of [
+    ['StartProgram', { programPath: '' }, 'programPath'],
+    ['StartTag', {}, 'tagName'], ['CloseProcess', {}, 'processName'],
+    ['Delay', { delaySeconds: '' }, 'delaySeconds'], ['Keyboard', {}, 'keys'],
+    ['Shell', {}, 'command'], ['SendNotification', {}, 'notificationContent'],
+    ['TaskState', {}, 'taskName'], ['TaskState', { taskName: 'Other' }, 'state'],
+  ]) {
+    const f = fixture();
+    try {
+      const task = openValidTaskEditor(f);
+      Object.assign(task.actions[0], { type }, changes);
+      const calls = attachEditorForm(f, [], [['type', field]]);
+      await f.subject.saveTask();
+      assert.deepEqual(calls, [`${field}:scroll`, `${field}:focus`, `${field}:animate`], type);
+      const resource = type === 'StartTag' ? '/api/programs/tags' : type === 'SendNotification' ? '/api/notifications/channels' : undefined;
+      assert.deepEqual(f.requests.map(request => request.url), resource ? [resource] : []);
+    } finally { f.dispose(); }
+  }
 });
 
 test('keyboard validation focuses the expand button but scrolls and shakes the whole selection bar', async () => {
@@ -759,6 +819,226 @@ test('notification action defaults to enabled channels and preserves explicit ch
   } finally { f.dispose(); }
 });
 
+test('task list loading does not request editor resources or extension definitions', async () => {
+  const f = fixture();
+  try {
+    const loading = f.subject.loadTasks();
+    assert.equal(f.subject.tasksLoaded.value, false);
+    assert.deepEqual(f.requests.map(request => request.url), ['/api/tasks']);
+    for (const request of f.requests)
+      request.resolve({ ok: true, json: async () => [] });
+    await loading;
+    assert.equal(f.subject.tasksLoaded.value, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+  } finally { f.dispose(); }
+});
+
+test('initial task list can display before extension definitions without reporting unknown plugins as unavailable', async () => {
+  const f = fixture();
+  try {
+    f.subject.extensionsLoaded.value = false;
+    f.subject.registeredActions.value = [];
+    f.subject.registeredTriggers.value = [];
+    const task = { name: 'Saved', enabled: true, trigger: { type: 'Extension', pluginId: 'plugin', triggerId: 'trigger' },
+      actions: [{ ...f.subject.createAction(), type: 'Extension', pluginId: 'plugin', actionId: 'action' }] };
+    const listing = f.subject.loadTasks();
+    const extensions = f.subject.loadExtensions();
+    assert.deepEqual(f.requests.map(request => request.url), ['/api/tasks', '/api/tasks/extensions/triggers', '/api/tasks/extensions/actions']);
+    f.requests[0].resolve({ ok: true, json: async () => [task] });
+    await listing;
+    assert.equal(f.subject.tasksLoaded.value, true);
+    assert.equal(f.subject.tasks.value[0].name, 'Saved');
+    assert.equal(f.subject.extensionsLoading.value, true);
+    assert.equal(f.subject.taskWarningText(task), '');
+    assert.ok(!f.subject.extensionTriggerLabel(task.trigger).includes('不可用'));
+    assert.ok(!f.subject.extensionActionLabel(task.actions[0]).includes('不可用'));
+    f.requests[1].resolve({ ok: true, json: async () => [] });
+    f.requests[2].resolve({ ok: true, json: async () => [] });
+    await extensions;
+    assert.equal(f.subject.extensionsLoaded.value, true);
+    assert.equal(f.subject.taskWarningText(task), '插件触发条件不可用\n部分插件动作不可用');
+  } finally { f.dispose(); }
+});
+
+test('extension failures do not block the list and can be retried independently', async () => {
+  const f = fixture();
+  try {
+    f.subject.extensionsLoaded.value = false;
+    const listing = f.subject.loadTasks();
+    const extensions = f.subject.loadExtensions();
+    f.requests[0].resolve({ ok: true, json: async () => [{ name: 'Visible' }] });
+    f.requests[1].resolve(Response.json({ detail: '扩展读取失败' }, { status: 500 }));
+    f.requests[2].resolve(Response.json([]));
+    await Promise.all([listing, extensions]);
+    assert.equal(f.subject.tasks.value[0].name, 'Visible');
+    assert.equal(f.subject.pageError.value, '');
+    assert.equal(f.subject.extensionsError.value, '扩展读取失败');
+    assert.equal(f.subject.extensionsLoaded.value, false);
+    const retry = f.subject.loadExtensions();
+    f.requests[3].resolve(Response.json([]));
+    f.requests[4].resolve(Response.json([]));
+    await retry;
+    assert.equal(f.subject.extensionsError.value, '');
+    assert.equal(f.subject.extensionsLoaded.value, true);
+    assert.equal(f.requests.filter(request => request.url === '/api/tasks').length, 1);
+  } finally { f.dispose(); }
+});
+
+test('editor resources load only for selected action types and share pending and completed results', async () => {
+  const f = fixture();
+  try {
+    f.subject.openTaskEditor();
+    assert.equal(f.requests.length, 0);
+    f.subject.selectActionType(0, 'StartTag');
+    const first = f.subject.loadActionResource('StartTag');
+    assert.equal(first, f.subject.loadActionResource('StartTag'));
+    f.subject.editor.value.actions.push({ ...f.subject.createAction(), type: 'StartTag' });
+    assert.deepEqual(f.requests.map(request => request.url), ['/api/programs/tags']);
+    assert.equal(f.subject.actionResources.StartTag.loading, true);
+    f.requests[0].resolve(Response.json([{ name: 'Tag' }]));
+    assert.equal(await first, true);
+    assert.equal(f.subject.tags.value[0].name, 'Tag');
+    assert.equal(f.subject.actionResources.StartTag.loading, false);
+    assert.equal(await f.subject.loadActionResource('StartTag'), true);
+    f.subject.selectActionType(0, 'SendNotification');
+    const channels = f.subject.loadActionResource('SendNotification');
+    f.requests[1].resolve(Response.json([{ value: '', label: '已启用渠道' }, { value: 'QQBot', label: 'QQBot' }]));
+    assert.equal(await channels, true);
+    assert.equal(f.subject.channelOptions.value[1].value, 'QQBot');
+    assert.equal(f.requests.length, 2);
+  } finally { f.dispose(); }
+});
+
+test('existing task resources load only when editing and failures preserve saved values and allow retry', async () => {
+  const f = fixture();
+  try {
+    const task = { name: 'Saved', enabled: true, trigger: { ...taskModels.createTrigger(), cron: '0 0 8 * * *' }, actions: [
+      { ...f.subject.createAction(), type: 'StartTag', tagName: 'Saved tag' },
+      { ...f.subject.createAction(), type: 'SendNotification', notificationChannel: 'QQBot', notificationContent: 'content' },
+    ] };
+    f.subject.detailTarget.value = task;
+    assert.equal(f.requests.length, 0);
+    f.subject.openTaskEditor(task);
+    const tags = f.subject.loadActionResource('StartTag');
+    const channels = f.subject.loadActionResource('SendNotification');
+    assert.deepEqual(f.requests.map(request => request.url), ['/api/programs/tags', '/api/notifications/channels']);
+    f.requests[0].resolve(Response.json({ detail: '读取失败' }, { status: 500 }));
+    f.requests[1].resolve(Response.json({ detail: '读取失败' }, { status: 500 }));
+    assert.deepEqual(await Promise.all([tags, channels]), [false, false]);
+    assert.equal(f.subject.editor.value.actions[0].tagName, 'Saved tag');
+    assert.equal(f.subject.editor.value.actions[1].notificationChannel, 'QQBot');
+    assert.equal(f.subject.pageError.value, '');
+    assert.equal(f.subject.actionResources.StartTag.error, '读取失败');
+    assert.equal(f.subject.actionResources.SendNotification.error, '读取失败');
+    assert.deepEqual(f.toasts, []);
+    const retry = f.subject.loadActionResource('StartTag');
+    f.requests[2].resolve(Response.json([{ name: 'Other tag' }]));
+    assert.equal(await retry, true);
+    assert.equal(f.subject.actionResources.StartTag.error, '');
+    assert.equal(f.subject.editor.value.actions[0].tagName, 'Saved tag');
+  } finally { f.dispose(); }
+});
+
+test('resource response bodies remain owned by the page and cannot update data after unmount', async () => {
+  const f = fixture();
+  f.subject.openTaskEditor();
+  f.subject.selectActionType(0, 'SendNotification');
+  const pending = f.subject.loadActionResource('SendNotification');
+  let finishBody;
+  f.requests[0].resolve({ ok: true, json: () => new Promise(resolve => { finishBody = resolve; }) });
+  await setImmediate();
+  assert.equal(f.subject.requestControllers.size, 1);
+  f.dispose();
+  assert.equal(f.requests[0].init.signal.aborted, true);
+  finishBody([{ value: 'Late', label: 'Late' }]);
+  assert.equal(await pending, false);
+  assert.equal(f.subject.actionResources.SendNotification.loaded, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+  assert.equal(f.subject.requestControllers.size, 0);
+  assert.deepEqual(f.toasts, []);
+});
+
+test('late extension responses cannot replace newer declarations and unmount cancels both requests', async () => {
+  const f = fixture();
+  try {
+    const old = f.subject.loadExtensions();
+    const latest = f.subject.loadExtensions();
+    assert.ok(f.requests.slice(0, 2).every(request => request.init.signal.aborted));
+    f.requests[2].resolve(Response.json([]));
+    f.requests[3].resolve(Response.json([{ pluginId: 'new', actionId: 'action', parameters: [] }]));
+    await latest;
+    f.requests[0].resolve(Response.json([]));
+    f.requests[1].resolve(Response.json([{ pluginId: 'old' }]));
+    await old;
+    assert.equal(f.subject.registeredActions.value[0].pluginId, 'new');
+    const stopped = f.subject.loadExtensions();
+    f.dispose();
+    assert.ok(f.requests.slice(4).every(request => request.init.signal.aborted));
+    f.requests[4].resolve(Response.json([]));
+    f.requests[5].resolve(Response.json([]));
+    await stopped;
+    assert.equal(f.subject.registeredActions.value[0].pluginId, 'new');
+  } finally { f.dispose(); }
+});
+
+test('extension definitions arriving after a preview or editor opens still load its dynamic options', async () => {
+  for (const editing of [false, true]) {
+    const f = fixture();
+    try {
+      f.subject.extensionsLoaded.value = false;
+      f.subject.registeredActions.value = [];
+      const task = { name: 'Saved', trigger: taskModels.createTrigger(), actions: [
+        { ...f.subject.createAction(), type: 'Extension', pluginId: 'plugin', actionId: 'action', parameters: { name: 'saved' } },
+      ] };
+      if (editing) f.subject.openTaskEditor(task);
+      else f.subject.detailTarget.value = task;
+      assert.equal(f.requests.length, 0);
+      const loading = f.subject.loadExtensions();
+      f.requests[0].resolve(Response.json([]));
+      f.requests[1].resolve(Response.json([{
+        pluginId: 'plugin', actionId: 'action', actionName: 'Action', available: true, dynamicOptions: true,
+        parameters: [{ key: 'name', type: 'Select', options: [] }],
+      }]));
+      await loading;
+      assert.equal(f.requests[2].url, '/api/tasks/extensions/actions/plugin/action/options/name');
+      f.requests[2].resolve(Response.json([{ value: 'saved', label: 'Current' }]));
+      await setImmediate();
+      if (editing) assert.equal(f.subject.registeredActions.value[0].parameters[0].options[0].label, 'Current');
+      else assert.equal(f.subject.extensionActionLabel(task.actions[0]), 'Action - Current');
+    } finally { f.dispose(); }
+  }
+});
+
+test('changing action type during resource loading does not apply late values to the current action', async () => {
+  const f = fixture();
+  try {
+    f.subject.openTaskEditor();
+    f.subject.selectActionType(0, 'StartTag');
+    const loading = f.subject.loadActionResource('StartTag');
+    f.subject.editor.value.actions[0].tagName = 'Saved';
+    f.subject.selectActionType(0, 'StartProgram');
+    f.subject.editor.value.actions[0].programPath = 'app.exe';
+    f.requests[0].resolve(Response.json([{ name: 'Other' }]));
+    await loading;
+    assert.equal(f.subject.editor.value.actions[0].type, 'StartProgram');
+    assert.equal(f.subject.editor.value.actions[0].programPath, 'app.exe');
+    assert.equal(f.subject.editor.value.actions[0].tagName, 'Saved');
+  } finally { f.dispose(); }
+});
+
+test('toggling a task refreshes only the task list without reloading cached editor resources or extensions', async () => {
+  const f = fixture();
+  try {
+    const pending = f.subject.toggleTaskEnabled({ name: 'Task', enabled: true });
+    f.requests[0].resolve(Response.json({ enabled: false }));
+    await setImmediate();
+    assert.deepEqual(f.requests.map(request => request.url), ['/api/tasks/Task/enabled', '/api/tasks']);
+    f.requests[1].resolve(Response.json([]));
+    await pending;
+    assert.equal(f.subject.tasksLoaded.value, true);
+  } finally { f.dispose(); }
+});
+
 test('tag and close process actions report missing fields before saving', () => {
   const f = fixture();
   try {
@@ -907,6 +1187,38 @@ test('failed deletion retains its dialog and repeated clicks share one request',
   } finally { f.dispose(); }
 });
 
+test('page disposal cancels writes and reads without late updates or notifications', async () => {
+  const f = fixture();
+  f.subject.runTarget.value = { name: 'test' };
+  const running = f.subject.runTask();
+  const loading = f.subject.loadTasks();
+  const reading = f.subject.loadActionOptions(0, 'name');
+  f.dispose();
+  assert.ok(f.requests.every(request => request.init.signal.aborted));
+  for (const request of f.requests) request.resolve({ ok: true, json: async () => [] });
+  await Promise.all([running, loading, reading]);
+  assert.equal(f.subject.tasks.value.length, 0);
+  assert.equal(f.subject.runTarget.value.name, 'test');
+  assert.deepEqual(f.toasts, []);
+});
+
+test('an older page loadTasks cannot overwrite a newer result', async () => {
+  const f = fixture();
+  try {
+    const old = f.subject.loadTasks();
+    const oldRequests = f.requests.slice();
+    const latest = f.subject.loadTasks();
+    assert.ok(oldRequests.every(request => request.init.signal.aborted));
+    for (const request of f.requests.slice(oldRequests.length))
+      request.resolve({ ok: true, json: async () => [{ name: 'new' }] });
+    await latest;
+    for (const request of oldRequests) request.resolve({ ok: true, json: async () => [{ name: 'old' }] });
+    await old;
+    assert.equal(f.subject.tasks.value[0].name, 'new');
+    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+  } finally { f.dispose(); }
+});
+
 test('trigger selection updates the declared key rather than a plugin-specific key', () => {
   const f = fixture();
   try {
@@ -926,6 +1238,23 @@ test('parameter defaults are independent from registered schemas and other actio
     first.values.push('second');
     assert.equal(second.values.join(','), 'first');
     assert.equal(schema[0].defaultValue.join(','), 'first');
+  } finally { f.dispose(); }
+});
+
+test('separate task operations do not cancel each other and toggleTaskEnabled failures are visible', async () => {
+  const f = fixture();
+  try {
+    f.subject.runTarget.value = { name: 'run' };
+    const running = f.subject.runTask();
+    const toggling = f.subject.toggleTaskEnabled({ name: 'toggleTaskEnabled', enabled: true });
+    await f.subject.toggleTaskEnabled({ name: 'toggleTaskEnabled', enabled: true });
+    assert.equal(f.requests.length, 2);
+    assert.ok(f.requests.every(request => !request.init.signal.aborted));
+    f.requests[0].resolve({ ok: true });
+    f.requests[1].resolve({ ok: false, json: async () => ({ detail: 'cannot saveTask' }) });
+    await Promise.all([running, toggling]);
+    assert.equal(f.subject.runTarget.value, undefined);
+    assert.deepEqual(f.toasts, ['cannot saveTask']);
   } finally { f.dispose(); }
 });
 

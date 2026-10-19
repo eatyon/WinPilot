@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, toRaw, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowReactive, toRaw, watch } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import AppModal from '../../components/AppModal.vue';
 import AppSelect from '../../components/AppSelect.vue';
@@ -36,6 +36,8 @@ const variableHelpOpen = ref(false),
   variableHelpError = ref('');
 let isPageActive = true;
 let loadController: AbortController | undefined;
+let extensionsController: AbortController | undefined;
+const extensionsLoaded = ref(false), extensionsLoading = ref(false), extensionsError = ref('');
 let variableHelpController: AbortController | undefined;
 const requestControllers = new Set<AbortController>();
 const pendingOperations = shallowReactive(new Map<string, AbortController>());
@@ -82,7 +84,50 @@ function actionKey(action: Action) {
   }
   return key;
 }
-const channelOptions = ref<{ value: string; label: string }[]>([]);
+const channelOptions = ref<{ value: string; label: string }[]>([{ value: '', label: '已启用渠道' }]);
+const actionResources = reactive({
+  StartTag: { loading: false, loaded: false, error: '' },
+  SendNotification: { loading: false, loaded: false, error: '' },
+});
+const pendingActionResources = new Map<Action['type'], Promise<boolean>>();
+function actionResource(type: Action['type']) {
+  return type === 'StartTag' || type === 'SendNotification' ? actionResources[type] : undefined;
+}
+function loadActionResource(type: Action['type']): Promise<boolean> {
+  const state = actionResource(type);
+  if (!state || !isPageActive) return Promise.resolve(false);
+  const pending = pendingActionResources.get(type);
+  if (pending) return pending;
+  if (state.loaded) return Promise.resolve(true);
+  const message = type === 'StartTag' ? '无法读取快捷标签，请重试' : '无法读取通知渠道，请重试';
+  state.loading = true;
+  state.error = '';
+  const request = (async () => {
+    try {
+      const result = await runPageRequest(type === 'StartTag' ? '/api/programs/tags' : '/api/notifications/channels', {}, async response => {
+        if (!response.ok) throw new Error(await readApiError(response, message));
+        return response.json();
+      });
+      if (!isPageActive) return false;
+      if (type === 'StartTag') tags.value = result;
+      else channelOptions.value = result;
+      state.loaded = true;
+      return true;
+    } catch (cause) {
+      if (isPageActive && !isAbortError(cause)) state.error = userErrorMessage(cause, message);
+      return false;
+    }
+  })().finally(() => {
+    if (isPageActive) state.loading = false;
+    if (pendingActionResources.get(type) === request) pendingActionResources.delete(type);
+  });
+  pendingActionResources.set(type, request);
+  return request;
+}
+watch(() => editor.value?.actions.map(action => action.type), types => {
+  for (const type of new Set(types))
+    if (type === 'StartTag' || type === 'SendNotification') void loadActionResource(type);
+}, { flush: 'sync' });
 const actionErrors = shallowReactive(new Map<Action, { message: string; snapshot: string; field?: string }>());
 const actionValidationFields: Partial<Record<Action['type'], string>> = {
   StartProgram: 'programPath', StartTag: 'tagName', CloseProcess: 'processName', Delay: 'delaySeconds',
@@ -205,7 +250,7 @@ function fetchActionOptions(pluginId: string, actionId: string, parameterKey: st
   pendingActionOptions.set(key, request);
   return request;
 }
-watch(detailTarget, (task, _, onCleanup) => {
+watch([detailTarget, registeredActions], ([task], _, onCleanup) => {
   detailActionOptions.value = new Map();
   if (!task) return;
   let active = true;
@@ -290,13 +335,13 @@ function extensionTriggerLabel(trigger: Trigger) {
   );
   const pluginName = definition?.pluginDisplayName || trigger.pluginId || '未选择插件';
   const triggerName = definition?.triggerName || trigger.triggerId || '未选择配置';
-  const unavailable = trigger.pluginId && trigger.triggerId && (
+  const unavailable = extensionsLoaded.value && trigger.pluginId && trigger.triggerId && (
     !definition?.available || definition.parameters?.some(parameter => hasUnavailableParameter(parameter, trigger.parameters?.[parameter.key]))
   );
   return `扩展 · ${pluginName} · ${triggerName}${selected ? ` - ${selected.label}` : ''}${unavailable ? '（不可用）' : ''}`;
 }
 function hasUnavailableTrigger(task: Task) {
-  if (task.trigger.type !== 'Extension' || !task.trigger.pluginId || !task.trigger.triggerId) return false;
+  if (!extensionsLoaded.value || task.trigger.type !== 'Extension' || !task.trigger.pluginId || !task.trigger.triggerId) return false;
   const definition = registeredTriggers.value.find(
     (item) =>
       item.pluginId === task.trigger.pluginId && item.triggerId === task.trigger.triggerId,
@@ -310,7 +355,7 @@ function taskWarningText(task: ListedTask) {
   if (task.trigger.type === 'Cron' && task.cronAvailable === false) warnings.push('Cron 表达式没有后续执行时间');
   if (hasUnavailableTrigger(task)) warnings.push('插件触发条件不可用');
   if (task.actions.some(action => {
-    if (action.type !== 'Extension') return false;
+    if (!extensionsLoaded.value || action.type !== 'Extension') return false;
     const definition = actionDefinitionFor(action);
     if (!definition?.available) return true;
     return !definition.dynamicOptions && definition.parameters.some(parameter => hasUnavailableParameter(parameter, action.parameters?.[parameter.key]));
@@ -339,7 +384,7 @@ const actionLabel = (action: Action, index: number, total: number) =>
   `${actionCoreLabel(action)}${action.continueOnFailure && index < total - 1 ? ' · 失败后继续' : ''}`;
 function extensionActionLabel(action: Action) {
   const definition = actionDefinitionFor(action);
-  if (!definition) return `扩展 · ${action.pluginId || '未选择插件'} · ${action.actionId || '未选择动作'}${action.pluginId && action.actionId ? '（不可用）' : ''}`;
+  if (!definition) return `扩展 · ${action.pluginId || '未选择插件'} · ${action.actionId || '未选择动作'}${extensionsLoaded.value && action.pluginId && action.actionId ? '（不可用）' : ''}`;
   if (!definition.available) return `${definition.actionName}（不可用）`;
   const labels = definition.parameters.flatMap((parameter) => {
     const options = definition.dynamicOptions
@@ -384,13 +429,12 @@ async function loadTasks() {
   const controller = new AbortController();
   loadController = controller;
   try {
-    const urls = ['/api/tasks', '/api/programs/tags', '/api/tasks/extensions/triggers', '/api/tasks/extensions/actions', '/api/notifications/channels'];
-    const values = await Promise.all(urls.map(url => runPageRequest(url, { signal: controller.signal }, async response => {
+    const result = await runPageRequest('/api/tasks', { signal: controller.signal }, async response => {
       if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
       return response.json();
-    })));
+    });
     if (!isPageActive || loadController !== controller || controller.signal.aborted) return;
-    [tasks.value, tags.value, registeredTriggers.value, registeredActions.value, channelOptions.value] = values;
+    tasks.value = result;
     tasksLoaded.value = true;
     pageError.value = '';
   } catch (cause) {
@@ -398,6 +442,35 @@ async function loadTasks() {
       pageError.value = userErrorMessage(cause, '加载任务失败');
   } finally {
     if (loadController === controller) loadController = undefined;
+  }
+}
+async function loadExtensions() {
+  extensionsController?.abort();
+  const controller = new AbortController();
+  extensionsController = controller;
+  extensionsLoading.value = true;
+  extensionsError.value = '';
+  try {
+    const [triggers, actions] = await Promise.all(['triggers', 'actions'].map(kind =>
+      runPageRequest(`/api/tasks/extensions/${kind}`, { signal: controller.signal }, async response => {
+        if (!response.ok) throw new Error(await readApiError(response, '无法读取插件扩展，请重试'));
+        return response.json();
+      })));
+    if (!isPageActive || extensionsController !== controller || controller.signal.aborted) return;
+    registeredTriggers.value = triggers;
+    registeredActions.value = actions;
+    extensionsLoaded.value = true;
+    editor.value?.actions.forEach((action, index) => {
+      if (action.type === 'Extension') loadActionOptionsForAction(index);
+    });
+  } catch (cause) {
+    if (isPageActive && extensionsController === controller && !controller.signal.aborted && !isAbortError(cause))
+      extensionsError.value = userErrorMessage(cause, '无法读取插件扩展，请重试');
+  } finally {
+    if (extensionsController === controller) {
+      extensionsLoading.value = false;
+      extensionsController = undefined;
+    }
   }
 }
 const extensionPlugins = computed(() => [
@@ -566,6 +639,7 @@ async function openVariableHelp() {
 }
 onMounted(() => {
   void loadTasks();
+  void loadExtensions();
 });
 watch(variableHelpOpen, (open) => {
   if (!open) variableHelpController?.abort();
@@ -580,16 +654,21 @@ watch(safeModeEnabled, (enabled) => {
 onBeforeUnmount(() => {
   isPageActive = false;
   loadController?.abort();
+  extensionsController?.abort();
   variableHelpController?.abort();
   for (const controller of requestControllers) controller.abort();
   for (const controller of pendingOperations.values()) controller.abort();
   pendingOperations.clear();
   pendingActionOptions.clear();
+  pendingActionResources.clear();
 });
 </script>
 <template>
   <section class="tasks-view">
-    <p v-if="pageError" class="status-message error">{{ pageError }}</p>
+    <p v-if="pageError || extensionsError" class="status-message error">
+      {{ pageError || extensionsError }}
+      <button v-if="!pageError && extensionsError" class="button button-secondary" type="button" :disabled="extensionsLoading" @click="loadExtensions">重试</button>
+    </p>
     <section class="program-panel task-list">
       <div class="program-panel-header">
         <div class="program-actions">
@@ -723,6 +802,7 @@ onBeforeUnmount(() => {
               <span>插件 *</span>
               <AppSelect
                 :model-value="editor.trigger.pluginId || ''"
+                :disabled="!extensionsLoaded"
                 :invalid="invalidTriggerField === 'pluginId'"
                 :options="[
                   { value: '', label: '请选择插件' },
@@ -732,7 +812,7 @@ onBeforeUnmount(() => {
                   })),
                   ...(editor.trigger.pluginId &&
                   !extensionPlugins.some((item) => item.pluginId === editor?.trigger.pluginId)
-                    ? [{ value: editor.trigger.pluginId, label: `${editor.trigger.pluginId}${'（不可用）'}` }]
+                    ? [{ value: editor.trigger.pluginId, label: `${editor.trigger.pluginId}${extensionsLoaded ? '（不可用）' : ''}` }]
                     : []),
                 ]"
                 @change="selectExtensionPlugin($event)"
@@ -742,13 +822,14 @@ onBeforeUnmount(() => {
               <span>触发条件 *</span>
               <AppSelect
                 :model-value="editor.trigger.triggerId || ''"
+                :disabled="!extensionsLoaded"
                 :invalid="invalidTriggerField === 'triggerId'"
                 :options="[
                   { value: '', label: '请选择触发条件' },
                   ...extensionTriggers.map((item) => ({ value: item.triggerId, label: item.triggerName })),
                   ...(editor.trigger.triggerId &&
                   !extensionTriggers.some((item) => item.triggerId === editor?.trigger.triggerId)
-                    ? [{ value: editor.trigger.triggerId, label: `${editor.trigger.triggerId}${'（不可用）'}` }]
+                    ? [{ value: editor.trigger.triggerId, label: `${editor.trigger.triggerId}${extensionsLoaded ? '（不可用）' : ''}` }]
                     : []),
                 ]"
                 @change="selectExtensionTrigger($event)"
@@ -853,6 +934,9 @@ onBeforeUnmount(() => {
               :tasks="tasks"
               :tags="tags"
               :registered-actions="registeredActions"
+              :extensions-loaded="extensionsLoaded"
+              :resource-state="actionResource(action.type)"
+              :load-resource="() => loadActionResource(action.type)"
               :channel-options="channelOptions"
               :error="actionErrors.get(action)?.message"
               :invalid-field="invalidActionField(action)"

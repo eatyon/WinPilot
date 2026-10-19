@@ -13,7 +13,10 @@ const props = defineProps<{
   tasks: readonly Pick<Task, 'name'>[];
   tags: readonly { name: string }[];
   registeredActions: readonly RegisteredAction[];
+  extensionsLoaded: boolean;
   channelOptions: readonly ActionOption[];
+  resourceState?: { loading: boolean; error: string };
+  loadResource: () => Promise<boolean>;
   error?: string;
   invalidField?: string;
   loadOptions: (parameterKey: string) => Promise<boolean>;
@@ -43,6 +46,7 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
       <span>插件 *</span>
       <AppSelect
         v-model="action.pluginId"
+        :disabled="!extensionsLoaded"
         :invalid="invalidField === 'pluginId'"
         :options="[
           { value: '', label: '请选择插件' },
@@ -51,7 +55,7 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
             label: plugin.pluginDisplayName,
           })),
           ...(action.pluginId && !actionPlugins.some((item) => item.pluginId === action.pluginId)
-            ? [{ value: action.pluginId, label: `${action.pluginId}${'（不可用）'}` }]
+            ? [{ value: action.pluginId, label: `${action.pluginId}${extensionsLoaded ? '（不可用）' : ''}` }]
             : []),
         ]"
         @change="
@@ -64,6 +68,7 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
       <span>动作 *</span>
       <AppSelect
         :model-value="action.actionId || ''"
+        :disabled="!extensionsLoaded"
         :invalid="invalidField === 'actionId'"
         :options="[
           { value: '', label: '请选择动作' },
@@ -73,7 +78,7 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
           })),
           ...(action.actionId &&
           !actionDefinitions.some((item) => item.actionId === action.actionId)
-            ? [{ value: action.actionId, label: `${action.actionId}${'（不可用）'}` }]
+            ? [{ value: action.actionId, label: `${action.actionId}${extensionsLoaded ? '（不可用）' : ''}` }]
             : []),
         ]"
         @change="emit('select-extension-action', $event)"
@@ -183,6 +188,8 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
     <span>标签 *</span>
     <AppSelect
       v-model="action.tagName"
+      :before-open="loadResource"
+      :disabled="resourceState?.loading"
       :invalid="invalidField === 'tagName'"
       :options="[
         { value: '', label: '请选择标签' },
@@ -191,6 +198,8 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
           ? [{ value: action.tagName, label: action.tagName }] : []),
       ]"
     />
+    <small v-if="resourceState?.loading" class="field-hint" role="status">正在加载快捷标签…</small>
+    <small v-else-if="resourceState?.error" class="field-error" role="alert">{{ resourceState.error }}，可展开选择器重试</small>
   </label>
   <template v-else-if="action.type === 'TaskState'">
     <label class="field-control" data-task-field="taskName">
@@ -280,6 +289,8 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
       </span>
       <AppSelect
         v-model="action.notificationChannel"
+        :before-open="loadResource"
+        :disabled="resourceState?.loading"
         :invalid="invalidField === 'notificationChannel'"
         :options="[
           ...channelOptions,
@@ -287,6 +298,8 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
             ? [{ value: action.notificationChannel, label: action.notificationChannel }] : []),
         ]"
       />
+      <small v-if="resourceState?.loading" class="field-hint" role="status">正在加载通知渠道…</small>
+      <small v-else-if="resourceState?.error" class="field-error" role="alert">{{ resourceState.error }}，可展开选择器重试</small>
     </div>
   </template>
   <KeyboardKeyPicker v-else-if="action.type === 'Keyboard'" v-model="action.keys" data-task-field="keys" :invalid="invalidField === 'keys'" collapsible />

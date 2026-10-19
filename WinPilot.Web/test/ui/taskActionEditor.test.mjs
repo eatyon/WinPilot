@@ -90,3 +90,17 @@ test('delay keeps its action name and uses the seconds field title', () => {
   const page = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
   assert.ok(page.includes('`延迟 ${action.delaySeconds || 0} 秒`'));
 });
+
+test('tag and channel pickers preserve saved choices and retry through the page-owned resource loader', () => {
+  assert.equal([...source.matchAll(/:before-open="loadResource"/g)].length, 2);
+  assert.equal([...source.matchAll(/:disabled="resourceState\?\.loading"/g)].length, 2);
+  assert.ok(source.includes('action.tagName && !tags.some'));
+  assert.ok(source.includes('{ value: action.tagName, label: action.tagName }'));
+  assert.ok(source.includes('action.notificationChannel && !channelOptions.some'));
+  assert.ok(source.includes('{ value: action.notificationChannel, label: action.notificationChannel }'));
+  assert.equal([...source.matchAll(/v-else-if="resourceState\?\.error"/g)].length, 2);
+  const page = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  assert.ok(page.includes(':resource-state="actionResource(action.type)"'));
+  assert.ok(page.includes(':load-resource="() => loadActionResource(action.type)"'));
+  assert.ok(page.includes('void loadTasks();\n  void loadExtensions();'));
+});
