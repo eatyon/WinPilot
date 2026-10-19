@@ -16,7 +16,11 @@ public static class TaskEndpointRouteBuilderExtensions
 
     public static IEndpointRouteBuilder MapTaskEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/tasks", (TaskService tasks) => Results.Json(tasks.GetAll().Select(TaskPersistenceFile.From), JsonOptions));
+        endpoints.MapGet("/api/tasks", (TaskService tasks) => Results.Json(tasks.GetAll().Select(task =>
+        {
+            var saved = TaskPersistenceFile.From(task);
+            return new { saved.Name, saved.Enabled, saved.Trigger, saved.Actions, CronAvailable = tasks.GetCronAvailability(task) };
+        }), JsonOptions));
         endpoints.MapGet("/api/tasks/variables", (TaskVariableCatalog variables) => Results.Ok(variables.GetAll()));
         endpoints.MapGet("/api/tasks/cron/preview", (string? expression) =>
         {

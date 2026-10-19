@@ -85,6 +85,7 @@ type Action = {
 type Task = {
   name: string;
   enabled: boolean;
+  cronAvailable?: boolean;
   trigger: Trigger;
   actions: Action[];
 };
@@ -351,9 +352,9 @@ const createAction = (): Action => ({
   parameters: {},
   continueOnFailure: false,
 });
-const triggerLabel = (trigger: Trigger) =>
+const triggerLabel = (trigger: Trigger, cronAvailable?: boolean) =>
   trigger.type === 'Cron'
-    ? `按计划执行 · ${trigger.cron || '未设置'}`
+    ? `Cron 计划 · ${trigger.cron || '未设置'}${cronAvailable === false ? '（不可用）' : ''}`
     : trigger.type === 'WinPilotStartup'
       ? 'WinPilot 启动时'
       : trigger.type === 'Extension'
@@ -390,6 +391,7 @@ function hasUnavailableTrigger(task: Task) {
 }
 function taskWarningText(task: Task) {
   const warnings: string[] = [];
+  if (task.trigger.type === 'Cron' && task.cronAvailable === false) warnings.push('Cron 表达式没有后续执行时间');
   if (hasUnavailableTrigger(task)) warnings.push('插件触发条件不可用');
   if (task.actions.some(action => {
     if (action.type !== 'Extension') return false;
@@ -1233,7 +1235,7 @@ onBeforeUnmount(() => {
           <AppIcon name="alert-circle" />
         </span>
       </template>
-      <p>{{ triggerLabel(detailTarget.trigger) }}</p>
+      <p>{{ triggerLabel(detailTarget.trigger, detailTarget.cronAvailable) }}</p>
       <p v-for="(action, index) in detailTarget.actions" :key="index">
         {{ index + 1 }}. {{ actionLabel(action, index, detailTarget.actions.length) }}
       </p>

@@ -4,15 +4,16 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cronos;
+using Microsoft.Win32;
 using WinPilot.Core;
+using WinPilot.Core.Notifications;
 using WinPilot.Core.Programs;
 using WinPilot.Core.Tasks;
-using WinPilot.Core.Notifications;
 using WinPilot.Features.Desktop;
-using WinPilot.Features.Programs;
-using WinPilot.Features.Terminal;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Plugins;
+using WinPilot.Features.Programs;
+using WinPilot.Features.Terminal;
 using WinPilot.PluginContract;
 using WinPilot.Windows;
 
@@ -28,6 +29,7 @@ public sealed class TaskService : BackgroundService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
     private readonly PortableDataPaths paths;
     private readonly IProgramManager programs;
     private readonly ProgramTagService tags;
@@ -39,21 +41,30 @@ public sealed class TaskService : BackgroundService
     private readonly PluginTaskExtensionRegistry extensions;
     private readonly TaskVariableCatalog variableCatalog;
     private readonly ILogger<TaskService> logger;
+    private readonly TimeProvider clock;
+
     private readonly TaskCompletionSource pluginsLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object gate = new();
     private readonly Dictionary<string, WinPilotTask> tasks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TaskExecution> runningTasks = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenRegistration stoppingRegistration;
+    private CancellationToken serviceToken;
+    private bool taskServiceStarted;
+    private bool isStopping;
+
     private readonly Dictionary<string, DateTimeOffset?> nextCron = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (WinPilotTask Task, CronExpression Expression)> cronExpressions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> cronRetryStartedAt = new(StringComparer.OrdinalIgnoreCase);
+    private TimeZoneInfo cronTimeZone;
+    private CronSchedulerRun? cronSchedulerRun;
+    private bool cronReady;
+
     private readonly Dictionary<int, string> processPaths = [];
     private bool processDetectionEnabled;
     private bool processListenerStarted;
     private long processListenerGeneration;
-    private bool taskServiceStarted;
-    private bool isStopping;
-    private CancellationToken serviceToken;
 
-    public TaskService(PortableDataPaths paths, IProgramManager programs, ProgramTagService tags, KeyboardInputService keyboard, TerminalSessionManager terminals, DesktopScreenshotService screenshots, INotificationService notifications, WindowsProcessEventListener processEvents, ILogger<TaskService> logger, PluginTaskExtensionRegistry? extensions = null, TaskVariableCatalog? variableCatalog = null, IHostApplicationLifetime? lifetime = null)
+    public TaskService(PortableDataPaths paths, IProgramManager programs, ProgramTagService tags, KeyboardInputService keyboard, TerminalSessionManager terminals, DesktopScreenshotService screenshots, INotificationService notifications, WindowsProcessEventListener processEvents, ILogger<TaskService> logger, PluginTaskExtensionRegistry? extensions = null, TaskVariableCatalog? variableCatalog = null, IHostApplicationLifetime? lifetime = null, TimeProvider? clock = null)
     {
         this.paths = paths;
         this.programs = programs;
@@ -66,6 +77,8 @@ public sealed class TaskService : BackgroundService
         this.extensions = extensions ?? new(new(), new(), new());
         this.variableCatalog = variableCatalog ?? new(this.extensions);
         this.logger = logger;
+        this.clock = clock ?? TimeProvider.System;
+        cronTimeZone = this.clock.LocalTimeZone;
         this.processEvents.Changed += ProcessEventsChanged;
         this.extensions.Triggered += ExtensionTriggered;
         Load();
@@ -78,10 +91,21 @@ public sealed class TaskService : BackgroundService
             return tasks.Values.OrderBy(task => task.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
     }
 
+    internal bool? GetCronAvailability(WinPilotTask task)
+    {
+        lock (gate)
+        {
+            if (task.Trigger.Type != TaskTriggerType.Cron ||
+                !tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task)) return null;
+            if (nextCron.TryGetValue(task.Name, out var due) && due is null) return false;
+            return GetNextCronOccurrence(task, clock.GetUtcNow(), clock.LocalTimeZone) is not null;
+        }
+    }
+
     public WinPilotTask Create(WinPilotTask task)
     {
         task = Normalize(task);
-        Validate(task);
+        var cron = Validate(task);
         ValidateNotificationActions(task);
         lock (gate)
         {
@@ -91,8 +115,10 @@ public sealed class TaskService : BackgroundService
                 throw new ResourceNameConflictException("同名任务文件已存在");
             Save(task, false);
             tasks[task.Name] = task;
-            ClearRuntimeState(task.Name);
+            ClearCronState(task.Name);
+            if (cron is not null) cronExpressions[task.Name] = (task, cron);
             UpdateProcessDetectionState();
+            RefreshCronSchedule();
         }
         return task;
     }
@@ -100,7 +126,7 @@ public sealed class TaskService : BackgroundService
     public WinPilotTask Update(string name, WinPilotTask task)
     {
         task = Normalize(task);
-        Validate(task);
+        var cron = Validate(task);
         ValidateNotificationActions(task);
         TaskExecution? cancellation = null;
         try
@@ -127,10 +153,12 @@ public sealed class TaskService : BackgroundService
                 if (!task.Enabled || !name.Equals(task.Name, StringComparison.OrdinalIgnoreCase))
                     cancellation = RequestTaskCancellation(name);
                 tasks.Remove(name);
-                ClearRuntimeState(name);
+                ClearCronState(name);
                 tasks[task.Name] = task;
-                ClearRuntimeState(task.Name);
+                ClearCronState(task.Name);
+                if (cron is not null) cronExpressions[task.Name] = (task, cron);
                 UpdateProcessDetectionState();
+                RefreshCronSchedule();
             }
             return task;
         }
@@ -147,6 +175,7 @@ public sealed class TaskService : BackgroundService
                 var task = tasks.TryGetValue(name, out var value) ? value : throw new FileNotFoundException("任务不存在");
                 if (task.Enabled == enabled)
                     return task;
+                var cron = cronExpressions.TryGetValue(name, out var parsed) && ReferenceEquals(parsed.Task, task) ? parsed.Expression : null;
                 task = task with
                 {
                     Enabled = enabled
@@ -155,13 +184,16 @@ public sealed class TaskService : BackgroundService
                 if (!enabled)
                     cancellation = RequestTaskCancellation(name);
                 tasks[name] = task;
-                ClearRuntimeState(name);
+                ClearCronState(name);
+                if (cron is not null) cronExpressions[name] = (task, cron);
                 UpdateProcessDetectionState();
+                RefreshCronSchedule();
                 return task;
             }
         }
         finally { CancelExecution(name, cancellation); }
     }
+
 
     public void Delete(string name)
     {
@@ -176,8 +208,9 @@ public sealed class TaskService : BackgroundService
                 File.Delete(file);
                 tasks.Remove(name);
                 cancellation = RequestTaskCancellation(name);
-                ClearRuntimeState(name);
+                ClearCronState(name);
                 UpdateProcessDetectionState();
+                RefreshCronSchedule();
             }
         }
         finally { CancelExecution(name, cancellation); }
@@ -208,25 +241,27 @@ public sealed class TaskService : BackgroundService
 
         logger.LogInformation("任务服务已启动");
         await pluginsLoaded.Task.WaitAsync(token);
-        await Task.Delay(500, token);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), clock, token);
         foreach (var task in GetAll().Where(task => task.Enabled && task.Trigger.Type == TaskTriggerType.WinPilotStartup))
             Signal(task, "WinPilot 启动", token);
-        while (!token.IsCancellationRequested)
+        lock (gate)
         {
-            try
+            cronReady = true;
+            RefreshCronSchedule();
+        }
+        try { await Task.Delay(Timeout.Infinite, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        finally
+        {
+            Task retiring;
+            lock (gate)
             {
-                PollCron(token);
+                cronReady = false;
+                cronRetryStartedAt.Clear();
+                cronSchedulerRun?.Changed.TrySetResult();
+                retiring = cronSchedulerRun?.Execution ?? Task.CompletedTask;
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception exception)
-            {
-                logger.LogError(exception, "任务监听失败");
-            }
-            try { await Task.Delay(1000, token); }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
+            await retiring.ConfigureAwait(false);
         }
     }
 
@@ -236,8 +271,10 @@ public sealed class TaskService : BackgroundService
         lock (gate)
         {
             isStopping = true;
+            cronRetryStartedAt.Clear();
             taskServiceStarted = false;
             processListenerGeneration++;
+            cronSchedulerRun?.Changed.TrySetResult();
             cancellations = RequestAllCancellations();
         }
         CancelExecutions(cancellations);
@@ -252,8 +289,10 @@ public sealed class TaskService : BackgroundService
             lock (gate)
             {
                 isStopping = true;
+                cronRetryStartedAt.Clear();
                 taskServiceStarted = false;
                 processListenerGeneration++;
+                cronSchedulerRun?.Changed.TrySetResult();
                 cancellations = RequestAllCancellations();
                 StopProcessListener();
                 processPaths.Clear();
@@ -284,8 +323,10 @@ public sealed class TaskService : BackgroundService
             lock (gate)
             {
                 isStopping = true;
+                cronRetryStartedAt.Clear();
                 taskServiceStarted = false;
                 processListenerGeneration++;
+                cronSchedulerRun?.Changed.TrySetResult();
                 cancellations = RequestAllCancellations();
                 StopProcessListener();
                 processPaths.Clear();
@@ -295,39 +336,343 @@ public sealed class TaskService : BackgroundService
         base.Dispose();
     }
 
-    private void PollCron(CancellationToken token) => PollCron(DateTimeOffset.Now, token);
-
-    internal void PollCron(DateTimeOffset now, CancellationToken token)
+    private void RefreshCronSchedule()
     {
-        foreach (var task in GetAll().Where(task => task.Enabled && task.Trigger.Type == TaskTriggerType.Cron))
+        if (!cronReady || isStopping) return;
+        if (cronSchedulerRun is not null)
+        {
+            cronSchedulerRun.Changed.TrySetResult();
+            return;
+        }
+        if (!tasks.Values.Any(task => task.Enabled && task.Trigger.Type == TaskTriggerType.Cron &&
+            (!nextCron.TryGetValue(task.Name, out var due) || due is not null))) return;
+        var run = new CronSchedulerRun();
+        cronSchedulerRun = run;
+        run.Execution = Task.Run(() => RunCronScheduleAsync(run));
+        _ = run.Execution.ContinueWith(completed => logger.LogError(completed.Exception, "Cron 调度收尾失败"),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    internal void NotifyCronClockChanged()
+    {
+        if (ReferenceEquals(clock, TimeProvider.System)) TimeZoneInfo.ClearCachedData();
+        lock (gate) cronSchedulerRun?.Changed.TrySetResult();
+    }
+
+    private async Task RunCronScheduleAsync(CronSchedulerRun run)
+    {
+        EventHandler timeChanged = (_, _) => NotifyCronClockChanged();
+        PowerModeChangedEventHandler powerChanged = (_, args) =>
+        {
+            if (args.Mode == PowerModes.Resume) NotifyCronClockChanged();
+        };
+        var timeSubscribed = false;
+        var powerSubscribed = false;
+        try
+        {
+            if (ReferenceEquals(clock, TimeProvider.System))
+            {
+                SystemEvents.TimeChanged += timeChanged;
+                timeSubscribed = true;
+                SystemEvents.PowerModeChanged += powerChanged;
+                powerSubscribed = true;
+                TimeZoneInfo.ClearCachedData();
+            }
+            while (true)
+            {
+                Task changed;
+                lock (gate)
+                {
+                    if (!cronReady || isStopping || serviceToken.IsCancellationRequested || !ReferenceEquals(cronSchedulerRun, run)) return;
+                    if (run.Changed.Task.IsCompleted) run.Changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    changed = run.Changed.Task;
+                }
+                try
+                {
+                    ProcessDueCronTasks(clock.GetUtcNow(), serviceToken);
+                    TimeSpan delay;
+                    lock (gate)
+                    {
+                        if (!cronReady || isStopping || serviceToken.IsCancellationRequested) return;
+                        if (changed.IsCompleted) continue;
+                        DateTimeOffset? nearest = null;
+                        var unresolved = false;
+                        foreach (var task in tasks.Values)
+                        {
+                            if (!task.Enabled || task.Trigger.Type != TaskTriggerType.Cron) continue;
+                            if (cronRetryStartedAt.TryGetValue(task.Name, out var startedAt))
+                            {
+                                var remaining = GetCronRetryRemaining(startedAt);
+                                var retry = clock.GetUtcNow() + (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                                if (nearest is null || retry < nearest) nearest = retry;
+                                continue;
+                            }
+                            if (!nextCron.TryGetValue(task.Name, out var due)) unresolved = true;
+                            else if (due is not null && (nearest is null || due < nearest)) nearest = due;
+                        }
+                        if (unresolved)
+                        {
+                            var retry = clock.GetUtcNow().AddSeconds(1);
+                            if (nearest is null || retry < nearest) nearest = retry;
+                        }
+                        if (nearest is null)
+                            return;
+                        delay = nearest.Value - clock.GetUtcNow();
+                    }
+                    if (delay <= TimeSpan.Zero) continue;
+                    delay = TimeSpan.FromMilliseconds(Math.Clamp(Math.Ceiling(delay.TotalMilliseconds), 1d, uint.MaxValue - 1d));
+                    using var waiting = CancellationTokenSource.CreateLinkedTokenSource(serviceToken);
+                    try { await Task.WhenAny(changed, Task.Delay(delay, clock, waiting.Token)).ConfigureAwait(false); }
+                    finally { await waiting.CancelAsync().ConfigureAwait(false); }
+                }
+                catch (OperationCanceledException) when (serviceToken.IsCancellationRequested) { return; }
+                catch (Exception exception)
+                {
+                    logger.LogError(exception, "任务监听失败");
+                    await Task.Delay(TimeSpan.FromSeconds(1), clock, serviceToken).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (serviceToken.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Cron 调度异常结束");
+            try { await Task.Delay(TimeSpan.FromSeconds(1), clock, serviceToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (serviceToken.IsCancellationRequested) { }
+        }
+        finally
+        {
+            try
+            {
+                try { if (powerSubscribed) SystemEvents.PowerModeChanged -= powerChanged; }
+                finally { if (timeSubscribed) SystemEvents.TimeChanged -= timeChanged; }
+            }
+            finally
+            {
+                lock (gate)
+                {
+                    if (ReferenceEquals(cronSchedulerRun, run))
+                    {
+                        cronSchedulerRun = null;
+                        RefreshCronSchedule();
+                    }
+                }
+            }
+        }
+    }
+
+    internal void ProcessDueCronTasks(DateTimeOffset now, CancellationToken token)
+    {
+        WinPilotTask[] scheduledTasks;
+        lock (gate)
+        {
+            token.ThrowIfCancellationRequested();
+            if (isStopping) return;
+            var timeZone = clock.LocalTimeZone;
+            if (!cronTimeZone.Equals(timeZone))
+            {
+                foreach (var name in nextCron.Where(pair => pair.Value is not null).Select(pair => pair.Key).ToArray())
+                    nextCron.Remove(name);
+                cronTimeZone = timeZone;
+            }
+            scheduledTasks = tasks.Values.Where(task => task.Enabled && task.Trigger.Type == TaskTriggerType.Cron)
+                .OrderBy(task => task.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+        }
+        foreach (var task in scheduledTasks)
         {
             token.ThrowIfCancellationRequested();
             try
             {
-                var stopped = false;
-                var dueNow = false;
+                var exhausted = false;
+                DateTimeOffset? scheduledAt = null;
                 lock (gate)
                 {
-                    if (!tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task)) continue;
-                    if (!nextCron.TryGetValue(task.Name, out var due))
+                    if (isStopping || !tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task)) continue;
+                    token.ThrowIfCancellationRequested();
+                    if (cronRetryStartedAt.TryGetValue(task.Name, out var startedAt) && GetCronRetryRemaining(startedAt) > TimeSpan.Zero) continue;
+                    try
                     {
-                        nextCron[task.Name] = due = GetNext(task.Trigger.Cron, now);
-                        stopped = due is null;
+                        if (!nextCron.TryGetValue(task.Name, out var due))
+                        {
+                            nextCron[task.Name] = due = GetNextCronOccurrence(task, now);
+                            exhausted = due is null;
+                        }
+                        if (due is not null && now >= due.Value)
+                        {
+                            nextCron[task.Name] = GetNextCronOccurrence(task, now);
+                            exhausted = nextCron[task.Name] is null;
+                            scheduledAt = due.Value;
+                        }
+                        cronRetryStartedAt.Remove(task.Name);
                     }
-                    if (due is not null && now >= due.Value)
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch
                     {
-                        nextCron[task.Name] = GetNext(task.Trigger.Cron, now.AddSeconds(1));
-                        stopped = nextCron[task.Name] is null;
-                        dueNow = true;
+                        cronRetryStartedAt[task.Name] = clock.GetTimestamp();
+                        throw;
                     }
                 }
-                if (stopped) logger.LogWarning("任务「{Name}」Cron 表达式没有下一次执行时间，已停止该任务调度：{Cron}", task.Name, task.Trigger.Cron);
-                if (dueNow) Signal(task, $"定时 {task.Trigger.Cron}", token);
+                if (exhausted)
+                    logger.LogWarning("任务「{Name}」Cron 表达式没有后续执行时间，已停止该任务调度：{Cron}", task.Name, task.Trigger.Cron);
+                if (scheduledAt is not null) _ = RunAsync(task, $"定时 {task.Trigger.Cron}", token, null, dispatch: true, cronScheduledAt: scheduledAt);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception exception) { logger.LogError(exception, "任务「{Name}」Cron 调度失败，表达式：{Cron}", task.Name, task.Trigger.Cron); }
         }
     }
+
+    private DateTimeOffset? GetNextCronOccurrence(WinPilotTask task, DateTimeOffset now, TimeZoneInfo? timeZone = null)
+    {
+        if (!cronExpressions.TryGetValue(task.Name, out var parsed) || !ReferenceEquals(parsed.Task, task))
+        {
+            parsed = (task, TaskCronExpression.Parse(task.Trigger.Cron ?? throw new InvalidOperationException("Cron 表达式不能为空")));
+            cronExpressions[task.Name] = parsed;
+        }
+        return parsed.Expression.GetNextOccurrence(now, timeZone ?? cronTimeZone);
+    }
+
+    private TimeSpan GetCronRetryRemaining(long startedAt) => TimeSpan.FromSeconds(1) - clock.GetElapsedTime(startedAt);
+
+    private void ClearCronState(string name)
+    {
+        nextCron.Remove(name);
+        cronExpressions.Remove(name);
+        cronRetryStartedAt.Remove(name);
+    }
+
+    private void ProcessEventsChanged(object? sender, WindowsProcessEvent processEvent) => ProcessEvent(processEvent, GetProcessPath);
+
+    internal void ProcessEvent(WindowsProcessEvent processEvent, Func<int, string> resolveProcessPath)
+    {
+        try
+        {
+            IReadOnlyList<WinPilotTask> processTasks;
+            IReadOnlyList<WinPilotTask> allProcessTasks;
+            long generation;
+            var expectedType = processEvent.Type == WindowsProcessEventType.Started ? TaskTriggerType.ProcessStarted : TaskTriggerType.ProcessExited;
+            lock (gate)
+            {
+                if (isStopping || !taskServiceStarted || !processDetectionEnabled || !processListenerStarted)
+                    return;
+                generation = processListenerGeneration;
+                allProcessTasks = tasks.Values.Where(task => task.Enabled && IsProcessTrigger(task.Trigger)).ToArray();
+                processTasks = allProcessTasks.Where(task => task.Trigger.Type == expectedType).ToArray();
+            }
+
+            var cachePaths = allProcessTasks.SelectMany(task => task.Trigger.ProcessPaths ?? []).Where(path => Path.GetFileNameWithoutExtension(path).Equals(processEvent.ProcessName, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var processPath = "";
+            if (processEvent.Type == WindowsProcessEventType.Started && cachePaths.Length > 0)
+                processPath = resolveProcessPath(processEvent.ProcessId);
+            lock (gate)
+            {
+                if (isStopping || !taskServiceStarted || !processDetectionEnabled || !processListenerStarted
+                    || generation != processListenerGeneration)
+                    return;
+                if (processEvent.Type == WindowsProcessEventType.Started && cachePaths.Length > 0)
+                    processPaths[processEvent.ProcessId] = processPath;
+                if (processEvent.Type == WindowsProcessEventType.Exited && processPaths.Remove(processEvent.ProcessId, out var known))
+                    processPath = known;
+            }
+
+            foreach (var task in processTasks)
+            {
+                if (!Matches(task.Trigger.ProcessPaths, processEvent.ProcessName, processPath))
+                    continue;
+                Signal(task, expectedType == TaskTriggerType.ProcessStarted ? "当程序启动时" : "当程序关闭时", serviceToken);
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "处理进程事件失败，进程 ID：{ProcessId}，进程名称：{ProcessName}，事件类型：{Type}", processEvent.ProcessId, processEvent.ProcessName, processEvent.Type);
+        }
+    }
+
+    private void UpdateProcessDetectionState()
+    {
+        var enabled = tasks.Values.Any(task => task.Enabled && IsProcessTrigger(task.Trigger));
+        if (enabled == processDetectionEnabled)
+        {
+            if (enabled && taskServiceStarted)
+                PrimeProcessPaths();
+            return;
+        }
+
+        processDetectionEnabled = enabled;
+        processListenerGeneration++;
+        processPaths.Clear();
+        if (!taskServiceStarted)
+            return;
+        if (enabled)
+            StartProcessListenerIfNeeded();
+        else
+            StopProcessListener();
+    }
+
+    private void StartProcessListenerIfNeeded()
+    {
+        if (!processDetectionEnabled || processListenerStarted)
+            return;
+        if (!processEvents.Start())
+            return;
+        processListenerGeneration++;
+        processListenerStarted = true;
+        PrimeProcessPaths();
+        logger.LogInformation("任务触发所需的 Windows 进程监听已启动");
+    }
+
+    private void StopProcessListener()
+    {
+        if (!processListenerStarted)
+            return;
+        processListenerGeneration++;
+        processEvents.Stop();
+        processListenerStarted = false;
+        processPaths.Clear();
+        logger.LogInformation("任务触发所需的 Windows 进程监听已停止");
+    }
+
+    private void PrimeProcessPaths()
+    {
+        var names = tasks.Values.Where(task => task.Enabled && IsProcessTrigger(task.Trigger)).SelectMany(task => task.Trigger.ProcessPaths ?? []).Select(Path.GetFileNameWithoutExtension).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var name in names)
+            foreach (var process in Process.GetProcessesByName(name))
+                try
+                {
+                    var path = SafePath(process);
+                    if (!string.IsNullOrWhiteSpace(path))
+                        processPaths[process.Id] = path;
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+    }
+
+    private static bool IsProcessTrigger(TaskTrigger trigger) => trigger.Type is TaskTriggerType.ProcessStarted or TaskTriggerType.ProcessExited;
+
+    private static string GetProcessPath(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return SafePath(process);
+        }
+        catch { return ""; }
+    }
+
+    private static string SafePath(Process process)
+    {
+        try
+        {
+            return Path.GetFullPath(process.MainModule?.FileName ?? "");
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    internal static bool Matches(IReadOnlyList<string>? paths, string name, string path) => paths?.Any(expected => Path.GetFileNameWithoutExtension(expected).Equals(name, StringComparison.OrdinalIgnoreCase) && expected.Equals(path, StringComparison.OrdinalIgnoreCase)) == true;
 
     private void Signal(WinPilotTask task, string reason, CancellationToken token) => _ = RunAsync(task, reason, token, null);
 
@@ -350,19 +695,38 @@ public sealed class TaskService : BackgroundService
 
     private static bool MatchesTriggerParameters(IReadOnlyDictionary<string, object?>? expected, IReadOnlyDictionary<string, object?> actual) => expected is null || expected.All(item => actual.TryGetValue(item.Key, out var value) && string.Equals(Convert.ToString(item.Value), Convert.ToString(value), StringComparison.Ordinal));
 
-    private Task RunAsync(WinPilotTask task, string reason, CancellationToken token, PluginTaskTriggerFired? fired)
+    private Task RunAsync(WinPilotTask task, string reason, CancellationToken token, PluginTaskTriggerFired? fired, bool dispatch = false, DateTimeOffset? cronScheduledAt = null)
     {
-        TaskExecution instance;
+        TaskExecution? instance = null;
+        var reportSkipped = false;
+        var canReportSkipped = cronScheduledAt is not null && logger.IsEnabled(LogLevel.Debug);
         lock (gate)
         {
             if (isStopping || token.IsCancellationRequested ||
-                !tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task) ||
-                runningTasks.ContainsKey(task.Name))
+                !tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task))
                 return Task.CompletedTask;
-            instance = new(CancellationTokenSource.CreateLinkedTokenSource(token));
-            runningTasks.Add(task.Name, instance);
+            if (runningTasks.TryGetValue(task.Name, out var running))
+            {
+                if (canReportSkipped && !running.CronSkipReported)
+                {
+                    running.CronSkipReported = true;
+                    reportSkipped = true;
+                }
+            }
+            else
+            {
+                instance = new(CancellationTokenSource.CreateLinkedTokenSource(token));
+                runningTasks.Add(task.Name, instance);
+            }
         }
-        instance.Started.TrySetResult(ExecuteTaskAsync(task, reason, fired, instance));
+        if (instance is null)
+        {
+            if (reportSkipped) logger.LogDebug("任务「{Name}」仍在运行，已跳过计划时间 {ScheduledAt:O} 的 Cron 触发；本次执行期间不再重复提示", task.Name, cronScheduledAt);
+            return Task.CompletedTask;
+        }
+        instance.Started.TrySetResult(dispatch
+            ? Task.Run(() => ExecuteTaskAsync(task, reason, fired, instance))
+            : ExecuteTaskAsync(task, reason, fired, instance));
         _ = instance.Execution.ContinueWith(completed => logger.LogError(completed.Exception, "任务「{Name}」执行异常结束", task.Name),
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return instance.Execution;
@@ -462,6 +826,164 @@ public sealed class TaskService : BackgroundService
                 await ExecuteExtension(action, context);
                 break;
         }
+    }
+
+    private string DescribeAction(TaskAction action) => action.Type switch
+    {
+        TaskActionType.StartProgram => $"启动程序「{action.ProgramPath}」",
+        TaskActionType.StartTag => $"启动快捷标签「{action.TagName}」",
+        TaskActionType.CloseProcess => $"{(action.Force ? "强制关闭" : "关闭")}进程「{action.ProcessName}」",
+        TaskActionType.Delay => $"延迟 {action.DelaySeconds} 秒",
+        TaskActionType.Keyboard => $"发送按键「{string.Join(" + ", action.Keys ?? [])}」",
+        TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
+        TaskActionType.SendNotification => $"发送「{(string.IsNullOrWhiteSpace(action.NotificationChannel) ? NotificationChannelCatalog.EnabledDisplayName : NotificationChannelCatalog.GetDisplayName(action.NotificationChannel))}」通知",
+        TaskActionType.Extension when action.PluginId is not null && action.ActionId is not null
+            && extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition) => $"插件扩展「{definition.PluginDisplayName}」",
+        TaskActionType.Extension => $"插件扩展「{action.PluginId}」",
+        _ => action.Type.ToString()
+    };
+
+    private int[] GetCloseProcessIds(string? name, bool currentUserOnly)
+    {
+        var processName = Path.GetFileNameWithoutExtension(name ?? "");
+        if (currentUserOnly)
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return programs.GetRunningPrograms(identity.Name)
+                .Where(program => string.Equals(Path.GetFileNameWithoutExtension(program.Name), processName, StringComparison.OrdinalIgnoreCase))
+                .Select(program => program.ProcessId).ToArray();
+        }
+        var processes = Process.GetProcessesByName(processName);
+        try { return processes.Select(process => process.Id).ToArray(); }
+        finally
+        {
+            foreach (var process in processes) process.Dispose();
+        }
+    }
+
+    private TaskExecution? RequestTaskCancellation(string name)
+    {
+        return runningTasks.TryGetValue(name, out var instance) && instance.TryRequestCancellation() ? instance : null;
+    }
+
+    private KeyValuePair<string, TaskExecution>[] RequestAllCancellations() =>
+        runningTasks.Where(task => task.Value.TryRequestCancellation()).ToArray();
+
+    private void CancelExecution(string name, TaskExecution? instance)
+    {
+        if (instance is null) return;
+        try { instance.Cancellation.Cancel(); }
+        catch (AggregateException exception) { logger.LogWarning(exception, "取消任务「{Name}」时，取消回调失败", name); }
+        finally
+        {
+            CancellationTokenSource? completed;
+            lock (gate) completed = instance.CompleteCancellation();
+            completed?.Dispose();
+        }
+    }
+
+    private void CancelExecutions(KeyValuePair<string, TaskExecution>[] cancellations)
+    {
+        foreach (var task in cancellations)
+            CancelExecution(task.Key, task.Value);
+    }
+
+    private async Task ExecuteExtension(TaskAction action, PluginTaskRunContext context)
+    {
+        if (string.IsNullOrWhiteSpace(action.PluginId) || string.IsNullOrWhiteSpace(action.ActionId) || !extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition))
+            throw new InvalidOperationException("扩展动作不可用");
+        var parameters = new Dictionary<string, object?>(action.Parameters ?? new Dictionary<string, object?>());
+        var schema = definition.Parameters;
+        if (definition.OptionsResolver is not null)
+        {
+            var current = new List<PluginActionParameterDefinition>(schema.Count);
+            foreach (var parameter in schema)
+            {
+                var options = parameter.Type is PluginActionParameterType.Select or PluginActionParameterType.MultiCheckbox ? await extensions.GetActionOptionsAsync(action.PluginId, action.ActionId, parameter.Key, context.CancellationToken) : parameter.Options;
+                current.Add(parameter with { Options = options });
+            }
+
+            schema = current;
+        }
+
+        foreach (var parameter in schema)
+            if (!parameters.ContainsKey(parameter.Key) && parameter.DefaultValue is not null)
+                parameters.Add(parameter.Key, CloneActionDefault(parameter.DefaultValue));
+        ValidateActionParameters(schema, parameters);
+        if (definition.HostActionPlan is not null)
+        {
+            foreach (var step in definition.HostActionPlan.Steps)
+                await ExecuteHostStep(step, parameters, context);
+            return;
+        }
+
+        if (definition.Handler is null)
+            throw new InvalidOperationException("扩展动作不可用");
+        var result = await definition.Handler(new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>(parameters)), context, context.CancellationToken);
+        if (result.Status != PluginTaskActionResultStatus.Success)
+            throw new InvalidOperationException(result.Error ?? result.Status.ToString());
+        if (result.HostActionPlan is not null)
+        {
+            PluginTaskActionRegistry.ValidatePlan(result.HostActionPlan);
+            foreach (var step in result.HostActionPlan.Steps)
+                await ExecuteHostStep(step, parameters, context);
+        }
+    }
+
+    private async Task ExecuteHostStep(PluginHostActionStep step, IReadOnlyDictionary<string, object?> extensionParameters, PluginTaskRunContext context)
+    {
+        var values = step.Parameters.ToDictionary(pair => pair.Key, pair => ResolvePlanValue(pair.Value, extensionParameters));
+        var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null, includeNotificationTitle: true);
+        if (step.Type == PluginHostActionType.SendNotification)
+        {
+            await SendConfiguredNotification(action, context, image);
+            return;
+        }
+
+        await Execute(action, context);
+    }
+
+    private static object? ResolvePlanValue(object? value, IReadOnlyDictionary<string, object?> parameters) => value is string text && text.StartsWith("$param.", StringComparison.Ordinal) && parameters.TryGetValue(text[7..], out var resolved) ? resolved : value;
+
+    private static object? CloneActionDefault(object? value) => value switch
+    {
+        JsonElement element => element.Clone(),
+        System.Text.Json.Nodes.JsonNode node => node.DeepClone(),
+        IEnumerable<string> items => items.ToArray(),
+        IEnumerable<object?> items => items.Select(CloneActionDefault).ToArray(),
+        Array array => array.Clone(),
+        _ => value
+    };
+
+    private static void ValidateActionParameters(IReadOnlyList<PluginActionParameterDefinition> schema, IReadOnlyDictionary<string, object?> values)
+    {
+        foreach (var value in values.Keys.Where(key => !schema.Any(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidOperationException($"未知动作参数：{value}");
+        foreach (var parameter in schema)
+        {
+            values.TryGetValue(parameter.Key, out var value);
+            var selected = ParameterStrings(value);
+            if (parameter.Required && (value is null || (parameter.Type == PluginActionParameterType.MultiCheckbox ? selected.Length == 0 : string.IsNullOrWhiteSpace(Convert.ToString(value)))))
+                throw new InvalidOperationException($"缺少动作参数：{parameter.Key}");
+            if (value is not null && parameter.Type == PluginActionParameterType.Number && !decimal.TryParse(Convert.ToString(value), out _))
+                throw new InvalidOperationException($"动作参数类型无效：{parameter.Key}");
+            if (value is not null && parameter.Type == PluginActionParameterType.Select && parameter.Options?.All(option => !option.Value.Equals(Convert.ToString(value), StringComparison.Ordinal)) == true)
+                throw new InvalidOperationException($"动作参数选项无效：{parameter.Key}");
+            if (value is not null && parameter.Type == PluginActionParameterType.MultiCheckbox)
+            {
+                var empty = value is JsonElement { ValueKind: JsonValueKind.Array } array
+                    ? array.GetArrayLength() == 0 : value is IEnumerable<object?> items && !items.Any();
+                if (selected.Length == 0 && !empty || selected.Any(item => parameter.Options?.All(option => !option.Value.Equals(item, StringComparison.Ordinal)) != false))
+                    throw new InvalidOperationException($"动作参数选项无效：{parameter.Key}");
+            }
+        }
+    }
+
+    private static string[] ParameterStrings(object? value)
+    {
+        if (value is JsonElement element && element.ValueKind == JsonValueKind.Array)
+            return element.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray();
+        return value is IEnumerable<object?> items ? items.Select(Convert.ToString).Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray() : [];
     }
 
     private async Task SendConfiguredNotification(TaskAction action, PluginTaskRunContext context, PluginImageContent? pluginImage = null)
@@ -591,174 +1113,29 @@ public sealed class TaskService : BackgroundService
         return VariableResolver.Resolve(template, notificationContext);
     }
 
-    private string DescribeAction(TaskAction action) => action.Type switch
+    private void ValidateNotificationActions(WinPilotTask task)
     {
-        TaskActionType.StartProgram => $"启动程序「{action.ProgramPath}」",
-        TaskActionType.StartTag => $"启动快捷标签「{action.TagName}」",
-        TaskActionType.CloseProcess => $"{(action.Force ? "强制关闭" : "关闭")}进程「{action.ProcessName}」",
-        TaskActionType.Delay => $"延迟 {action.DelaySeconds} 秒",
-        TaskActionType.Keyboard => $"发送按键「{string.Join(" + ", action.Keys ?? [])}」",
-        TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
-        TaskActionType.SendNotification => $"发送「{(string.IsNullOrWhiteSpace(action.NotificationChannel) ? NotificationChannelCatalog.EnabledDisplayName : NotificationChannelCatalog.GetDisplayName(action.NotificationChannel))}」通知",
-        TaskActionType.Extension when action.PluginId is not null && action.ActionId is not null
-            && extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition) => $"插件扩展「{definition.PluginDisplayName}」",
-        TaskActionType.Extension => $"插件扩展「{action.PluginId}」",
-        _ => action.Type.ToString()
-    };
-
-    private void ProcessEventsChanged(object? sender, WindowsProcessEvent processEvent) => ProcessEvent(processEvent, GetProcessPath);
-
-    internal void ProcessEvent(WindowsProcessEvent processEvent, Func<int, string> resolveProcessPath)
-    {
-        try
-        {
-            IReadOnlyList<WinPilotTask> processTasks;
-            IReadOnlyList<WinPilotTask> allProcessTasks;
-            long generation;
-            var expectedType = processEvent.Type == WindowsProcessEventType.Started ? TaskTriggerType.ProcessStarted : TaskTriggerType.ProcessExited;
-            lock (gate)
-            {
-                if (isStopping || !taskServiceStarted || !processDetectionEnabled || !processListenerStarted)
-                    return;
-                generation = processListenerGeneration;
-                allProcessTasks = tasks.Values.Where(task => task.Enabled && IsProcessTrigger(task.Trigger)).ToArray();
-                processTasks = allProcessTasks.Where(task => task.Trigger.Type == expectedType).ToArray();
-            }
-
-            var cachePaths = allProcessTasks.SelectMany(task => task.Trigger.ProcessPaths ?? []).Where(path => Path.GetFileNameWithoutExtension(path).Equals(processEvent.ProcessName, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var processPath = "";
-            if (processEvent.Type == WindowsProcessEventType.Started && cachePaths.Length > 0)
-                processPath = resolveProcessPath(processEvent.ProcessId);
-            lock (gate)
-            {
-                if (isStopping || !taskServiceStarted || !processDetectionEnabled || !processListenerStarted
-                    || generation != processListenerGeneration)
-                    return;
-                if (processEvent.Type == WindowsProcessEventType.Started && cachePaths.Length > 0)
-                    processPaths[processEvent.ProcessId] = processPath;
-                if (processEvent.Type == WindowsProcessEventType.Exited && processPaths.Remove(processEvent.ProcessId, out var known))
-                    processPath = known;
-            }
-
-            foreach (var task in processTasks)
-            {
-                if (!Matches(task.Trigger.ProcessPaths, processEvent.ProcessName, processPath))
-                    continue;
-                Signal(task, expectedType == TaskTriggerType.ProcessStarted ? "当程序启动时" : "当程序关闭时", serviceToken);
-            }
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, "处理进程事件失败，进程 ID：{ProcessId}，进程名称：{ProcessName}，事件类型：{Type}", processEvent.ProcessId, processEvent.ProcessName, processEvent.Type);
-        }
+        foreach (var action in task.Actions.Where(action => action.Type == TaskActionType.SendNotification))
+            ValidateNotificationImages(action.NotificationContent, variableCatalog);
     }
 
-    private void UpdateProcessDetectionState()
+    internal static void ValidateNotificationImages(string? content, TaskVariableCatalog variableCatalog)
     {
-        var enabled = tasks.Values.Any(task => task.Enabled && IsProcessTrigger(task.Trigger));
-        if (enabled == processDetectionEnabled)
-        {
-            if (enabled && taskServiceStarted)
-                PrimeProcessPaths();
-            return;
-        }
-
-        processDetectionEnabled = enabled;
-        processListenerGeneration++;
-        processPaths.Clear();
-        if (!taskServiceStarted)
-            return;
-        if (enabled)
-            StartProcessListenerIfNeeded();
-        else
-            StopProcessListener();
+        var (text, imagePath) = ExtractDirectImagePath(content);
+        var images = ValidateImageVariables(text, variableCatalog);
+        if (imagePath is not null && images.Length > 0)
+            throw new InvalidOperationException("图片仅允许一个");
     }
 
-    private void StartProcessListenerIfNeeded()
+    internal static string[] ValidateImageVariables(string? content, TaskVariableCatalog variableCatalog)
     {
-        if (!processDetectionEnabled || processListenerStarted)
-            return;
-        if (!processEvents.Start())
-            return;
-        processListenerGeneration++;
-        processListenerStarted = true;
-        PrimeProcessPaths();
-        logger.LogInformation("任务触发所需的 Windows 进程监听已启动");
+        var images = VariableResolver.ExtractOccurrences(content).Select(variableCatalog.MatchRegisteredImage).Where(name => name is not null).Cast<string>().ToArray();
+        if (images.Length > 1)
+            throw new InvalidOperationException("图片仅允许一个");
+        if (images.Length == 1 && (content ?? string.Empty).Split(['\r', '\n'], StringSplitOptions.None).All(line => !line.Trim().Equals(images[0], StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("图片变量必须单独占一行");
+        return images;
     }
-
-    private void StopProcessListener()
-    {
-        if (!processListenerStarted)
-            return;
-        processListenerGeneration++;
-        processEvents.Stop();
-        processListenerStarted = false;
-        processPaths.Clear();
-        logger.LogInformation("任务触发所需的 Windows 进程监听已停止");
-    }
-
-    private void PrimeProcessPaths()
-    {
-        var names = tasks.Values.Where(task => task.Enabled && IsProcessTrigger(task.Trigger)).SelectMany(task => task.Trigger.ProcessPaths ?? []).Select(Path.GetFileNameWithoutExtension).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        foreach (var name in names)
-            foreach (var process in Process.GetProcessesByName(name))
-                try
-                {
-                    var path = SafePath(process);
-                    if (!string.IsNullOrWhiteSpace(path))
-                        processPaths[process.Id] = path;
-                }
-                finally
-                {
-                    process.Dispose();
-                }
-    }
-
-    private static bool IsProcessTrigger(TaskTrigger trigger) => trigger.Type is TaskTriggerType.ProcessStarted or TaskTriggerType.ProcessExited;
-
-    private int[] GetCloseProcessIds(string? name, bool currentUserOnly)
-    {
-        var processName = Path.GetFileNameWithoutExtension(name ?? "");
-        if (currentUserOnly)
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            return programs.GetRunningPrograms(identity.Name)
-                .Where(program => string.Equals(Path.GetFileNameWithoutExtension(program.Name), processName, StringComparison.OrdinalIgnoreCase))
-                .Select(program => program.ProcessId).ToArray();
-        }
-        var processes = Process.GetProcessesByName(processName);
-        try { return processes.Select(process => process.Id).ToArray(); }
-        finally
-        {
-            foreach (var process in processes) process.Dispose();
-        }
-    }
-
-    private static string GetProcessPath(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return SafePath(process);
-        }
-        catch { return ""; }
-    }
-
-    private static string SafePath(Process process)
-    {
-        try
-        {
-            return Path.GetFullPath(process.MainModule?.FileName ?? "");
-        }
-        catch
-        {
-            return "";
-        }
-    }
-
-    internal static bool Matches(IReadOnlyList<string>? paths, string name, string path) => paths?.Any(expected => Path.GetFileNameWithoutExtension(expected).Equals(name, StringComparison.OrdinalIgnoreCase) && expected.Equals(path, StringComparison.OrdinalIgnoreCase)) == true;
-
-    private static DateTimeOffset? GetNext(string? expression, DateTimeOffset now) => TaskCronExpression.Parse(expression ?? throw new InvalidOperationException("Cron 表达式不能为空")).GetNextOccurrence(now, TimeZoneInfo.Local);
 
     private void Load()
     {
@@ -769,10 +1146,11 @@ public sealed class TaskService : BackgroundService
                     var stored = JsonSerializer.Deserialize<TaskPersistenceFile>(File.ReadAllText(file), JsonOptions);
                     if (stored is null) throw new InvalidDataException("任务文件内容无效");
                     var task = Normalize(stored.ToTask());
-                    Validate(task);
+                    var cron = Validate(task);
                     if (!string.Equals(Path.GetFileNameWithoutExtension(file), task.Name, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("任务名称与文件名不一致");
                     if (!tasks.TryAdd(task.Name, task)) throw new InvalidDataException("任务名称重复");
+                    if (cron is not null) cronExpressions[task.Name] = (task, cron);
                 }
                 catch (Exception exception)
                 {
@@ -792,33 +1170,97 @@ public sealed class TaskService : BackgroundService
         Actions = task.Actions.Select(action => action with { ProgramPath = action.ProgramPath ?? "", Arguments = action.Arguments ?? "", WorkingDirectory = action.WorkingDirectory ?? "", TagName = action.TagName ?? "", ProcessName = action.ProcessName ?? "", Keys = action.Keys ?? [], Shell = action.Shell ?? "", Command = action.Command ?? "", NotificationTitle = action.NotificationTitle ?? "", NotificationContent = action.NotificationContent ?? "", NotificationChannel = action.NotificationChannel ?? "" }).ToArray()
     };
 
-    private void ClearRuntimeState(string name) => nextCron.Remove(name);
-
-    private TaskExecution? RequestTaskCancellation(string name)
+    private void Save(WinPilotTask task, bool overwrite = true)
     {
-        return runningTasks.TryGetValue(name, out var instance) && instance.TryRequestCancellation() ? instance : null;
-    }
-
-    private KeyValuePair<string, TaskExecution>[] RequestAllCancellations() =>
-        runningTasks.Where(task => task.Value.TryRequestCancellation()).ToArray();
-
-    private void CancelExecution(string name, TaskExecution? instance)
-    {
-        if (instance is null) return;
-        try { instance.Cancellation.Cancel(); }
-        catch (AggregateException exception) { logger.LogWarning(exception, "取消任务「{Name}」时，取消回调失败", name); }
-        finally
+        Directory.CreateDirectory(paths.TasksDirectory);
+        var file = GetTaskFilePath(task.Name);
+        var temporaryFile = file + $".{Guid.NewGuid():N}.tmp";
+        FileOperationRecovery.WithCleanup(() =>
         {
-            CancellationTokenSource? completed;
-            lock (gate) completed = instance.CompleteCancellation();
-            completed?.Dispose();
-        }
+            File.WriteAllText(temporaryFile, JsonSerializer.Serialize(TaskPersistenceFile.From(task), JsonOptions));
+            File.Move(temporaryFile, file, overwrite);
+        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
     }
 
-    private void CancelExecutions(KeyValuePair<string, TaskExecution>[] cancellations)
+    private string GetTaskFilePath(string name)
     {
-        foreach (var task in cancellations)
-            CancelExecution(task.Key, task.Value);
+        ValidateName(name);
+        return Path.Combine(paths.TasksDirectory, name + ".json");
+    }
+
+    private static CronExpression? Validate(WinPilotTask task)
+    {
+        CronExpression? cron = null;
+        ValidateName(task.Name);
+        if (!Enum.IsDefined(task.Trigger.Type))
+            throw new InvalidOperationException("任务类型无效");
+        for (var index = 0; index < task.Actions.Count; index++)
+            if (!Enum.IsDefined(task.Actions[index].Type))
+                throw new InvalidOperationException("任务类型无效");
+        if (task.Actions.Count == 0)
+            throw new InvalidOperationException("至少需要一个动作");
+        if (task.Trigger.Type == TaskTriggerType.Cron)
+        {
+            if (string.IsNullOrWhiteSpace(task.Trigger.Cron))
+                throw new InvalidOperationException("请输入 Cron 表达式");
+            try
+            {
+                cron = TaskCronExpression.Parse(task.Trigger.Cron);
+            }
+            catch (Exception exception) when (exception is FormatException or ArgumentException)
+            {
+                throw new InvalidOperationException("Cron 表达式格式无效", exception);
+            }
+        }
+        else if (IsProcessTrigger(task.Trigger))
+        {
+            var paths = task.Trigger.ProcessPaths ?? [];
+            if (paths.Count == 0)
+                throw new InvalidOperationException("请至少选择一个程序绝对路径");
+            if (paths.Any(path => !Path.IsPathFullyQualified(path)))
+                throw new InvalidOperationException("程序路径必须是绝对路径");
+        }
+
+        for (var index = 0; index < task.Actions.Count; index++)
+        {
+            var action = task.Actions[index];
+            switch (action.Type)
+            {
+                case TaskActionType.StartProgram when string.IsNullOrWhiteSpace(action.ProgramPath):
+                    throw new InvalidOperationException("请选择要启动的程序");
+                case TaskActionType.StartTag when string.IsNullOrWhiteSpace(action.TagName):
+                    throw new InvalidOperationException("请选择快捷标签");
+                case TaskActionType.CloseProcess when string.IsNullOrWhiteSpace(action.ProcessName):
+                    throw new InvalidOperationException("请输入进程名");
+                case TaskActionType.Delay when action.DelaySeconds <= 0:
+                    throw new InvalidOperationException("请输入有效的延迟秒数");
+                case TaskActionType.Delay when action.DelaySeconds > 86400:
+                    throw new InvalidOperationException("延迟时间不能超过 86400 秒（24 小时）");
+                case TaskActionType.Keyboard when action.Keys is null || action.Keys.Count == 0:
+                    throw new InvalidOperationException("请选择至少一个按键");
+                case TaskActionType.Shell when !IsSupportedShell(action.Shell):
+                    throw new InvalidOperationException("Shell 仅支持 CMD 或 PowerShell");
+                case TaskActionType.Shell when string.IsNullOrWhiteSpace(action.Command):
+                    throw new InvalidOperationException("请输入 Shell 命令");
+                case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
+                    throw new InvalidOperationException("请输入通知内容或图片变量");
+            }
+        }
+        return cron;
+    }
+
+    private static bool IsSupportedShell(string? shell) => shell is not null && (shell.Equals("cmd", StringComparison.OrdinalIgnoreCase) || shell.Equals("powershell", StringComparison.OrdinalIgnoreCase));
+
+    private static void ValidateName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
+            throw new InvalidOperationException("任务名称无效");
+    }
+
+    private sealed class CronSchedulerRun
+    {
+        public TaskCompletionSource Changed { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Execution { get; set; } = Task.CompletedTask;
     }
 
     private sealed class TaskExecution
@@ -828,6 +1270,7 @@ public sealed class TaskService : BackgroundService
         private bool executionCompleted;
         private bool cancellationDisposed;
         internal bool CancellationRequested => Volatile.Read(ref cancellationRequested);
+        internal bool CronSkipReported { get; set; }
         internal CancellationTokenSource Cancellation { get; }
         internal TaskCompletionSource<Task> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Task Execution { get; }
@@ -859,206 +1302,5 @@ public sealed class TaskService : BackgroundService
             cancellationDisposed = true;
             return Cancellation;
         }
-    }
-
-    private void Save(WinPilotTask task, bool overwrite = true)
-    {
-        Directory.CreateDirectory(paths.TasksDirectory);
-        var file = GetTaskFilePath(task.Name);
-        var temporaryFile = file + $".{Guid.NewGuid():N}.tmp";
-        FileOperationRecovery.WithCleanup(() =>
-        {
-            File.WriteAllText(temporaryFile, JsonSerializer.Serialize(TaskPersistenceFile.From(task), JsonOptions));
-            File.Move(temporaryFile, file, overwrite);
-        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
-    }
-
-    private string GetTaskFilePath(string name)
-    {
-        ValidateName(name);
-        return Path.Combine(paths.TasksDirectory, name + ".json");
-    }
-
-    private static void Validate(WinPilotTask task)
-    {
-        ValidateName(task.Name);
-        if (!Enum.IsDefined(task.Trigger.Type) || task.Actions.Any(action => !Enum.IsDefined(action.Type)))
-            throw new InvalidOperationException("任务类型无效");
-        if (task.Actions.Count == 0)
-            throw new InvalidOperationException("至少需要一个动作");
-        if (task.Trigger.Type == TaskTriggerType.Cron)
-        {
-            if (string.IsNullOrWhiteSpace(task.Trigger.Cron))
-                throw new InvalidOperationException("请输入 Cron 表达式");
-            try
-            {
-                TaskCronExpression.Parse(task.Trigger.Cron);
-            }
-            catch (Exception exception) when (exception is FormatException or ArgumentException)
-            {
-                throw new InvalidOperationException("Cron 表达式格式无效", exception);
-            }
-        }
-        else if (IsProcessTrigger(task.Trigger))
-        {
-            var paths = task.Trigger.ProcessPaths ?? [];
-            if (paths.Count == 0)
-                throw new InvalidOperationException("请至少选择一个程序绝对路径");
-            if (paths.Any(path => !Path.IsPathFullyQualified(path)))
-                throw new InvalidOperationException("程序路径必须是绝对路径");
-        }
-
-        foreach (var action in task.Actions)
-            switch (action.Type)
-            {
-                case TaskActionType.StartProgram when string.IsNullOrWhiteSpace(action.ProgramPath):
-                    throw new InvalidOperationException("请选择要启动的程序");
-                case TaskActionType.StartTag when string.IsNullOrWhiteSpace(action.TagName):
-                    throw new InvalidOperationException("请选择快捷标签");
-                case TaskActionType.CloseProcess when string.IsNullOrWhiteSpace(action.ProcessName):
-                    throw new InvalidOperationException("请输入进程名");
-                case TaskActionType.Delay when action.DelaySeconds <= 0:
-                    throw new InvalidOperationException("请输入有效的延迟秒数");
-                case TaskActionType.Delay when action.DelaySeconds > 86400:
-                    throw new InvalidOperationException("延迟时间不能超过 86400 秒（24 小时）");
-                case TaskActionType.Keyboard when action.Keys is null || action.Keys.Count == 0:
-                    throw new InvalidOperationException("请选择至少一个按键");
-                case TaskActionType.Shell when !IsSupportedShell(action.Shell):
-                    throw new InvalidOperationException("Shell 仅支持 CMD 或 PowerShell");
-                case TaskActionType.Shell when string.IsNullOrWhiteSpace(action.Command):
-                    throw new InvalidOperationException("请输入 Shell 命令");
-                case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
-                    throw new InvalidOperationException("请输入通知内容或图片变量");
-            }
-    }
-
-    private static bool IsSupportedShell(string? shell) => shell is not null && (shell.Equals("cmd", StringComparison.OrdinalIgnoreCase) || shell.Equals("powershell", StringComparison.OrdinalIgnoreCase));
-
-    private static void ValidateName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
-            throw new InvalidOperationException("任务名称无效");
-    }
-
-    private async Task ExecuteExtension(TaskAction action, PluginTaskRunContext context)
-    {
-        if (string.IsNullOrWhiteSpace(action.PluginId) || string.IsNullOrWhiteSpace(action.ActionId) || !extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition))
-            throw new InvalidOperationException("扩展动作不可用");
-        var parameters = new Dictionary<string, object?>(action.Parameters ?? new Dictionary<string, object?>());
-        var schema = definition.Parameters;
-        if (definition.OptionsResolver is not null)
-        {
-            var current = new List<PluginActionParameterDefinition>(schema.Count);
-            foreach (var parameter in schema)
-            {
-                var options = parameter.Type is PluginActionParameterType.Select or PluginActionParameterType.MultiCheckbox ? await extensions.GetActionOptionsAsync(action.PluginId, action.ActionId, parameter.Key, context.CancellationToken) : parameter.Options;
-                current.Add(parameter with { Options = options });
-            }
-
-            schema = current;
-        }
-
-        foreach (var parameter in schema)
-            if (!parameters.ContainsKey(parameter.Key) && parameter.DefaultValue is not null)
-                parameters.Add(parameter.Key, CloneActionDefault(parameter.DefaultValue));
-        ValidateActionParameters(schema, parameters);
-        if (definition.HostActionPlan is not null)
-        {
-            foreach (var step in definition.HostActionPlan.Steps)
-                await ExecuteHostStep(step, parameters, context);
-            return;
-        }
-
-        if (definition.Handler is null)
-            throw new InvalidOperationException("扩展动作不可用");
-        var result = await definition.Handler(new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>(parameters)), context, context.CancellationToken);
-        if (result.Status != PluginTaskActionResultStatus.Success)
-            throw new InvalidOperationException(result.Error ?? result.Status.ToString());
-        if (result.HostActionPlan is not null)
-        {
-            PluginTaskActionRegistry.ValidatePlan(result.HostActionPlan);
-            foreach (var step in result.HostActionPlan.Steps)
-                await ExecuteHostStep(step, parameters, context);
-        }
-    }
-
-    private async Task ExecuteHostStep(PluginHostActionStep step, IReadOnlyDictionary<string, object?> extensionParameters, PluginTaskRunContext context)
-    {
-        var values = step.Parameters.ToDictionary(pair => pair.Key, pair => ResolvePlanValue(pair.Value, extensionParameters));
-        var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null, includeNotificationTitle: true);
-        if (step.Type == PluginHostActionType.SendNotification)
-        {
-            await SendConfiguredNotification(action, context, image);
-            return;
-        }
-
-        await Execute(action, context);
-    }
-
-    private static object? ResolvePlanValue(object? value, IReadOnlyDictionary<string, object?> parameters) => value is string text && text.StartsWith("$param.", StringComparison.Ordinal) && parameters.TryGetValue(text[7..], out var resolved) ? resolved : value;
-
-    private static object? CloneActionDefault(object? value) => value switch
-    {
-        JsonElement element => element.Clone(),
-        System.Text.Json.Nodes.JsonNode node => node.DeepClone(),
-        IEnumerable<string> items => items.ToArray(),
-        IEnumerable<object?> items => items.Select(CloneActionDefault).ToArray(),
-        Array array => array.Clone(),
-        _ => value
-    };
-
-    private static void ValidateActionParameters(IReadOnlyList<PluginActionParameterDefinition> schema, IReadOnlyDictionary<string, object?> values)
-    {
-        foreach (var value in values.Keys.Where(key => !schema.Any(item => item.Key.Equals(key, StringComparison.OrdinalIgnoreCase))))
-            throw new InvalidOperationException($"未知动作参数：{value}");
-        foreach (var parameter in schema)
-        {
-            values.TryGetValue(parameter.Key, out var value);
-            var selected = ParameterStrings(value);
-            if (parameter.Required && (value is null || (parameter.Type == PluginActionParameterType.MultiCheckbox ? selected.Length == 0 : string.IsNullOrWhiteSpace(Convert.ToString(value)))))
-                throw new InvalidOperationException($"缺少动作参数：{parameter.Key}");
-            if (value is not null && parameter.Type == PluginActionParameterType.Number && !decimal.TryParse(Convert.ToString(value), out _))
-                throw new InvalidOperationException($"动作参数类型无效：{parameter.Key}");
-            if (value is not null && parameter.Type == PluginActionParameterType.Select && parameter.Options?.All(option => !option.Value.Equals(Convert.ToString(value), StringComparison.Ordinal)) == true)
-                throw new InvalidOperationException($"动作参数选项无效：{parameter.Key}");
-            if (value is not null && parameter.Type == PluginActionParameterType.MultiCheckbox)
-            {
-                var empty = value is JsonElement { ValueKind: JsonValueKind.Array } array
-                    ? array.GetArrayLength() == 0 : value is IEnumerable<object?> items && !items.Any();
-                if (selected.Length == 0 && !empty || selected.Any(item => parameter.Options?.All(option => !option.Value.Equals(item, StringComparison.Ordinal)) != false))
-                    throw new InvalidOperationException($"动作参数选项无效：{parameter.Key}");
-            }
-        }
-    }
-
-    private static string[] ParameterStrings(object? value)
-    {
-        if (value is JsonElement element && element.ValueKind == JsonValueKind.Array)
-            return element.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray();
-        return value is IEnumerable<object?> items ? items.Select(Convert.ToString).Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray() : [];
-    }
-
-    private void ValidateNotificationActions(WinPilotTask task)
-    {
-        foreach (var action in task.Actions.Where(action => action.Type == TaskActionType.SendNotification))
-            ValidateNotificationImages(action.NotificationContent, variableCatalog);
-    }
-
-    internal static void ValidateNotificationImages(string? content, TaskVariableCatalog variableCatalog)
-    {
-        var (text, imagePath) = ExtractDirectImagePath(content);
-        var images = ValidateImageVariables(text, variableCatalog);
-        if (imagePath is not null && images.Length > 0)
-            throw new InvalidOperationException("图片仅允许一个");
-    }
-
-    internal static string[] ValidateImageVariables(string? content, TaskVariableCatalog variableCatalog)
-    {
-        var images = VariableResolver.ExtractOccurrences(content).Select(variableCatalog.MatchRegisteredImage).Where(name => name is not null).Cast<string>().ToArray();
-        if (images.Length > 1)
-            throw new InvalidOperationException("图片仅允许一个");
-        if (images.Length == 1 && (content ?? string.Empty).Split(['\r', '\n'], StringSplitOptions.None).All(line => !line.Trim().Equals(images[0], StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("图片变量必须单独占一行");
-        return images;
     }
 }

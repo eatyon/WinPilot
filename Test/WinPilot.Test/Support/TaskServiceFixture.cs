@@ -28,18 +28,32 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal WinPilot.Features.Plugins.PluginTaskExtensionRegistry Extensions { get; } = new(new(), new(), new());
     internal TaskLogger Logger { get; } = new();
     internal TaskService Tasks { get; }
-    internal TaskServiceFixture(INotificationService? notifications = null, Microsoft.Extensions.Logging.ILogger<TaskService>? logger = null, Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null, Action<PortableDataPaths>? initialize = null)
+    internal TaskServiceFixture(INotificationService? notifications = null, Microsoft.Extensions.Logging.ILogger<TaskService>? logger = null, Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null, Action<PortableDataPaths>? initialize = null, TimeProvider? clock = null)
     {
         initialize?.Invoke(paths);
         Tasks = new(paths, Programs, new ProgramTagService(paths),
             new KeyboardInputService(keyboard), terminals, new DesktopScreenshotService(new Screenshot()),
-            notifications ?? new Notifications(), processEvents, logger ?? Logger, Extensions, lifetime: lifetime);
+            notifications ?? new Notifications(), processEvents, logger ?? Logger, Extensions, lifetime: lifetime, clock: clock);
     }
     internal void Create(string name, bool enabled = true, bool delay = false) => Tasks.Create(new(name, enabled,
         new(TaskTriggerType.WinPilotStartup), delay
             ? [new(TaskActionType.Delay, DelaySeconds: 1), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]
             : [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
     internal CommandProcessor Processor() => new("Test", new(), NullLogger.Instance, tasks: Tasks);
+    internal async Task ProcessDueCronTasksAsync(DateTimeOffset now, CancellationToken token)
+    {
+        Tasks.ProcessDueCronTasks(now, token);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var gate = typeof(TaskService).GetField("gate", flags)!.GetValue(Tasks)!;
+        Task[] executing;
+        lock (gate)
+        {
+            var running = (System.Collections.IDictionary)typeof(TaskService).GetField("runningTasks", flags)!.GetValue(Tasks)!;
+            executing = running.Values.Cast<object>().Select(instance =>
+                (Task)instance.GetType().GetProperty("Execution", flags)!.GetValue(instance)!).ToArray();
+        }
+        await Task.WhenAll(executing).WaitAsync(TimeSpan.FromSeconds(5));
+    }
     public async ValueTask DisposeAsync()
     {
         var failures = new List<Exception>();
@@ -78,12 +92,14 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         internal int Launches;
         internal System.Collections.Concurrent.ConcurrentQueue<ProgramLaunchRequest> Requests { get; } = new();
         internal bool FailFirst;
+        internal Action<ProgramLaunchRequest>? BeforeLaunch;
         internal TaskCompletionSource Launched { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal IReadOnlyList<RunningProgram> RunningPrograms { get; set; } = [];
         internal string? QueriedUserName { get; private set; }
         internal TaskCompletionSource<(IReadOnlyList<int> Ids, bool Force)> Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Launch(ProgramLaunchRequest request)
         {
+            BeforeLaunch?.Invoke(request);
             Requests.Enqueue(request);
             var count = Interlocked.Increment(ref Launches);
             if (FailFirst && count == 1) throw new FileNotFoundException();
