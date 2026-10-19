@@ -9,7 +9,7 @@ namespace WinPilot.Web;
 
 public static class TaskEndpointRouteBuilderExtensions
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions JsonOptions = new(ResponseJson.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };

@@ -1165,6 +1165,7 @@ public sealed partial class TaskServiceTest
         builder.Services.AddSingleton<TaskVariableCatalog>();
         builder.Services.ConfigureHttpJsonOptions(options =>
         {
+            options.SerializerOptions.Encoder = ResponseJson.Default.Encoder;
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
         var app = builder.Build();

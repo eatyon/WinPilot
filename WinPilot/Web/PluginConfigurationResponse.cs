@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -6,8 +5,6 @@ namespace WinPilot.Web;
 
 public static class PluginConfigurationResponse
 {
-    internal static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
     public static (string Definition, string Configuration) MaskSensitiveValues(string definitionJson, string configurationJson)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray
@@ -15,7 +12,7 @@ public static class PluginConfigurationResponse
         var configuration = JsonNode.Parse(configurationJson) as JsonObject
             ?? throw new InvalidOperationException("插件配置格式无效");
         RemoveSensitiveDefaults(definition);
-        return (definition.ToJsonString(JsonOptions), ProjectFields(definition, configuration).ToJsonString(JsonOptions));
+        return (definition.ToJsonString(ResponseJson.Default), ProjectFields(definition, configuration).ToJsonString(ResponseJson.Default));
     }
 
     private static void RemoveSensitiveDefaults(JsonArray fields)

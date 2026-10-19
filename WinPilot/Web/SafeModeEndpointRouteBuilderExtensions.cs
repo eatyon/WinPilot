@@ -16,7 +16,7 @@ public static class SafeModeEndpointRouteBuilderExtensions
             {
                 await foreach (var enabled in safeMode.WatchAsync(context.RequestAborted))
                 {
-                    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { enabled })}\n\n", context.RequestAborted);
+                    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { enabled }, ResponseJson.Default)}\n\n", context.RequestAborted);
                     await context.Response.Body.FlushAsync(context.RequestAborted);
                 }
             }

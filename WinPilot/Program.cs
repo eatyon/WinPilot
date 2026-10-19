@@ -62,7 +62,11 @@ internal static class Program
         builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
         var listenHost = settings.LanAccessEnabled ? "0.0.0.0" : "127.0.0.1";
         builder.WebHost.UseUrls($"http://{listenHost}:{settings.Port}");
-        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Encoder = ResponseJson.Default.Encoder;
+            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        });
         builder.Services.AddResponseCompression(options =>
         {
             options.Providers.Add<BrotliCompressionProvider>();

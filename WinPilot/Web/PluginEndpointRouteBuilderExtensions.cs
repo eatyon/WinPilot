@@ -158,7 +158,7 @@ public static class PluginEndpointRouteBuilderExtensions
         if (safeMode)
             (definition, configuration) = PluginConfigurationResponse.MaskSensitiveValues(definition, configuration);
         return Results.Content(readDefinition
-            ? PluginSettingOptionSources.WithSelectedOptions(definition, configuration, safeMode ? PluginConfigurationResponse.JsonOptions : null) : configuration, "application/json");
+            ? PluginSettingOptionSources.WithSelectedOptions(definition, configuration, ResponseJson.Default) : configuration, "application/json");
     }
 
     private static IResult ServePluginAsset(HttpContext context, string id, string? path, PluginWebResourceService resources, string? version = null)

@@ -106,7 +106,7 @@ public static class NotificationEndpointRouteBuilderExtensions
 
     private static async Task WriteBindingEventAsync(HttpContext context, object value, CancellationToken token)
     {
-        await context.Response.WriteAsync($"data: {System.Text.Json.JsonSerializer.Serialize(value)}\n\n", token);
+        await context.Response.WriteAsync($"data: {System.Text.Json.JsonSerializer.Serialize(value, ResponseJson.Default)}\n\n", token);
         await context.Response.Body.FlushAsync(token);
     }
     private sealed record NotificationTestRequest(string? Title, string Content, string? ImagePath, string? Channel);

@@ -9,7 +9,7 @@ public static class TerminalEndpointRouteBuilderExtensions
 {
     private const int MaximumMessageBytes = 16 * 1024;
     private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(10);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = ResponseJson.Web;
 
     public static IEndpointRouteBuilder MapTerminalEndpoints(this IEndpointRouteBuilder endpoints)
     {

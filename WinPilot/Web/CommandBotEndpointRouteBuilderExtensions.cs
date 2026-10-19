@@ -72,7 +72,7 @@ public static class CommandBotEndpointRouteBuilderExtensions
             {
                 await foreach (var state in bot.WatchAsync(context.RequestAborted))
                 {
-                    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(state, JsonSerializerOptions.Web)}\n\n", context.RequestAborted);
+                    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(state, ResponseJson.Web)}\n\n", context.RequestAborted);
                     await context.Response.Body.FlushAsync(context.RequestAborted);
                 }
             }
