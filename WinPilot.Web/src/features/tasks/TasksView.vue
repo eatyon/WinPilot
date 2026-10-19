@@ -61,6 +61,7 @@ type Action = {
     | 'Keyboard'
     | 'Shell'
     | 'SendNotification'
+    | 'TaskState'
     | 'Extension';
   programPath: string;
   arguments: string;
@@ -78,6 +79,8 @@ type Action = {
   notificationTitle: string;
   notificationContent: string;
   notificationChannel: string;
+  taskName: string;
+  state: '' | 'Toggle' | 'Enable' | 'Disable';
   pluginId?: string;
   actionId?: string;
   parameters?: Record<string, any>;
@@ -152,6 +155,12 @@ function parameterDefaults(parameters: ParameterDefinition[] = []) {
   ]));
 }
 
+const taskStateOptions = [
+  { value: '', label: '请选择状态' },
+  { value: 'Toggle', label: '切换' },
+  { value: 'Enable', label: '启用' },
+  { value: 'Disable', label: '禁用' },
+];
 const actionOptions = [
   ['StartProgram', '启动'],
   ['StartTag', '快捷标签'],
@@ -160,6 +169,7 @@ const actionOptions = [
   ['Shell', 'Shell'],
   ['Keyboard', '键盘模拟'],
   ['SendNotification', '发送通知'],
+  ['TaskState', '任务状态'],
   ['Extension', '插件扩展'],
 ] as const;
 const channelOptions = ref<{ value: string; label: string }[]>([]);
@@ -350,6 +360,8 @@ const createAction = (): Action => ({
   notificationTitle: '',
   notificationContent: '',
   notificationChannel: '',
+  taskName: '',
+  state: '',
   pluginId: '',
   actionId: '',
   parameters: {},
@@ -419,7 +431,9 @@ const actionCoreLabel = (action: Action) =>
               ? `关闭进程 · ${action.processName || '未指定'}${action.currentUserOnly ? ' · 当前用户' : ''}`
               : action.type === 'SendNotification'
                 ? `发送通知 · ${action.notificationContent || '未设置'}`
-                : `启动程序 · ${action.programPath || '未指定'}`;
+                : action.type === 'TaskState'
+                    ? `任务状态 · ${taskStateOptions.find(option => option.value === action.state)?.label ?? '请选择状态'} · ${action.taskName || '未选择任务'}`
+                    : `启动程序 · ${action.programPath || '未指定'}`;
 const actionLabel = (action: Action, index: number, total: number) =>
   `${actionCoreLabel(action)}${action.continueOnFailure && index < total - 1 ? ' · 失败后继续' : ''}`;
 function extensionActionLabel(action: Action) {
@@ -560,6 +574,11 @@ function validate(value: Task) {
     if (error) result.extension = error;
   }
   value.actions.forEach((action, index) => {
+    if (action.type === 'TaskState') {
+      if (!action.taskName.trim()) result[`action-${index}`] = '请选择任务';
+      else if (!taskStateOptions.some(option => option.value !== '' && option.value === action.state))
+        result[`action-${index}`] = '请选择状态';
+    }
     if (action.type === 'Extension' && (!action.pluginId || !action.actionId))
       result[`action-${index}`] = '请选择插件和动作';
     if (action.type === 'Extension' && action.pluginId && action.actionId) {
@@ -594,6 +613,7 @@ const actionFields: Record<Action['type'], readonly (keyof Action)[]> = {
   Keyboard: ['keys'],
   Shell: ['shell', 'command'],
   SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
+  TaskState: ['taskName', 'state'],
   Extension: ['pluginId', 'actionId', 'parameters'],
 };
 function actionPayload(action: Action) {
@@ -644,10 +664,6 @@ async function toggleTaskEnabled(task: Task, event?: Event) {
 }
 
 function requestRun(task: Task) {
-  if (!task.enabled) {
-    showToast('任务已禁用，无法立即运行');
-    return;
-  }
   runTarget.value = task;
   detailTarget.value = undefined;
 }
@@ -1201,7 +1217,22 @@ onBeforeUnmount(() => {
                 />
               </div>
             </template>
-            <KeyboardKeyPicker v-else-if="action.type === 'Keyboard'" v-model="action.keys" />
+              <template v-else-if="action.type === 'TaskState'">
+    <label class="field-control" data-task-field="taskName">
+      <span>任务 *</span>
+      <AppSelect v-model="action.taskName" :options="[
+        { value: '', label: '请选择任务' },
+        ...tasks.map(task => ({ value: task.name, label: task.name })),
+        ...(action.taskName && !tasks.some(task => task.name === action.taskName)
+          ? [{ value: action.taskName, label: `${action.taskName}（不存在）` }] : []),
+      ]" />
+    </label>
+    <label class="field-control" data-task-field="state">
+      <span>状态 *</span>
+      <AppSelect v-model="action.state" :options="taskStateOptions" />
+    </label>
+  </template>
+<KeyboardKeyPicker v-else-if="action.type === 'Keyboard'" v-model="action.keys" />
             <small v-if="fieldErrors[`action-${index}`]" class="field-error">
               {{ fieldErrors[`action-${index}`] }}
             </small>

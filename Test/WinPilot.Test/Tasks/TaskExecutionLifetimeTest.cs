@@ -13,7 +13,6 @@ namespace WinPilot.Test;
 public sealed class TaskExecutionLifetimeTest
 {
     [Theory]
-    [InlineData("disable")]
     [InlineData("rename")]
     [InlineData("rename-during-cancel")]
     [InlineData("delete")]
@@ -52,8 +51,7 @@ public sealed class TaskExecutionLifetimeTest
         {
             switch (operation)
             {
-                case "disable": fixture.Tasks.SetEnabled("cancel", false); break;
-                case "rename-during-cancel": fixture.Tasks.SetEnabled("cancel", false); break;
+                case "rename-during-cancel": fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "retiring" }); break;
                 case "rename": fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "renamed" }); break;
                 case "delete": fixture.Tasks.Delete("cancel"); break;
                 case "stop": await fixture.Tasks.StopAsync(CancellationToken.None); break;
@@ -71,7 +69,7 @@ public sealed class TaskExecutionLifetimeTest
                 if (operation is "rename" or "rename-during-cancel")
                 {
                     if (operation == "rename-during-cancel")
-                        fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "renamed" });
+                        fixture.Tasks.Update("retiring", fixture.Tasks.GetAll().Single() with { Name = "renamed" });
                     fixture.Tasks.RunNow("renamed");
                     replacement = Running(fixture.Tasks)["renamed"]!;
                     fixture.Tasks.RunNow("renamed");

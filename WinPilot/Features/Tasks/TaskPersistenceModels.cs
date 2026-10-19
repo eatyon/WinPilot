@@ -77,6 +77,8 @@ public sealed class TaskActionPersistence
     public string? ActionId { get; init; }
     public IReadOnlyDictionary<string, object?>? Parameters { get; init; }
     public bool? ContinueOnFailure { get; init; }
+    public string? TaskName { get; init; }
+    public string? State { get; init; }
 
     public static TaskActionPersistence From(TaskAction action) => action.Type switch
     {
@@ -97,6 +99,7 @@ public sealed class TaskActionPersistence
         TaskActionType.Shell => new() { Type = action.Type.ToString(), Shell = action.Shell ?? "", Command = action.Command ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.SendNotification => new() { Type = action.Type.ToString(), NotificationTitle = EmptyToNull(action.NotificationTitle), NotificationContent = action.NotificationContent ?? "", NotificationChannel = EmptyToNull(action.NotificationChannel), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Extension => new() { Type = action.Type.ToString(), PluginId = action.PluginId, ActionId = action.ActionId, Parameters = action.Parameters, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
+        TaskActionType.TaskState => new() { Type = action.Type.ToString(), TaskName = action.TaskName, State = action.State?.ToString(), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         _ => throw new JsonException($"动作类型无效：{action.Type}")
     };
 
@@ -121,7 +124,10 @@ public sealed class TaskActionPersistence
         ActionId,
         Parameters,
         ContinueOnFailure ?? false,
-        CurrentUserOnly ?? false);
+        CurrentUserOnly ?? false,
+        TaskName,
+        Type.Equals(nameof(TaskActionType.TaskState), StringComparison.OrdinalIgnoreCase) && State is not null
+            ? TaskTriggerPersistence.ParseEnum<TaskStateOperation>(State, "任务状态") : null);
 
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
     private static bool? TrueOrNull(bool value) => value ? true : null;

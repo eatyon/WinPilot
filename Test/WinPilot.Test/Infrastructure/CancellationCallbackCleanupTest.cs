@@ -30,7 +30,7 @@ public sealed class CancellationCallbackCleanupTest
     [InlineData("disable", true)]
     [InlineData("delete", false)]
     [InlineData("delete", true)]
-    public async Task CompletedTaskMutationReturnsSuccessWhenCancellationCallbackThrows(string operation, bool throwCallback)
+    public async Task TaskMutationsReturnAccurateResponsesAndOnlyCancelForRenameOrDelete(string operation, bool throwCallback)
     {
         var logger = new CallbackLogger<TaskService>();
         await using var fixture = new TaskServiceFixture(logger: logger);
@@ -77,10 +77,11 @@ public sealed class CancellationCallbackCleanupTest
                 _ => await client.PutAsJsonAsync("/api/tasks/original", next)
             };
             Assert.Equal(operation == "delete" ? HttpStatusCode.NoContent : HttpStatusCode.OK, response.StatusCode);
-            Assert.True(executionToken.IsCancellationRequested);
-            Assert.Equal(1, callbacks);
-            AssertWarning(logger.Entries, failure, throwCallback);
-            if (throwCallback) Assert.Contains("original", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            var cancelled = operation is "rename" or "delete";
+            Assert.Equal(cancelled, executionToken.IsCancellationRequested);
+            Assert.Equal(cancelled ? 1 : 0, callbacks);
+            AssertWarning(logger.Entries, failure, throwCallback && cancelled);
+            if (throwCallback && cancelled) Assert.Contains("original", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
             var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "original.json");
             var listed = await client.GetFromJsonAsync<JsonArray>("/api/tasks");
             if (operation == "delete")
@@ -105,6 +106,11 @@ public sealed class CancellationCallbackCleanupTest
                 })));
                 if (operation == "rename") Assert.False(File.Exists(originalFile));
             }
+            if (operation is "disable" or "update-disable")
+            {
+                release.TrySetResult();
+                await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         finally
         {
@@ -112,9 +118,9 @@ public sealed class CancellationCallbackCleanupTest
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await fixture.Tasks.StopAsync(timeout.Token);
         }
-        Assert.Equal(0, fixture.Programs.Launches);
+        Assert.Equal(operation is "disable" or "update-disable" ? 1 : 0, fixture.Programs.Launches);
         Assert.Throws<ObjectDisposedException>(() => executionToken.WaitHandle);
-        AssertWarning(logger.Entries, failure, throwCallback);
+        AssertWarning(logger.Entries, failure, throwCallback && (operation is "rename" or "delete"));
     }
 
     [Theory]

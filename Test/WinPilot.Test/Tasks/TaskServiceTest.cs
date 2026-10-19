@@ -753,7 +753,6 @@ public sealed partial class TaskServiceTest
     }
 
     [Theory]
-    [InlineData("disable")]
     [InlineData("delete")]
     [InlineData("rename")]
     [InlineData("stop")]
@@ -781,7 +780,6 @@ public sealed partial class TaskServiceTest
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         switch (operation)
         {
-            case "disable": fixture.Tasks.SetEnabled(task.Name, false); break;
             case "delete": fixture.Tasks.Delete(task.Name); break;
             case "rename": fixture.Tasks.Update(task.Name, task with { Name = "Renamed" }); break;
             case "stop": await fixture.Tasks.StopAsync(CancellationToken.None); break;
@@ -789,7 +787,6 @@ public sealed partial class TaskServiceTest
         await fixture.Logger.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, fixture.Programs.Launches);
         if (operation == "delete") Assert.Empty(fixture.Tasks.GetAll());
-        if (operation == "disable") Assert.False(Assert.Single(fixture.Tasks.GetAll()).Enabled);
         if (operation == "rename") Assert.Equal("Renamed", Assert.Single(fixture.Tasks.GetAll()).Name);
     }
 

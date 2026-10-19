@@ -150,7 +150,7 @@ public sealed class TaskService : BackgroundService
                         () => File.Move(nextFile, originalFile));
                 }
 
-                if (!task.Enabled || !name.Equals(task.Name, StringComparison.OrdinalIgnoreCase))
+                if (!name.Equals(task.Name, StringComparison.OrdinalIgnoreCase))
                     cancellation = RequestTaskCancellation(name);
                 tasks.Remove(name);
                 ClearCronState(name);
@@ -165,35 +165,30 @@ public sealed class TaskService : BackgroundService
         finally { CancelExecution(name, cancellation); }
     }
 
-    public WinPilotTask SetEnabled(string name, bool enabled)
-    {
-        TaskExecution? cancellation = null;
-        try
-        {
-            lock (gate)
-            {
-                var task = tasks.TryGetValue(name, out var value) ? value : throw new FileNotFoundException("任务不存在");
-                if (task.Enabled == enabled)
-                    return task;
-                var cron = cronExpressions.TryGetValue(name, out var parsed) && ReferenceEquals(parsed.Task, task) ? parsed.Expression : null;
-                task = task with
-                {
-                    Enabled = enabled
-                };
-                Save(task);
-                if (!enabled)
-                    cancellation = RequestTaskCancellation(name);
-                tasks[name] = task;
-                ClearCronState(name);
-                if (cron is not null) cronExpressions[name] = (task, cron);
-                UpdateProcessDetectionState();
-                RefreshCronSchedule();
-                return task;
-            }
-        }
-        finally { CancelExecution(name, cancellation); }
-    }
+    public WinPilotTask SetEnabled(string name, bool enabled) => ChangeEnabled(name, enabled);
 
+    private WinPilotTask ChangeEnabled(string name, bool? enabled)
+    {
+        lock (gate)
+        {
+            var task = tasks.TryGetValue(name, out var value) ? value : throw new FileNotFoundException("任务不存在");
+            var nextEnabled = enabled ?? !task.Enabled;
+            if (task.Enabled == nextEnabled)
+                return task;
+            var cron = cronExpressions.TryGetValue(name, out var parsed) && ReferenceEquals(parsed.Task, task) ? parsed.Expression : null;
+            task = task with
+            {
+                Enabled = nextEnabled
+            };
+            Save(task);
+            tasks[name] = task;
+            ClearCronState(name);
+            if (cron is not null) cronExpressions[name] = (task, cron);
+            UpdateProcessDetectionState();
+            RefreshCronSchedule();
+            return task;
+        }
+    }
 
     public void Delete(string name)
     {
@@ -825,6 +820,15 @@ public sealed class TaskService : BackgroundService
             case TaskActionType.Extension:
                 await ExecuteExtension(action, context);
                 break;
+            case TaskActionType.TaskState:
+                ChangeEnabled(action.TaskName ?? "", action.State switch
+                {
+                    TaskStateOperation.Toggle => null,
+                    TaskStateOperation.Enable => true,
+                    TaskStateOperation.Disable => false,
+                    _ => throw new InvalidOperationException("任务状态无效")
+                });
+                break;
         }
     }
 
@@ -840,6 +844,7 @@ public sealed class TaskService : BackgroundService
         TaskActionType.Extension when action.PluginId is not null && action.ActionId is not null
             && extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition) => $"插件扩展「{definition.PluginDisplayName}」",
         TaskActionType.Extension => $"插件扩展「{action.PluginId}」",
+        TaskActionType.TaskState => $"{(action.State == TaskStateOperation.Toggle ? "切换" : action.State == TaskStateOperation.Enable ? "启用" : "禁用")}任务「{action.TaskName}」",
         _ => action.Type.ToString()
     };
 
@@ -1248,6 +1253,12 @@ public sealed class TaskService : BackgroundService
                     throw new InvalidOperationException("请输入 Shell 命令");
                 case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
                     throw new InvalidOperationException("请输入通知内容或图片变量");
+                case TaskActionType.TaskState when string.IsNullOrWhiteSpace(action.TaskName):
+                    throw new InvalidOperationException("请选择任务");
+                case TaskActionType.TaskState when action.State is null:
+                    throw new InvalidOperationException("请选择状态");
+                case TaskActionType.TaskState when action.State is { } state && !Enum.IsDefined(state):
+                    throw new InvalidOperationException("任务状态无效");
             }
         }
         return cron;
