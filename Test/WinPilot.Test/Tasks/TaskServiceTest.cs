@@ -24,22 +24,14 @@ public sealed partial class TaskServiceTest
     public async Task TaskSaveResponsesMatchNormalizedPersistenceWithoutChangingStatusOrLocation()
     {
         await using var fixture = new TaskServiceFixture();
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         foreach (var create in new[] { true, false })
         {
             var task = new
             {
                 name = "Normalized", enabled = false,
-                trigger = new { type = "ProcessStarted", processPaths = new[] { " C:\\app.exe ", "c:\\APP.exe", " " } },
+                trigger = new { type = "Process", @event = "Started", processPaths = new[] { " C:\\app.exe ", "c:\\APP.exe", " " } },
                 actions = new[] { new { type = "SendNotification", notificationTitle = (string?)null, notificationContent = "content", notificationChannel = (string?)null } }
             };
             using var response = create ? await client.PostAsJsonAsync("/api/tasks", task) : await client.PutAsJsonAsync("/api/tasks/Normalized", task);
@@ -49,6 +41,9 @@ public sealed partial class TaskServiceTest
             var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
             var saved = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Normalized.json")))!;
             Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(saved, json));
+            Assert.Equal("Process", json["trigger"]!["type"]!.GetValue<string>());
+            Assert.Equal("Started", json["trigger"]!["event"]!.GetValue<string>());
+            Assert.False(json["trigger"]!.AsObject().ContainsKey("cron"));
             Assert.Equal("C:\\app.exe", Assert.Single(json["trigger"]!["processPaths"]!.AsArray())!.GetValue<string>());
             Assert.False(json["actions"]![0]!.AsObject().ContainsKey("notificationTitle"));
             Assert.Equal("content", json["actions"]![0]!["notificationContent"]!.GetValue<string>());
@@ -885,13 +880,16 @@ public sealed partial class TaskServiceTest
     [Theory]
     [InlineData(TaskTriggerType.Cron, "invalid", "")]
     [InlineData(TaskTriggerType.Cron, "", "")]
-    [InlineData(TaskTriggerType.ProcessStarted, "", "relative.exe")]
-    [InlineData(TaskTriggerType.ProcessExited, "", "")]
+    [InlineData(TaskTriggerType.Cron, "0 8 * * *", "")]
+    [InlineData(TaskTriggerType.Cron, "0 0 8 * * * 2030", "")]
+    [InlineData(TaskTriggerType.Cron, "60 * * * * *", "")]
+    [InlineData(TaskTriggerType.Process, "", "relative.exe")]
+    [InlineData(TaskTriggerType.Process, "", "")]
     public async Task InvalidAutomaticTriggersAreRejectedWithoutSaving(TaskTriggerType type, string cron, string processPath)
     {
         await using var fixture = new TaskServiceFixture();
-        Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(new("invalid", true,
-            new(type, Cron: cron, ProcessPaths: string.IsNullOrEmpty(processPath) ? [] : [processPath]),
+        var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(new("invalid", true,
+            new(type, Cron: cron, ProcessPaths: string.IsNullOrEmpty(processPath) ? [] : [processPath], Event: type == TaskTriggerType.Process ? TaskProcessEventType.Started : null),
             [new(TaskActionType.StartProgram, ProgramPath: "app.exe")])));
         Assert.Empty(fixture.Tasks.GetAll());
     }

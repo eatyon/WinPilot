@@ -549,14 +549,14 @@ public sealed class TaskService : BackgroundService
             IReadOnlyList<WinPilotTask> processTasks;
             IReadOnlyList<WinPilotTask> allProcessTasks;
             long generation;
-            var expectedType = processEvent.Type == WindowsProcessEventType.Started ? TaskTriggerType.ProcessStarted : TaskTriggerType.ProcessExited;
+            var expectedEvent = processEvent.Type == WindowsProcessEventType.Started ? TaskProcessEventType.Started : TaskProcessEventType.Exited;
             lock (gate)
             {
                 if (isStopping || !taskServiceStarted || !processDetectionEnabled || !processListenerStarted)
                     return;
                 generation = processListenerGeneration;
                 allProcessTasks = tasks.Values.Where(task => task.Enabled && IsProcessTrigger(task.Trigger)).ToArray();
-                processTasks = allProcessTasks.Where(task => task.Trigger.Type == expectedType).ToArray();
+                processTasks = allProcessTasks.Where(task => task.Trigger.Event == expectedEvent).ToArray();
             }
 
             var cachePaths = allProcessTasks.SelectMany(task => task.Trigger.ProcessPaths ?? []).Where(path => Path.GetFileNameWithoutExtension(path).Equals(processEvent.ProcessName, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -578,7 +578,7 @@ public sealed class TaskService : BackgroundService
             {
                 if (!Matches(task.Trigger.ProcessPaths, processEvent.ProcessName, processPath))
                     continue;
-                Signal(task, expectedType == TaskTriggerType.ProcessStarted ? "当程序启动时" : "当程序关闭时", serviceToken);
+                Signal(task, expectedEvent == TaskProcessEventType.Started ? "当程序启动时" : "当程序退出时", serviceToken);
             }
         }
         catch (Exception exception)
@@ -648,7 +648,7 @@ public sealed class TaskService : BackgroundService
                 }
     }
 
-    private static bool IsProcessTrigger(TaskTrigger trigger) => trigger.Type is TaskTriggerType.ProcessStarted or TaskTriggerType.ProcessExited;
+    private static bool IsProcessTrigger(TaskTrigger trigger) => trigger.Type == TaskTriggerType.Process;
 
     private static string GetProcessPath(int processId)
     {
@@ -1214,6 +1214,10 @@ public sealed class TaskService : BackgroundService
         }
         else if (IsProcessTrigger(task.Trigger))
         {
+            if (task.Trigger.Event is null)
+                throw new InvalidOperationException("请选择事件");
+            if (!Enum.IsDefined(task.Trigger.Event.Value))
+                throw new InvalidOperationException("程序事件类型无效");
             var paths = task.Trigger.ProcessPaths ?? [];
             if (paths.Count == 0)
                 throw new InvalidOperationException("请至少选择一个程序绝对路径");

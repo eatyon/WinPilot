@@ -25,6 +25,7 @@ public sealed class TaskTriggerPersistence
 {
     public string Type { get; init; } = "";
     public string? Cron { get; init; }
+    public string? Event { get; init; }
     public IReadOnlyList<string>? ProcessPaths { get; init; }
     public string? PluginId { get; init; }
     public string? TriggerId { get; init; }
@@ -33,12 +34,18 @@ public sealed class TaskTriggerPersistence
     public static TaskTriggerPersistence From(TaskTrigger trigger) => trigger.Type switch
     {
         TaskTriggerType.Cron => new() { Type = trigger.Type.ToString(), Cron = trigger.Cron ?? "" },
-        TaskTriggerType.ProcessStarted or TaskTriggerType.ProcessExited => new() { Type = trigger.Type.ToString(), ProcessPaths = trigger.ProcessPaths?.ToArray() ?? [] },
+        TaskTriggerType.Process => new() { Type = trigger.Type.ToString(), Event = trigger.Event?.ToString(), ProcessPaths = trigger.ProcessPaths?.ToArray() ?? [] },
         TaskTriggerType.Extension => new() { Type = trigger.Type.ToString(), PluginId = trigger.PluginId, TriggerId = trigger.TriggerId, Parameters = trigger.Parameters },
         _ => new() { Type = trigger.Type.ToString() }
     };
 
-    public TaskTrigger ToTrigger() => new(ParseEnum<TaskTriggerType>(Type, "触发条件"), Cron, ProcessPaths, PluginId, TriggerId, Parameters);
+    public TaskTrigger ToTrigger()
+    {
+        var type = ParseEnum<TaskTriggerType>(Type, "触发条件");
+        var processEvent = type == TaskTriggerType.Process && Event is not null
+            ? ParseEnum<TaskProcessEventType>(Event, "程序事件") : (TaskProcessEventType?)null;
+        return new(type, Cron, ProcessPaths, PluginId, TriggerId, Parameters, processEvent);
+    }
 
     internal static T ParseEnum<T>(string value, string fieldName) where T : struct, Enum
     {

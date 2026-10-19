@@ -11,7 +11,8 @@ import { executeRequest } from '../../api/requestExecutor';
 import { showToast } from '../../ui/toast';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
 type Trigger = {
-  type: 'Cron' | 'WinPilotStartup' | 'ProcessStarted' | 'ProcessExited' | 'Extension';
+  event: '' | 'Started' | 'Exited';
+  type: 'Cron' | 'WinPilotStartup' | 'Process' | 'Extension';
   cron: string;
   processPaths: string[];
   pluginId?: string;
@@ -165,6 +166,7 @@ const channelOptions = ref<{ value: string; label: string }[]>([]);
 function clearTriggerErrors() {
   delete fieldErrors.value.cron;
   delete fieldErrors.value.processPaths;
+  delete fieldErrors.value.event;
   delete fieldErrors.value.extension;
 }
 function clearActionError(index: number) {
@@ -322,6 +324,7 @@ const filteredTasks = computed(() => {
     : tasks.value;
 });
 const createTrigger = (): Trigger => ({
+  event: '',
   type: 'Cron',
   cron: '',
   processPaths: [],
@@ -359,7 +362,7 @@ const triggerLabel = (trigger: Trigger, cronAvailable?: boolean) =>
       ? 'WinPilot 启动时'
       : trigger.type === 'Extension'
         ? extensionTriggerLabel(trigger)
-        : `${trigger.type === 'ProcessStarted' ? '当以下任意一个程序启动时' : '当以下任意一个程序关闭时'} · ${trigger.processPaths.join('、') || '未指定'}`;
+        : `程序事件 · 程序${trigger.event === 'Started' ? '启动' : '退出'}时`;
 function extensionTriggerLabel(trigger: Trigger) {
   const definition = registeredTriggers.value.find(
     (item) => item.pluginId === trigger.pluginId && item.triggerId === trigger.triggerId,
@@ -540,7 +543,8 @@ function validate(value: Task) {
   if (!value.name.trim()) result.name = '请输入任务名称';
   const trigger = value.trigger;
   if (trigger.type === 'Cron' && !trigger.cron.trim()) result.cron = '请输入 Cron 表达式';
-  if (trigger.type === 'ProcessStarted' || trigger.type === 'ProcessExited') {
+  if (trigger.type === 'Process') {
+    if (trigger.event !== 'Started' && trigger.event !== 'Exited') result.event = '请选择事件';
     const paths = trigger.processPaths.map((path) => path.trim()).filter(Boolean);
     if (!paths.length) result.processPaths = '请至少选择一个程序绝对路径';
     else if (paths.some((path) => !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(path)))
@@ -814,8 +818,7 @@ onBeforeUnmount(() => {
               v-model="editor.trigger.type"
               :options="[
                 { value: 'Cron', label: '按计划执行' },
-                { value: 'ProcessStarted', label: '当程序启动时' },
-                { value: 'ProcessExited', label: '当程序关闭时' },
+                { value: 'Process', label: '程序事件' },
                 { value: 'WinPilotStartup', label: 'WinPilot 启动时' },
                 { value: 'Extension', label: '插件扩展' },
               ]"
@@ -827,39 +830,56 @@ onBeforeUnmount(() => {
             v-model="editor.trigger.cron"
             :error="fieldErrors.cron"
           />
-          <template
-            v-else-if="editor.trigger.type === 'ProcessStarted' || editor.trigger.type === 'ProcessExited'"
-          >
-            <p>当以下任意一个程序{{ editor.trigger.type === 'ProcessStarted' ? '启动' : '关闭' }}时</p>
-            <div class="task-trigger-programs">
+          <div v-else-if="editor.trigger.type === 'Process'" class="task-trigger-process">
+            <label class="field-control" data-task-field="event">
+              <span>事件 *</span>
+              <AppSelect v-model="editor.trigger.event" :options="[
+                { value: '', label: '请选择事件' },
+                { value: 'Started', label: '程序启动时' },
+                { value: 'Exited', label: '程序退出时' },
+              ]" />
+              <small v-if="fieldErrors.event" class="field-error">{{ fieldErrors.event }}</small>
+            </label>
+            <div v-if="editor.trigger.event" class="task-trigger-programs" data-task-field="processPaths">
               <div
                 v-for="(_, index) in editor.trigger.processPaths"
                 :key="index"
-                class="task-trigger-program-row"
+                :data-task-field="`processPaths.${index}`"
+                class="field-control"
               >
-                <input
-                  v-model="editor.trigger.processPaths[index]"
-                  class="task-trigger-program-path"
-                  placeholder="程序绝对路径，例如：C:\Program Files\App\App.exe"
-                />
-                <button
-                  class="icon-button task-trigger-program-remove"
-                  type="button"
-                  @click="editor.trigger.processPaths.splice(index, 1)"
-                >
-                  删除
-                </button>
+                <div class="input-action">
+                  <input
+                    v-model="editor.trigger.processPaths[index]"
+                    :aria-invalid="Boolean(fieldErrors.processPaths && index === 0) || undefined"
+                    aria-label="程序绝对路径"
+                    placeholder="程序绝对路径，例如：C:\Program Files\App\App.exe"
+                  />
+                  <button
+                    class="input-action-button"
+                    type="button"
+                    title="删除"
+                    aria-label="删除"
+                    @click="editor.trigger.processPaths.splice(index, 1)"
+                  >
+                    <AppIcon name="close" />
+                  </button>
+                </div>
               </div>
-              <button
-                class="button button-secondary task-trigger-program-add"
-                type="button"
-                @click="editor.trigger.processPaths.push('')"
-              >
-                ＋ 添加程序
-              </button>
+              <div class="task-trigger-program-controls">
+                <button
+                  class="button button-secondary task-trigger-program-add"
+                  data-task-field="addProcess"
+                  :aria-invalid="Boolean(fieldErrors.processPaths && !editor.trigger.processPaths.length) || undefined"
+                  type="button"
+                  @click="editor.trigger.processPaths.push('')"
+                >
+                  ＋ 添加程序
+                </button>
+                <p class="field-hint">任一程序发生所选事件时触发任务</p>
+              </div>
             </div>
-            <small v-if="fieldErrors.processPaths" class="field-error">{{ fieldErrors.processPaths }}</small>
-          </template>
+            <small v-if="editor.trigger.event && fieldErrors.processPaths" class="field-error">{{ fieldErrors.processPaths }}</small>
+          </div>
           <div v-else-if="editor.trigger.type === 'Extension'" class="task-trigger-extension">
             <label class="field-control">
               <span>插件 *</span>

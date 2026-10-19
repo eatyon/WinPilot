@@ -16,7 +16,7 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "winpilot-listener-test.exe");
-        fixture.Tasks.Create(new("process", true, new(TaskTriggerType.ProcessStarted, ProcessPaths: [path]),
+        fixture.Tasks.Create(new("process", true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Started),
             [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
         SetProcessListenerState(fixture.Tasks, true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -77,8 +77,8 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "winpilot-listener-test.exe");
-        foreach (var type in new[] { TaskTriggerType.ProcessStarted, TaskTriggerType.ProcessExited })
-            fixture.Tasks.Create(new(type.ToString(), true, new(type, ProcessPaths: [path]),
+        foreach (var processEvent in new[] { TaskProcessEventType.Started, TaskProcessEventType.Exited })
+            fixture.Tasks.Create(new(processEvent.ToString(), true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: processEvent),
                 [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
         SetProcessListenerState(fixture.Tasks, true);
         var queries = 0;
@@ -94,6 +94,25 @@ public sealed partial class TaskServiceTest
         fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Exited, 123456, "winpilot-listener-test"), Resolve);
         Assert.Equal(2, fixture.Programs.Launches);
         Assert.Empty(fixture.Logger.Exceptions);
+    }
+
+    [Fact]
+    public async Task ExitOnlyTaskCachesStartedPathWithoutRunningUntilExit()
+    {
+        await using var fixture = new TaskServiceFixture();
+        var path = Path.Combine(fixture.Paths.ApplicationDirectory, "winpilot-listener-test.exe");
+        fixture.Tasks.Create(new("exit", true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Exited),
+            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+        SetProcessListenerState(fixture.Tasks, true);
+        var queries = 0;
+        string Resolve(int _) { queries++; return path; }
+        fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Started, 123456, "winpilot-listener-test"), Resolve);
+        Assert.Equal(0, fixture.Programs.Launches);
+        Assert.Equal(path, Assert.Single(ProcessPathSnapshot(fixture.Tasks)).Value);
+        fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Exited, 123456, "winpilot-listener-test"), Resolve);
+        Assert.Equal(1, queries);
+        Assert.Equal(1, fixture.Programs.Launches);
+        Assert.Empty(ProcessPathSnapshot(fixture.Tasks));
     }
 
     private static void SetProcessListenerState(TaskService service, bool started)
