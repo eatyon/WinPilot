@@ -7,6 +7,7 @@ import AppMultiSelect from '../../components/AppMultiSelect.vue';
 import TaskActionEditor from './TaskActionEditor.vue';
 import TaskVariableHelp from './TaskVariableHelp.vue';
 import CronEditor from './CronEditor.vue';
+import { orderKeys } from '../desktop/keyboardLayout';
 import { apiErrorMessage, readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { executeRequest } from '../../api/requestExecutor';
 import { showToast } from '../../ui/toast';
@@ -370,7 +371,7 @@ const actionCoreLabel = (action: Action) =>
       : action.type === 'Shell'
         ? `Shell · ${action.shell} · ${action.command || '未设置命令'}`
         : action.type === 'Keyboard'
-          ? `键盘模拟 · ${action.keys.join(' + ') || '未设置'}`
+          ? `按键模拟 · ${orderKeys(action.keys).join(' + ') || '未设置'}`
           : action.type === 'StartTag'
             ? `启动快捷标签 · ${action.tagName || '未选择'}`
             : action.type === 'CloseProcess'
@@ -413,7 +414,11 @@ function openTaskEditor(task?: Task) {
     name: savedTask?.name ?? '',
     enabled: savedTask?.enabled ?? true,
     trigger: { ...createTrigger(), ...savedTask?.trigger },
-    actions: savedTask ? savedTask.actions.map(action => ({ ...createAction(), ...action })) : [createAction()],
+    actions: savedTask ? savedTask.actions.map(action => ({
+      ...createAction(),
+      ...action,
+      ...(action.type === 'Keyboard' ? { keys: orderKeys(action.keys ?? []) } : {}),
+    })) : [createAction()],
   };
   originalName.value = task?.name ?? '';
   detailTarget.value = undefined;
@@ -505,6 +510,7 @@ async function saveTask() {
   const value = JSON.parse(JSON.stringify(editor.value)) as Task;
   value.name = value.name.trim();
   value.trigger.processPaths = value.trigger.processPaths.map((path) => path.trim()).filter(Boolean);
+  for (const action of value.actions) if (action.type === 'Keyboard') action.keys = orderKeys(action.keys);
   if (value.actions.length) value.actions[value.actions.length - 1].continueOnFailure = false;
   const errors = validate(value);
   if (Object.keys(errors).length) {

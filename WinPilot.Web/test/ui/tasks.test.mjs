@@ -8,6 +8,7 @@ import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
 import { combineRequestSignal } from '../../src/api/requestSignal.ts';
 import * as taskModels from '../../src/features/tasks/taskModels.ts';
+import * as keyboardLayout from '../../src/features/desktop/keyboardLayout.ts';
 
 const taskValidationModule = { exports: {}, require: () => taskModels };
 runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskValidation.ts', import.meta.url)), taskValidationModule);
@@ -33,6 +34,7 @@ function fixture({ reducedMotion = false } = {}) {
       if (name.endsWith('/focusInvalidInput')) return focusModule.exports;
       if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
       if (name === './taskModels') return taskModels;
+      if (name.endsWith('/keyboardLayout')) return keyboardLayout;
       if (name === './taskValidation') return taskValidationModule.exports;
       return {};
     },

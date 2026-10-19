@@ -27,9 +27,19 @@ public sealed class KeyboardInputService(IKeyboardInputSimulator inputSimulator)
             keys.Add(key);
         }
 
-        var orderedKeys = keys.OrderBy(key => IsModifier(key) ? 0 : 1).ToArray();
+        var orderedKeys = keys.OrderBy(KeyOrder).ToArray();
         inputSimulator.Send(orderedKeys);
     }
 
-    private static bool IsModifier(KeyboardKey key) => key is KeyboardKey.Ctrl or KeyboardKey.Shift or KeyboardKey.Alt or KeyboardKey.Win;
+    internal static string[]? OrderKeyNames(IReadOnlyList<string>? names) => names?.OrderBy(name =>
+        Enum.TryParse<KeyboardKey>(name, true, out var key) ? KeyOrder(key) : 4).ToArray();
+
+    private static int KeyOrder(KeyboardKey key) => key switch
+    {
+        KeyboardKey.Win => 0,
+        KeyboardKey.Ctrl => 1,
+        KeyboardKey.Alt => 2,
+        KeyboardKey.Shift => 3,
+        _ => 4
+    };
 }

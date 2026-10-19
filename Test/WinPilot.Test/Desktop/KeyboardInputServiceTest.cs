@@ -36,6 +36,18 @@ public sealed class KeyboardInputServiceTest
         service.Send(["NumpadEnter"]);
     }
 
+    [Theory]
+    [InlineData("Shift,Alt,Ctrl", "Ctrl,Alt,Shift")]
+    [InlineData("Shift,Ctrl,Win", "Win,Ctrl,Shift")]
+    [InlineData("B,Ctrl,A", "Ctrl,B,A")]
+    [InlineData("B,A,C", "B,A,C")]
+    public void SendUsesFixedModifierOrderAndKeepsNormalKeyOrder(string input, string expected)
+    {
+        var simulator = new FakeKeyboardInputSimulator();
+        new KeyboardInputService(simulator).Send(input.Split(','));
+        Assert.Equal(expected.Split(',').Select(Enum.Parse<KeyboardKey>), simulator.SentKeys);
+    }
+
     private sealed class FakeKeyboardInputSimulator : IKeyboardInputSimulator
     {
         public IReadOnlyList<KeyboardKey> SentKeys { get; private set; } = [];

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import KeyboardKeyPicker from './KeyboardKeyPicker.vue';
+import { orderKeys } from './keyboardLayout';
 import AppIcon from '../../components/AppIcon.vue';
 import AppSelect from '../../components/AppSelect.vue';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
@@ -137,7 +138,7 @@ function configureAutomaticCapture() {
 function updateSelectedKeys(keys: string[]) {
   if (safeModeEnabled.value || isSendingKeys.value) return;
   clearKeyboardFeedback();
-  selectedKeys.value = keys;
+  selectedKeys.value = orderKeys(keys);
 }
 
 async function sendSelectedKeys() {
@@ -157,7 +158,7 @@ async function sendSelectedKeys() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({ keys: selectedKeys.value }),
+      body: JSON.stringify({ keys: orderKeys(selectedKeys.value) }),
     });
     if (!response.ok) throw new Error('键盘输入发送失败');
     if (keyboardController !== controller || !keyboardEnabled.value) return;
@@ -447,7 +448,7 @@ onBeforeUnmount(() => {
       <div class="keyboard-panel-heading">
         <div>
           <h2 id="keyboard-title">
-            键盘模拟
+            按键模拟
             <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
               <AppIcon name="lock" />
             </span>
@@ -456,14 +457,14 @@ onBeforeUnmount(() => {
         </div>
         <label class="toggle-control">
           <input v-model="keyboardEnabled" type="checkbox" :disabled="safeModeEnabled" />
-          <span>启用键盘模拟</span>
+          <span>启用按键模拟</span>
         </label>
       </div>
       <div v-if="keyboardEnabled && !safeModeEnabled" class="keyboard-panel-controls">
         <KeyboardKeyPicker
           :model-value="selectedKeys"
           :disabled="isSendingKeys"
-          help="可选择普通按键或最多 3 个组合键，确认后点击发送"
+          help="可选择单个按键或组合最多 3 个按键，确认后点击发送"
           @update:model-value="updateSelectedKeys"
           @limit="keyboardStatus = undefined; keyboardError = '每次最多选择 3 个按键'"
         />

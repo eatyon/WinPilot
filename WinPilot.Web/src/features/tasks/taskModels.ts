@@ -90,7 +90,7 @@ export const actionOptions = [
   ['CloseProcess', '关闭进程'],
   ['Delay', '延迟'],
   ['Shell', 'Shell'],
-  ['Keyboard', '键盘模拟'],
+  ['Keyboard', '按键模拟'],
   ['SendNotification', '发送通知'],
   ['TaskState', '任务状态'],
   ['Extension', '插件扩展'],

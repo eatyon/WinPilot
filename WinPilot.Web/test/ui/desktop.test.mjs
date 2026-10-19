@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as keyboardLayout from '../../src/features/desktop/keyboardLayout.ts';
 
 function fixture() {
   const code = loadScriptModule(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url),
@@ -37,6 +38,7 @@ function fixture() {
       addEventListener: name => listeners.add(name), removeEventListener: name => listeners.delete(name),
     },
     require: name => {
+      if (name.endsWith('/keyboardLayout')) return keyboardLayout;
       if (name === 'vue') return { ...vue, onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
       if (name.endsWith('/client')) return {
         apiFetch: (url, init) => new Promise(resolve => requests.push({ url, init, resolve })),
@@ -127,6 +129,19 @@ test('keyboard selections cannot change while their send request is pending', as
     assert.equal(f.subject.selectedKeys.value.length, 0);
     assert.equal(f.subject.isSendingKeys.value, false);
     assert.deepEqual(f.toasts, [['键盘输入已发送', 'success']]);
+  } finally { f.dispose(); }
+});
+
+test('desktop simulation displays and sends the fixed modifier order', async () => {
+  const f = fixture();
+  try {
+    f.subject.keyboardEnabled.value = true;
+    f.subject.updateSelectedKeys(['Shift', 'Ctrl', 'Win']);
+    assert.deepEqual([...f.subject.selectedKeys.value], ['Win', 'Ctrl', 'Shift']);
+    const pending = f.subject.sendSelectedKeys();
+    assert.deepEqual(JSON.parse(f.requests.at(-1).init.body).keys, ['Win', 'Ctrl', 'Shift']);
+    f.requests.at(-1).resolve({ ok: true });
+    await pending;
   } finally { f.dispose(); }
 });
 

@@ -1215,7 +1215,22 @@ public sealed class TaskService : BackgroundService
             Cron = task.Trigger.Cron ?? "",
             ProcessPaths = (task.Trigger.ProcessPaths ?? []).Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         },
-        Actions = task.Actions.Select(action => action with { ProgramPath = action.ProgramPath ?? "", Arguments = action.Arguments ?? "", WorkingDirectory = action.WorkingDirectory ?? "", TagName = action.TagName ?? "", ProcessName = action.ProcessName ?? "", Keys = action.Keys ?? [], Shell = action.Shell ?? "", Command = action.Command ?? "", NotificationTitle = action.NotificationTitle ?? "", NotificationContent = action.NotificationContent ?? "", NotificationChannel = action.NotificationChannel ?? "" }).ToArray()
+        Actions = task.Actions.Select(action => action with
+        {
+            ProgramPath = action.ProgramPath ?? "",
+            Arguments = action.Arguments ?? "",
+            WorkingDirectory = action.WorkingDirectory ?? "",
+            TagName = action.TagName ?? "",
+            ProcessName = action.ProcessName ?? "",
+            Keys = action.Type == TaskActionType.Keyboard
+                ? KeyboardInputService.OrderKeyNames(action.Keys) ?? []
+                : action.Keys ?? [],
+            Shell = action.Shell ?? "",
+            Command = action.Command ?? "",
+            NotificationTitle = action.NotificationTitle ?? "",
+            NotificationContent = action.NotificationContent ?? "",
+            NotificationChannel = action.NotificationChannel ?? ""
+        }).ToArray()
     };
 
     private void Save(WinPilotTask task, bool overwrite = true)

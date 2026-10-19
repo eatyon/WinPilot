@@ -191,6 +191,7 @@ test('keyboard page spacing belongs to the desktop container rather than the sha
   assert.doesNotMatch(pickerStyle, /margin(?:-top)?\s*:/);
   assert.match(styles, /\.keyboard-help\s*\{\s*margin:\s*0;/);
   assert.match(styles, /\.keyboard-panel-controls\s*\{\s*padding-top:\s*25px;/);
+  assert.match(styles, /\.keyboard-actions\s*\{[^}]*margin-top:\s*8px;/);
   assert.ok(desktop.includes('class="keyboard-panel-controls"'));
   assert.doesNotMatch(styles, /\.task-config-card[^{}]*\.(?:virtual-keyboard|keyboard-help)\s*\{/);
 });

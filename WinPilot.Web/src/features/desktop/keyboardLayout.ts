@@ -1,3 +1,8 @@
+const modifierOrder = new Map([['WIN', 0], ['CTRL', 1], ['ALT', 2], ['SHIFT', 3]]);
+export function orderKeys(keys: readonly string[]) {
+  return [...keys].sort((left, right) => (modifierOrder.get(left.toUpperCase()) ?? 4) - (modifierOrder.get(right.toUpperCase()) ?? 4));
+}
+
 export const functionKeys = ['Escape', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
 export const mainKeyboardRows = [
   ['OemTilde', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D0', 'OemMinus', 'OemPlus', 'Backspace'],

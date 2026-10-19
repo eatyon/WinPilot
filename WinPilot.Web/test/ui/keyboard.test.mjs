@@ -4,17 +4,18 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { reactive, computed, ref } from 'vue';
 import { loadScriptModule } from '../support/scriptModule.mjs';
+import * as keyboardLayout from '../../src/features/desktop/keyboardLayout.ts';
 
 const component = new URL('../../src/features/desktop/KeyboardKeyPicker.vue', import.meta.url);
 const componentSource = readFileSync(component, 'utf8');
-const script = loadScriptModule(component, 'isKeyDisabled,toggle,expanded');
+const script = loadScriptModule(component, 'isKeyDisabled,toggle,expanded,selected,toggleExpanded');
 
 function fixture(keys = [], collapsible = false) {
   const props = reactive({ modelValue: [...keys], disabled: false, collapsible });
   const events = [];
   const context = {
     exports: {},
-    require: name => name === 'vue' ? { computed, ref } : {},
+    require: name => name === 'vue' ? { computed, ref } : name.endsWith('/keyboardLayout') ? keyboardLayout : {},
     defineProps: () => props,
     withDefaults: value => value,
     defineEmits: () => (event, value) => {
@@ -30,9 +31,11 @@ test('collapsible pickers start closed and expanding does not alter selected key
   const f = fixture(['A', 'B'], true);
   const other = fixture([], true);
   assert.equal(f.expanded.value, false);
-  f.expanded.value = true;
+  f.toggleExpanded();
+  assert.equal(f.expanded.value, true);
   assert.equal(other.expanded.value, false);
-  f.expanded.value = false;
+  f.toggleExpanded();
+  assert.equal(f.expanded.value, false);
   assert.deepEqual([...f.props.modelValue], ['A', 'B']);
   assert.deepEqual(f.events, []);
   f.toggle('A');
@@ -59,8 +62,34 @@ test('collapse controls reuse the picker arrow without a tooltip or visible text
   assert.ok(!source.includes("{{ expanded ? '收起' : '展开' }}"));
 });
 
+test('the full-bar toggle expands directly while selected keys only remove themselves', () => {
+  const f = fixture(['A'], true);
+  f.toggleExpanded();
+  assert.equal(f.expanded.value, true);
+  assert.deepEqual([...f.props.modelValue], ['A']);
+  assert.deepEqual(f.events, []);
+  f.toggle('A');
+  assert.equal(f.expanded.value, true);
+  assert.deepEqual([...f.props.modelValue], []);
+  f.toggleExpanded();
+  assert.equal(f.expanded.value, false);
+  f.props.disabled = true;
+  f.toggleExpanded();
+  assert.equal(f.expanded.value, false);
+  const desktop = fixture();
+  desktop.toggleExpanded();
+  assert.equal(desktop.expanded.value, false);
+});
+
+test('the toggle covers the selection bar while selected key buttons remain independently clickable', () => {
+  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(styles, /\.keyboard-expand-toggle\s*\{[^}]*position: absolute;[^}]*inset: 0;/);
+  assert.match(styles, /\.selected-keys\.is-collapsible \.selected-key-values\s*\{[^}]*pointer-events: none;/);
+  assert.match(styles, /\.selected-keys\.is-collapsible \.selected-key\s*\{[^}]*pointer-events: auto;/);
+});
+
 test('three selected keys disable only unselected keys and removing one restores selection', () => {
-  const f = fixture(['Control', 'Shift']);
+  const f = fixture(['Ctrl', 'Shift']);
   assert.equal(f.isKeyDisabled('A'), false);
   f.toggle('A');
   assert.equal(f.props.modelValue.length, 3);
@@ -71,6 +100,39 @@ test('three selected keys disable only unselected keys and removing one restores
   assert.equal(f.isKeyDisabled('B'), false);
   f.toggle('B');
   assert.equal(f.isKeyDisabled('Shift'), true);
+});
+
+test('key ordering uses fixed modifier priority without mutating input or reordering normal keys', () => {
+  for (const [keys, expected] of [
+    [['A', 'Ctrl', 'B'], ['Ctrl', 'A', 'B']],
+    [['B', 'A', 'Shift'], ['Shift', 'B', 'A']],
+    [['A', 'Win', 'Alt'], ['Win', 'Alt', 'A']],
+    [['B', 'A', 'C'], ['B', 'A', 'C']],
+    [['Shift', 'Alt', 'Ctrl'], ['Ctrl', 'Alt', 'Shift']],
+    [['Shift', 'Ctrl', 'Win'], ['Win', 'Ctrl', 'Shift']],
+    [['A', 'Shift', 'Alt'], ['Alt', 'Shift', 'A']],
+  ]) {
+    const original = [...keys];
+    assert.deepEqual(keyboardLayout.orderKeys(keys), expected);
+    assert.deepEqual(keys, original);
+  }
+});
+
+test('key selection prioritizes modifiers and preserves normal key order', () => {
+  const f = fixture();
+  f.toggle('B'); f.toggle('Ctrl'); f.toggle('A');
+  assert.deepEqual([...f.props.modelValue], ['Ctrl', 'B', 'A']);
+  f.toggle('Ctrl'); f.toggle('Ctrl');
+  assert.deepEqual([...f.props.modelValue], ['Ctrl', 'B', 'A']);
+  assert.doesNotMatch(componentSource, /→/);
+});
+
+test('all picker instances display fixed modifier order without mutating their incoming array', () => {
+  const f = fixture(['Shift', 'Ctrl', 'Win']);
+  assert.deepEqual([...f.selected.value], ['Win', 'Ctrl', 'Shift']);
+  assert.deepEqual([...f.props.modelValue], ['Shift', 'Ctrl', 'Win']);
+  f.toggle('Shift'); f.toggle('Alt');
+  assert.deepEqual([...f.props.modelValue], ['Win', 'Ctrl', 'Alt']);
 });
 
 test('global disabling still prevents removing selected keys', () => {
