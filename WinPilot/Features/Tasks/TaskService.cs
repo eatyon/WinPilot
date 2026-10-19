@@ -758,7 +758,7 @@ public sealed class TaskService : BackgroundService
 
     internal static bool Matches(IReadOnlyList<string>? paths, string name, string path) => paths?.Any(expected => Path.GetFileNameWithoutExtension(expected).Equals(name, StringComparison.OrdinalIgnoreCase) && expected.Equals(path, StringComparison.OrdinalIgnoreCase)) == true;
 
-    private static DateTimeOffset? GetNext(string? expression, DateTimeOffset now) => CronExpression.Parse(expression ?? throw new InvalidOperationException("Cron 表达式不能为空")).GetNextOccurrence(now, TimeZoneInfo.Local);
+    private static DateTimeOffset? GetNext(string? expression, DateTimeOffset now) => TaskCronExpression.Parse(expression ?? throw new InvalidOperationException("Cron 表达式不能为空")).GetNextOccurrence(now, TimeZoneInfo.Local);
 
     private void Load()
     {
@@ -892,7 +892,7 @@ public sealed class TaskService : BackgroundService
                 throw new InvalidOperationException("请输入 Cron 表达式");
             try
             {
-                CronExpression.Parse(task.Trigger.Cron);
+                TaskCronExpression.Parse(task.Trigger.Cron);
             }
             catch (Exception exception) when (exception is FormatException or ArgumentException)
             {

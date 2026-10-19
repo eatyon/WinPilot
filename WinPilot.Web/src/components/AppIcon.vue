@@ -42,6 +42,10 @@ defineProps<{ name: string }>();
       <rect x="4" y="14" width="6" height="6" rx="1" />
       <rect x="14" y="14" width="6" height="6" rx="1" />
     </template>
+    <template v-else-if="name === 'clock'">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </template>
     <template v-else-if="name === 'schedule'">
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M7 3v4M17 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01" />

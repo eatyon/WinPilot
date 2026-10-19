@@ -18,6 +18,27 @@ public static class TaskEndpointRouteBuilderExtensions
     {
         endpoints.MapGet("/api/tasks", (TaskService tasks) => Results.Json(tasks.GetAll().Select(TaskPersistenceFile.From), JsonOptions));
         endpoints.MapGet("/api/tasks/variables", (TaskVariableCatalog variables) => Results.Ok(variables.GetAll()));
+        endpoints.MapGet("/api/tasks/cron/preview", (string? expression) =>
+        {
+            if (string.IsNullOrWhiteSpace(expression))
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "请输入 Cron 表达式");
+            try
+            {
+                var cron = TaskCronExpression.Parse(expression);
+                var nextRuns = new List<DateTimeOffset>(5);
+                var cursor = DateTimeOffset.Now;
+                while (nextRuns.Count < 5 && cron.GetNextOccurrence(cursor, TimeZoneInfo.Local) is { } next)
+                {
+                    nextRuns.Add(next);
+                    cursor = next;
+                }
+                return Results.Ok(new { nextRuns });
+            }
+            catch (FormatException)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Cron 表达式格式无效");
+            }
+        });
         endpoints.MapGet("/api/tasks/extensions/triggers", ([Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions) => Results.Ok(extensions.GetTriggers()));
         endpoints.MapGet("/api/tasks/extensions/actions", ([Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions) => Results.Ok(extensions.GetActions().Select(action => new { action.PluginId, action.PluginDisplayName, action.ActionId, action.ActionName, action.Parameters, action.Available, DynamicOptions = action.OptionsResolver is not null })));
         endpoints.MapGet("/api/tasks/extensions/actions/{pluginId}/{actionId}/options/{parameterKey}", async (string pluginId, string actionId, string parameterKey, [Microsoft.AspNetCore.Mvc.FromServices] PluginTaskExtensionRegistry extensions, CancellationToken cancellationToken) =>

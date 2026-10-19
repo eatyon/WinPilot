@@ -281,11 +281,9 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
 .help-hint { display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-subtle); font: inherit; font-size: 11px; font-weight: 700; line-height: 1; text-decoration: none; }
 .help-hint:hover, .help-hint:focus-visible { background: transparent; color: var(--accent-text); }
 .help-hint:focus-visible { outline: 1px solid var(--accent-focus-ring); outline-offset: 2px; }
-.cron-editor { position: relative; }
 .cron-mode { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; margin-bottom: 8px; }
 .cron-mode label { display: inline-flex; align-items: center; gap: 6px; }
 .cron-simple { display: grid; gap: 12px; }
-.cron-editor > .field-control { gap: 8px; margin-top: 2px; }
 .cron-expression-label { display: inline-flex; align-items: center; gap: 6px; }
 .task-section-heading { margin-bottom: 12px; }
 .notification-content-heading { display: flex; align-items: center; justify-content: space-between; }
@@ -393,14 +391,15 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
 .notification-field-status { display: block; margin-top: 2px; color: var(--accent-text); font-size: 12px; font-weight: 400; line-height: 1.4; }
 .notification-field-status.success { color: var(--success-text); }
 .notification-field-status.error { color: var(--danger-text); }
-.secret-input { display: flex; min-width: 0; align-items: center; border-radius: var(--radius-sm); }
-.secret-input:focus-within { box-shadow: 0 0 0 2px var(--accent-focus-ring); }
-.secret-input:focus-within input, .secret-input:focus-within .secret-toggle { border-color: var(--accent-focus-ring); outline: none; box-shadow: none; }
-.secret-input input { min-width: 0; flex: 1; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.input-action, .secret-input { display: flex; min-width: 0; align-items: center; border-radius: var(--radius-sm); }
+.input-action:focus-within, .secret-input:focus-within { box-shadow: 0 0 0 2px var(--accent-focus-ring); }
+.input-action:focus-within input, .input-action:focus-within .input-action-button, .secret-input:focus-within input, .secret-input:focus-within .secret-toggle { border-color: var(--accent-focus-ring); outline: none; box-shadow: none; }
+.input-action input, .secret-input input { min-width: 0; flex: 1; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
 .secret-input input::-ms-reveal { display: none; }
-.secret-toggle { display: grid; width: 38px; min-width: 38px; height: 34px; padding: 0; place-items: center; border: 1px solid var(--border-strong); border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-subtle); color: var(--text-muted); }
-.secret-toggle .app-icon { width: 17px; height: 17px; }
-.secret-toggle:hover, .secret-toggle:focus-visible { background: var(--surface-hover); color: var(--text); outline: 0; }
+.input-action-button, .secret-toggle { display: grid; width: 38px; min-width: 38px; height: 34px; padding: 0; place-items: center; border: 1px solid var(--border-strong); border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-subtle); color: var(--text-muted); }
+.input-action-button .app-icon, .secret-toggle .app-icon { width: 17px; height: 17px; }
+.input-action-button:hover, .input-action-button:focus-visible, .secret-toggle:hover, .secret-toggle:focus-visible { background: var(--surface-hover); color: var(--text); outline: 0; }
+.input-action:has(input[aria-invalid="true"]) :is(input, .input-action-button) { border-color: var(--danger-border); box-shadow: none; }
 @media (max-width: 640px) { .notification-channel-section { padding: 16px; } .notification-channel-copy strong { font-size: 16px; } .notification-channel-copy small { font-size: 13px; } .notification-channel-actions { justify-content: stretch; } .notification-channel-actions .button { flex: 1; } }
  .notification-channel-header h3 { margin: 0; }
 .notification-channel-header p { margin: .25rem 0 0; color: var(--text-muted); }
