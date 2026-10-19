@@ -9,6 +9,15 @@ namespace WinPilot.Test;
 
 public sealed class ProgramTagServiceTest
 {
+    private static string CreateProgramFile(string directory, string name)
+    {
+        var folder = Path.Combine(directory, "programs");
+        Directory.CreateDirectory(folder);
+        var file = Path.Combine(folder, name);
+        File.WriteAllText(file, "test program");
+        return file;
+    }
+
     [Theory]
     [InlineData("{")]
     [InlineData("null")]
@@ -23,7 +32,7 @@ public sealed class ProgramTagServiceTest
             var logger = new TagLogger();
             using var services = new ServiceCollection().AddSingleton<ILogger<ProgramTagService>>(logger).BuildServiceProvider();
             var service = ActivatorUtilities.CreateInstance<ProgramTagService>(services, paths);
-            service.Create(new("healthy", "app.exe", "", "", false));
+            service.Create(new("healthy", CreateProgramFile(directory, "app.exe"), "", "", false));
             var file = Path.Combine(paths.TagsDirectory, "broken.json");
             File.WriteAllText(file, damaged);
             Assert.Equal("healthy", Assert.Single(service.GetAll()).Name);
@@ -47,8 +56,8 @@ public sealed class ProgramTagServiceTest
             var logger = new TagLogger();
             using var services = new ServiceCollection().AddSingleton<ILogger<ProgramTagService>>(logger).BuildServiceProvider();
             var service = ActivatorUtilities.CreateInstance<ProgramTagService>(services, paths);
-            service.Create(new("healthy", "app.exe", "", "", false));
-            service.Create(new("locked", "locked.exe", "", "", false));
+            service.Create(new("healthy", CreateProgramFile(directory, "app.exe"), "", "", false));
+            service.Create(new("locked", CreateProgramFile(directory, "locked.exe"), "", "", false));
             var file = Path.Combine(paths.TagsDirectory, "locked.json");
             var original = File.ReadAllText(file);
             using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -78,13 +87,13 @@ public sealed class ProgramTagServiceTest
             var service = new ProgramTagService(paths);
             Directory.CreateDirectory(paths.TagsDirectory);
             var file = Path.Combine(paths.TagsDirectory, "alias.json");
-            var alias = JsonSerializer.Serialize(new ProgramTag(aliasName, "alias.exe", "", "", false));
+            var alias = JsonSerializer.Serialize(new ProgramTag(aliasName, CreateProgramFile(directory, "alias.exe"), "", "", false));
             if (writeAliasFirst) File.WriteAllText(file, alias);
-            service.Create(new("healthy", "app.exe", "", "", false));
+            service.Create(new("healthy", CreateProgramFile(directory, "app.exe"), "", "", false));
             if (!writeAliasFirst) File.WriteAllText(file, alias);
             var healthy = Assert.Single(service.GetAll());
             Assert.Equal("healthy", healthy.Name);
-            Assert.Equal("app.exe", healthy.ProgramPath);
+            Assert.Equal(CreateProgramFile(directory, "app.exe"), healthy.ProgramPath);
             Assert.Throws<InvalidDataException>(() => service.Get("alias"));
             Assert.Equal(alias, File.ReadAllText(file));
             Assert.Equal(2, Directory.GetFiles(paths.TagsDirectory).Length);
@@ -99,7 +108,7 @@ public sealed class ProgramTagServiceTest
         try
         {
             var service = new ProgramTagService(PortableDataPaths.Create(directory));
-            var tag = new ProgramTag("Name", "app.exe", "", "", false);
+            var tag = new ProgramTag("Name", CreateProgramFile(directory, "app.exe"), "", "", false);
             service.Create(tag);
             service.Update("Name", tag with { Name = "NAME" });
             Assert.Equal("NAME", service.Get("name").Name);
@@ -127,7 +136,7 @@ public sealed class ProgramTagServiceTest
         {
             var paths = PortableDataPaths.Create(applicationDirectory);
             var service = new ProgramTagService(paths);
-            service.Create(new("valid", "test.exe", "", "", false));
+            service.Create(new("valid", CreateProgramFile(applicationDirectory, "test.exe"), "", "", false));
             File.WriteAllText(Path.Combine(paths.TagsDirectory, "broken.json"), "invalid json");
             Assert.Equal("valid", service.Get("valid").Name);
             Assert.Throws<FileNotFoundException>(() => service.Get("missing"));
@@ -148,7 +157,7 @@ public sealed class ProgramTagServiceTest
             {
                 try
                 {
-                    service.Create(new("same", $"{index}.exe", "", "", false));
+                    service.Create(new("same", CreateProgramFile(applicationDirectory, $"{index}.exe"), "", "", false));
                     Interlocked.Increment(ref created);
                 }
                 catch (InvalidOperationException) { }
@@ -168,10 +177,10 @@ public sealed class ProgramTagServiceTest
         {
             var paths = PortableDataPaths.Create(applicationDirectory);
             var service = new ProgramTagService(paths);
-            var original = new ProgramTag("original", "old.exe", "", "", false);
+            var original = new ProgramTag("original", CreateProgramFile(applicationDirectory, "old.exe"), "", "", false);
             service.Create(original);
             Directory.CreateDirectory(Path.Combine(paths.TagsDirectory, "blocked.json"));
-            Assert.ThrowsAny<IOException>(() => service.Update("original", original with { Name = "blocked", ProgramPath = "new.exe" }));
+            Assert.ThrowsAny<IOException>(() => service.Update("original", original with { Name = "blocked", ProgramPath = CreateProgramFile(applicationDirectory, "new.exe") }));
             Assert.Equal(original, service.Get("original"));
             Assert.Empty(Directory.EnumerateFiles(paths.TagsDirectory, "*.tmp"));
         }
@@ -186,11 +195,11 @@ public sealed class ProgramTagServiceTest
         {
             var paths = PortableDataPaths.Create(applicationDirectory);
             var service = new ProgramTagService(paths);
-            var original = new ProgramTag("original", "old.exe", "", "", false);
+            var original = new ProgramTag("original", CreateProgramFile(applicationDirectory, "old.exe"), "", "", false);
             service.Create(original);
             using (File.Open(Path.Combine(paths.TagsDirectory, "original.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                var error = Record.Exception(() => service.Update("original", original with { ProgramPath = "new.exe" }));
+                var error = Record.Exception(() => service.Update("original", original with { ProgramPath = CreateProgramFile(applicationDirectory, "new.exe") }));
                 Assert.True(error is IOException or UnauthorizedAccessException);
             }
             Assert.Equal(original, service.Get("original"));
@@ -209,8 +218,8 @@ public sealed class ProgramTagServiceTest
             var service = new ProgramTagService(paths);
             Assert.False(Directory.Exists(paths.TagsDirectory));
 
-            service.Create(new ProgramTag("测试", "C:\\Tools\\test.exe", "--safe", "C:\\Tools", false));
-            service.Update("测试", new ProgramTag("测试二", "C:\\Tools\\test.exe", "", "", true));
+            service.Create(new ProgramTag("测试", CreateProgramFile(applicationDirectory, "test.exe"), "--safe", applicationDirectory, false));
+            service.Update("测试", new ProgramTag("测试二", CreateProgramFile(applicationDirectory, "test.exe"), "", "", true));
 
             Assert.False(File.Exists(Path.Combine(paths.TagsDirectory, "测试.json")));
             var tagFile = Path.Combine(paths.TagsDirectory, "测试二.json");
@@ -238,7 +247,7 @@ public sealed class ProgramTagServiceTest
         try
         {
             var service = new ProgramTagService(PortableDataPaths.Create(applicationDirectory));
-            Assert.Throws<InvalidOperationException>(() => service.Create(new ProgramTag(name, "C:\\Tools\\test.exe", "", "", false)));
+            Assert.Throws<InvalidOperationException>(() => service.Create(new ProgramTag(name, CreateProgramFile(applicationDirectory, "test.exe"), "", "", false)));
         }
         finally
         {

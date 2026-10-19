@@ -67,10 +67,9 @@ const pageError = ref('');
 const launchFormError = ref('');
 const processMessage = ref('');
 const launchFormMessage = ref('');
-const tagLaunchError = ref('');
-const tagLaunchMessage = ref('');
 const tagLaunchTarget = ref<ProgramTag>();
 const tagSearch = ref('');
+const managingTags = ref(false);
 const editingTagName = ref<string>();
 const launchPanel = ref<HTMLElement>();
 const programPath = ref('');
@@ -79,6 +78,11 @@ const workingDirectory = ref('');
 const runElevated = ref(false);
 const silent = ref(false);
 const tagName = ref('');
+let launchFormVersion = 0;
+watch([programPath, argumentsText, workingDirectory, runElevated, silent, tagName], () => {
+  launchFormVersion++;
+  launchFormError.value = '';
+}, { flush: 'sync' });
 let isPageActive = false;
 let programsController: AbortController | undefined;
 let usersController: AbortController | undefined;
@@ -133,6 +137,7 @@ watch(safeModeEnabled, (enabled) => {
     processCloseTarget.value = undefined;
     processUsageTarget.value = undefined;
     tagDeleteTarget.value = undefined;
+    managingTags.value = false;
     editingTagName.value = undefined;
   } else if (isPageActive && !users.value.length) void loadUsers();
 });
@@ -159,6 +164,10 @@ function releasePageResources() {
   tagDeleteTarget.value = undefined;
   tagLaunchTarget.value = undefined;
   tagSearch.value = '';
+  managingTags.value = false;
+}
+function toggleTagManagement() {
+  if (!safeModeEnabled.value) managingTags.value = !managingTags.value;
 }
 function setListError(error: unknown) {
   if (isPageActive && !isAbortError(error)) pageError.value = userErrorMessage(error, '操作失败，请稍后重试');
@@ -340,33 +349,43 @@ function launchPayload() {
 }
 async function launch() {
   if (safeModeEnabled.value || isLaunching.value) return;
-  launchFormError.value = '';
+  const submittedVersion = launchFormVersion;
   launchFormMessage.value = '';
+  const payload = launchPayload();
+  if (!payload.programPath || !/^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(payload.programPath)) {
+    launchFormError.value = payload.programPath ? '程序路径必须是绝对路径' : '请输入程序路径';
+    showToast(launchFormError.value);
+    return;
+  }
   await performAction('launch', '/api/programs/launch', {
-    method: 'POST', body: JSON.stringify(launchPayload()),
+    method: 'POST', body: JSON.stringify(payload),
   }, () => {
+    launchFormError.value = '';
     launchFormMessage.value = '程序已启动';
     showToast(launchFormMessage.value, 'success');
   }, error => {
+    if (launchFormVersion !== submittedVersion) return;
     launchFormError.value = userErrorMessage(error, '启动失败，请稍后重试');
     showToast(launchFormError.value);
   });
 }
 async function saveTag() {
   if (safeModeEnabled.value || pendingActions.has('save-tag')) return;
+  const submittedVersion = launchFormVersion;
   const payload = { name: tagName.value.trim(), ...launchPayload() };
   const originalName = editingTagName.value;
-  launchFormError.value = '';
   launchFormMessage.value = '';
   const url = originalName ? `/api/programs/tags/${encodeURIComponent(originalName)}` : '/api/programs/tags';
   await performAction('save-tag', url, {
     method: originalName ? 'PUT' : 'POST', body: JSON.stringify(payload),
   }, async () => {
+    launchFormError.value = '';
     launchFormMessage.value = '标签已保存';
     showToast(launchFormMessage.value, 'success');
     if (editingTagName.value === originalName && tagName.value.trim() === payload.name) resetLaunchForm();
     await loadTags();
   }, error => {
+    if (launchFormVersion !== submittedVersion) return;
     launchFormError.value = userErrorMessage(error, '保存标签失败，请稍后重试');
     showToast(launchFormError.value);
   });
@@ -416,16 +435,12 @@ async function confirmDeleteTag() {
 }
 async function launchTag(tag: ProgramTag) {
   if (pendingActions.has('launch-tag')) return;
-  tagLaunchError.value = '';
-  tagLaunchMessage.value = '';
   await performAction('launch-tag', `/api/programs/tags/${encodeURIComponent(tag.name)}/launch`, {
     method: 'POST',
   }, () => {
-    tagLaunchMessage.value = `已启动标签 ${tag.name}`;
-    showToast(tagLaunchMessage.value, 'success');
+    showToast('标签已启动', 'success');
   }, error => {
-    tagLaunchError.value = userErrorMessage(error, '启动标签失败，请稍后重试');
-    showToast(tagLaunchError.value);
+    showToast(userErrorMessage(error, '启动标签失败，请稍后重试'));
   });
 }
 async function confirmLaunchTag() {
@@ -454,7 +469,7 @@ function formatMemory(bytes: number) {
           </h2>
           <p>选择交互式用户后按需查询进程</p>
         </div>
-        <div class="program-actions">
+        <div class="program-actions process-query-actions">
           <label class="field-control user-select">
             <span>用户</span>
             <AppSelect
@@ -469,20 +484,19 @@ function formatMemory(bytes: number) {
             :disabled="safeModeEnabled || isQuerying || !selectedUserName"
             @click="queryPrograms"
           >
-            {{ isQuerying ? '正在查询…' : '查询' }}
+            {{ isQuerying ? '查询中…' : '查询' }}
           </button>
           <button v-if="hasQueried" class="button button-secondary" type="button" @click="collapsePrograms">
             收起
           </button>
         </div>
       </div>
-      <div class="program-query-bar">
-        <label class="field-control program-search">
-          <span>搜索进程名</span>
-          <input v-model="programSearch" type="search" :disabled="!hasQueried" placeholder="搜索当前结果" />
-        </label>
-      </div>
       <template v-if="hasQueried">
+        <div class="program-query-bar">
+          <label class="field-control program-search">
+            <input v-model="programSearch" type="search" aria-label="搜索进程名" placeholder="搜索当前结果" />
+          </label>
+        </div>
         <p class="program-result-summary">{{ resultSummary }}</p>
         <div v-if="pagedGroups.length" class="program-list">
           <article v-for="group in pagedGroups" :key="group.name" class="program-group">
@@ -576,10 +590,11 @@ function formatMemory(bytes: number) {
           </span>
           <input
             id="launch-program-path"
+            title=""
             v-model="programPath"
             required
             :disabled="safeModeEnabled"
-            placeholder="请输入完整路径"
+            placeholder="请输入绝对路径"
           />
         </div>
         <label class="field-control">
@@ -628,42 +643,36 @@ function formatMemory(bytes: number) {
           <h2>快捷标签</h2>
           <p>快捷启动保存的标签</p>
         </div>
-        <label v-if="tags.length" class="tag-search">
-          <input v-model="tagSearch" type="search" aria-label="搜索标签名" placeholder="搜索标签名" />
-        </label>
+        <div v-if="tags.length" class="tag-controls">
+          <label class="tag-search">
+            <input v-model="tagSearch" type="search" aria-label="搜索标签名" placeholder="搜索标签名" />
+          </label>
+          <button
+            class="button button-secondary"
+            :class="{ 'safe-mode-button': safeModeEnabled }"
+            type="button"
+            :disabled="safeModeEnabled"
+            :title="safeModeEnabled ? safeModeMessage : undefined"
+            :aria-pressed="managingTags"
+            @click="toggleTagManagement"
+          >
+            <AppIcon v-if="safeModeEnabled" name="lock" />
+            {{ managingTags ? '完成' : '管理' }}
+          </button>
+        </div>
       </div>
-      <p v-if="tagLaunchError" class="launch-error tag-launch-result" role="alert">{{ tagLaunchError }}</p>
-      <p v-else-if="tagLaunchMessage" class="launch-result tag-launch-result" role="status">
-        {{ tagLaunchMessage }}
-      </p>
       <div v-if="filteredTags.length" class="tag-list">
         <article v-for="tag in filteredTags" :key="tag.name" class="tag-row">
-          <strong>{{ tag.name }}</strong>
-          <small>{{ tag.programPath }}</small>
+          <div class="tag-info">
+            <strong>{{ tag.name }}</strong>
+            <small v-if="managingTags && !safeModeEnabled" :title="tag.programPath">{{ tag.programPath }}</small>
+          </div>
           <div class="program-actions">
-            <button class="button button-primary" type="button" @click="tagLaunchTarget = tag">启动</button>
-            <button
-              class="button button-secondary"
-              :class="{ 'safe-mode-button': safeModeEnabled }"
-              type="button"
-              :disabled="safeModeEnabled"
-              :title="safeModeEnabled ? safeModeMessage : undefined"
-              @click="editTag(tag)"
-            >
-              <AppIcon v-if="safeModeEnabled" name="lock" />
-              编辑
-            </button>
-            <button
-              class="button button-danger"
-              :class="{ 'safe-mode-button': safeModeEnabled }"
-              type="button"
-              :disabled="safeModeEnabled"
-              :title="safeModeEnabled ? safeModeMessage : undefined"
-              @click="tagDeleteTarget = tag"
-            >
-              <AppIcon v-if="safeModeEnabled" name="lock" />
-              删除
-            </button>
+            <button class="button button-secondary" type="button" @click="tagLaunchTarget = tag">启动</button>
+            <template v-if="managingTags && !safeModeEnabled">
+              <button class="button button-secondary" type="button" @click="editTag(tag)">编辑</button>
+              <button class="button button-danger" type="button" @click="tagDeleteTarget = tag">删除</button>
+            </template>
           </div>
         </article>
       </div>
@@ -738,16 +747,13 @@ function formatMemory(bytes: number) {
       <p>确认删除标签“{{ tagDeleteTarget.name }}”吗？</p>
       <template #actions>
         <button class="button button-secondary" type="button" :disabled="pendingActions.has('delete-tag')" @click="tagDeleteTarget = undefined">取消</button>
-        <button class="button button-danger" type="button" :disabled="pendingActions.has('delete-tag')" @click="confirmDeleteTag">确定删除</button>
+        <button class="button button-danger" type="button" :disabled="pendingActions.has('delete-tag')" @click="confirmDeleteTag">删除</button>
       </template>
     </AppModal>
     <AppModal v-if="tagLaunchTarget" title="确认启动标签" @close="tagLaunchTarget = undefined">
-      <p class="modal-program-name">{{ tagLaunchTarget.name }}</p>
-      <p>确认按照此标签的配置启动程序吗？</p>
+      <p>确定启动“{{ tagLaunchTarget.name }}”吗？</p>
       <template #actions>
-        <button class="button button-secondary" type="button" @click="tagLaunchTarget = undefined">
-          取消
-        </button>
+        <button class="button button-secondary" type="button" @click="tagLaunchTarget = undefined">取消</button>
         <button class="button button-primary" type="button" @click="confirmLaunchTag">启动</button>
       </template>
     </AppModal>
@@ -758,5 +764,18 @@ function formatMemory(bytes: number) {
 .programs-view {
   width: 100%;
   max-width: none;
+}
+.tag-controls { display: flex; align-items: center; gap: 8px; width: min(100%, 320px); }
+.tag-controls .tag-search { flex: 1; min-width: 0; }
+.tag-controls .button { flex-shrink: 0; }
+@media (max-width: 767px) {
+  .programs-view .program-pagination { flex-direction: row; align-items: center; gap: 8px; }
+  .programs-view .page-size-control { width: auto; grid-template-columns: auto 64px; flex: 0 0 auto; }
+  .programs-view .pagination-actions { display: flex; width: auto; gap: 6px; }
+  .programs-view .pagination-actions .button { width: auto; min-width: 68px; padding-inline: 8px; white-space: nowrap; }
+  .tag-info small { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+  .tag-controls { width: 100%; }
+  .process-query-actions .user-select { grid-template-columns: minmax(0, 1fr); flex: 0 0 100%; min-width: 0; }
+  .process-query-actions .button { min-width: 0; white-space: nowrap; }
 }
 </style>

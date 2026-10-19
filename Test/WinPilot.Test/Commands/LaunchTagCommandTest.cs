@@ -38,7 +38,7 @@ public sealed class LaunchTagCommandTest
         Assert.Contains("/启动标签 标签名", reply);
         Assert.DoesNotContain("示例：", reply);
         Assert.Contains("空格可省略", reply);
-        Assert.DoesNotContain("C:\\stored", reply);
+        Assert.DoesNotContain(Tag("Chrome").ProgramPath, reply);
         Assert.Empty(fixture.Programs.Requests);
     }
 
@@ -251,7 +251,7 @@ public sealed class LaunchTagCommandTest
         Assert.Single(fixture.Programs.Requests);
     }
 
-    private static ProgramTag Tag(string name) => new(name, "C:\\stored\\app.exe", "--saved", "C:\\stored", true, true);
+    private static ProgramTag Tag(string name) => new(name, Environment.ProcessPath!, "--saved", Path.GetDirectoryName(Environment.ProcessPath!)!, true, true);
 
     [Fact]
     public async Task BareCommandSendsOnlyImageWithoutLaunching()

@@ -131,6 +131,7 @@ public sealed class WindowsProgramManager : IProgramManager
     public void Launch(ProgramLaunchRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.ProgramPath)) throw new InvalidOperationException("请输入程序路径");
+        request = PrepareLaunchRequest(request);
         if (!File.Exists(request.ProgramPath)) throw new FileNotFoundException("找不到指定的程序文件");
         if (!string.IsNullOrWhiteSpace(request.WorkingDirectory) && !Directory.Exists(request.WorkingDirectory)) throw new DirectoryNotFoundException("起始目录不存在");
         var launch = CreateLaunchPlan(request);
@@ -146,6 +147,17 @@ public sealed class WindowsProgramManager : IProgramManager
             return;
         }
         StartAsStandardUser(request, launch);
+    }
+
+    internal static ProgramLaunchRequest PrepareLaunchRequest(ProgramLaunchRequest request)
+    {
+        var programPath = Path.GetFullPath(request.ProgramPath);
+        return request with
+        {
+            ProgramPath = programPath,
+            WorkingDirectory = string.IsNullOrWhiteSpace(request.WorkingDirectory)
+                ? Path.GetDirectoryName(programPath)! : request.WorkingDirectory
+        };
     }
 
     private RunningProgram? TryCreateEnumeratedProgram(Process process)

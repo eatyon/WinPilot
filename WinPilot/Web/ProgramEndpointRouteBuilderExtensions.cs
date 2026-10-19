@@ -19,6 +19,7 @@ public static class ProgramEndpointRouteBuilderExtensions
         }));
         endpoints.MapPost("/api/programs/launch", (ProgramLaunchRequest request, IProgramManager manager, ILoggerFactory loggerFactory) => Execute(() =>
         {
+            ProgramLaunchValidator.ValidateProgramPathFormat(request.ProgramPath);
             manager.Launch(request);
             loggerFactory.CreateLogger(typeof(ProgramEndpointRouteBuilderExtensions).FullName!).LogInformation("已请求启动程序：{ProgramPath}", request.ProgramPath);
             return Results.NoContent();
@@ -28,12 +29,14 @@ public static class ProgramEndpointRouteBuilderExtensions
         endpoints.MapPost("/api/programs/tags", (ProgramTag tag, ProgramTagService service) => Execute(() => { service.Create(tag); return Results.Created($"/api/programs/tags/{Uri.EscapeDataString(tag.Name)}", tag); }, tagResource: true));
         endpoints.MapPut("/api/programs/tags/{name}", (string name, ProgramTag tag, ProgramTagService service) => Execute(() => { service.Update(name, tag); return Results.Ok(tag); }, tagResource: true));
         endpoints.MapDelete("/api/programs/tags/{name}", (string name, ProgramTagService service) => Execute(() => { service.Delete(name); return Results.NoContent(); }, tagResource: true));
-        endpoints.MapPost("/api/programs/tags/{name}/launch", (string name, ProgramTagService service, IProgramManager manager) => Execute(() =>
+        endpoints.MapPost("/api/programs/tags/{name}/launch", (string name, ProgramTagService service, IProgramManager manager, ILoggerFactory loggerFactory) => Execute(() =>
         {
             var tag = service.Get(name);
             return Execute(() =>
             {
+                ProgramLaunchValidator.ValidateProgramPathFormat(tag.ProgramPath);
                 manager.Launch(new ProgramLaunchRequest(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, tag.RunElevated, tag.Silent));
+                loggerFactory.CreateLogger(typeof(ProgramEndpointRouteBuilderExtensions).FullName!).LogInformation("已请求启动标签：{TagName}", tag.Name);
                 return Results.NoContent();
             });
         }, tagResource: true));

@@ -52,7 +52,8 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
     {
         lock (gate)
         {
-            Validate(tag);
+            ValidateName(tag.Name);
+            ProgramLaunchValidator.Validate(tag.ProgramPath, tag.WorkingDirectory);
             var file = GetTagFilePath(tag.Name);
             if (File.Exists(file)) throw new ResourceNameConflictException("同名标签已存在");
 
@@ -65,7 +66,8 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
     {
         lock (gate)
         {
-            Validate(tag);
+            ValidateName(tag.Name);
+            ProgramLaunchValidator.Validate(tag.ProgramPath, tag.WorkingDirectory);
             var originalFile = GetTagFilePath(originalName);
             if (!File.Exists(originalFile)) throw new FileNotFoundException("标签不存在");
 
@@ -104,7 +106,7 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
         {
             var tag = JsonSerializer.Deserialize<ProgramTag>(File.ReadAllText(file), JsonOptions)
                 ?? throw new InvalidDataException("标签文件内容无效");
-            Validate(tag);
+            ValidateStoredTag(tag);
             if (!string.Equals(Path.GetFileNameWithoutExtension(file), tag.Name, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("标签名称与文件名不一致");
             return tag;
@@ -131,7 +133,7 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
         return Path.Combine(paths.TagsDirectory, name + ".json");
     }
 
-    private static void Validate(ProgramTag tag)
+    private static void ValidateStoredTag(ProgramTag tag)
     {
         ValidateName(tag.Name);
         if (string.IsNullOrWhiteSpace(tag.ProgramPath)) throw new InvalidOperationException("请输入程序路径");
