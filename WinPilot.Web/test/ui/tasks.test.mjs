@@ -15,7 +15,7 @@ runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskValidatio
 
 function fixture({ reducedMotion = false } = {}) {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, tasksLoaded, tags, registeredActions, registeredTriggers, extensionsLoaded, extensionsLoading, extensionsError, pageError, loadExtensions, actionResources, loadActionResource, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, triggerLabel, extensionActionLabel, extensionTriggerLabel, loadActionOptions, detailActionOptions, taskWarningText, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
+    'tasks, tasksLoaded, tags, registeredActions, registeredTriggers, extensionsLoaded, extensionsLoading, extensionsError, pageError, loadExtensions, actionResources, loadActionResource, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, describeTask, taskRows, filteredTasks, detailDisplay, extensionActionLabel, loadActionOptions, detailActionOptions, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
   const requests = [];
   const toasts = [];
   let unmount;
@@ -123,19 +123,51 @@ test('unavailable Cron uses the existing warning and preview suffix without chan
   try {
     const trigger = { ...taskModels.createTrigger(), cron: '0 0 0 31 2 *' };
     const task = { name: 'Unreachable', enabled: true, trigger, actions: [], cronAvailable: false };
-    assert.equal(f.subject.taskWarningText(task), 'Cron 表达式没有后续执行时间');
-    assert.equal(f.subject.triggerLabel(trigger, task.cronAvailable), 'Cron 计划 · 0 0 0 31 2 *（不可用）');
+    assert.equal(f.subject.describeTask(task).warning, 'Cron 表达式没有后续执行时间');
+    assert.equal(f.subject.describeTask(task).triggerLabel, 'Cron 计划 · 0 0 0 31 2 *（不可用）');
     f.subject.openTaskEditor(task);
     assert.equal(f.subject.editor.value.enabled, true);
     assert.equal(f.subject.editor.value.trigger.cron, '0 0 0 31 2 *');
     assert.equal('cronAvailable' in f.subject.editor.value, false);
-    assert.equal(f.subject.taskWarningText({ ...task, cronAvailable: true }), '');
-    assert.equal(f.subject.taskWarningText({ ...task, cronAvailable: undefined }), '');
-    assert.equal(f.subject.triggerLabel(trigger), 'Cron 计划 · 0 0 0 31 2 *');
-    assert.equal(f.subject.taskWarningText({ ...task, enabled: false }), 'Cron 表达式没有后续执行时间');
+    assert.equal(f.subject.describeTask({ ...task, cronAvailable: true }).warning, '');
+    assert.equal(f.subject.describeTask({ ...task, cronAvailable: undefined }).warning, '');
+    assert.equal(f.subject.describeTask({ ...task, cronAvailable: undefined }).triggerLabel, 'Cron 计划 · 0 0 0 31 2 *');
+    assert.equal(f.subject.describeTask({ ...task, enabled: false }).warning, 'Cron 表达式没有后续执行时间');
     const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
-    assert.ok(source.includes('triggerLabel(detailTarget.trigger, detailTarget.cronAvailable)'));
+    assert.ok(source.includes('{{ detailDisplay?.triggerLabel }}'));
     assert.ok(source.includes('class="task-warning"'));
+  } finally { f.dispose(); }
+});
+
+test('list warning and overview reuse one computed status and react together to changes', () => {
+  const f = fixture();
+  try {
+    const available = vue.ref(false);
+    let reads = 0;
+    f.subject.tasks.value = [{
+      name: 'cron', enabled: true, trigger: { ...taskModels.createTrigger(), cron: '0 0 0 31 2 *' }, actions: [],
+      get cronAvailable() { reads++; return available.value; },
+    }];
+    f.subject.detailTarget.value = f.subject.tasks.value[0];
+    const row = f.subject.filteredTasks.value[0];
+    assert.equal(row.warning, 'Cron 表达式没有后续执行时间');
+    assert.equal(row.triggerLabel, 'Cron 计划 · 0 0 0 31 2 *（不可用）');
+    assert.equal(f.subject.detailDisplay.value, row);
+    assert.equal(f.subject.detailDisplay.value.warning, row.warning);
+    assert.equal(reads, 1);
+    available.value = true;
+    const updated = f.subject.detailDisplay.value;
+    assert.equal(updated, f.subject.filteredTasks.value[0]);
+    assert.equal(updated.warning, '');
+    assert.equal(updated.triggerLabel, 'Cron 计划 · 0 0 0 31 2 *');
+    assert.equal(reads, 2);
+    f.subject.tasks.value = [];
+    assert.equal(f.subject.detailDisplay.value.triggerLabel, updated.triggerLabel);
+    const detachedReads = reads;
+    assert.equal(f.subject.detailDisplay.value.warning, '');
+    assert.equal(reads, detachedReads);
+    f.subject.detailTarget.value = undefined;
+    assert.equal(f.subject.detailDisplay.value, undefined);
   } finally { f.dispose(); }
 });
 
@@ -143,9 +175,10 @@ test('process trigger preview describes the event without exposing configured pa
   const f = fixture();
   try {
     const trigger = { type: 'Process', processPaths: ['C:\\private\\app.exe'] };
-    assert.equal(f.subject.triggerLabel({ ...trigger, event: 'Started' }), '程序事件 · 程序启动时');
-    assert.equal(f.subject.triggerLabel({ ...trigger, event: 'Exited' }), '程序事件 · 程序退出时');
-    assert.equal(f.subject.triggerLabel({ ...trigger, event: '' }), '程序事件 · 未选择事件');
+    const describe = event => f.subject.describeTask({ trigger: { ...trigger, event }, actions: [] }).triggerLabel;
+    assert.equal(describe('Started'), '程序事件 · 程序启动时');
+    assert.equal(describe('Exited'), '程序事件 · 程序退出时');
+    assert.equal(describe(''), '程序事件 · 未选择事件');
   } finally {
     f.dispose();
   }
@@ -366,13 +399,38 @@ function attachEditorForm(f, fields, actions = []) {
   return calls;
 }
 
+test('known keyboard failure reuses task warnings and preview without saving availability', async () => {
+  const f = fixture();
+  try {
+    const task = { name: 'keyboard', enabled: true, trigger: { ...taskModels.createTrigger(), type: 'Keyboard', keys: ['Ctrl', 'A'] }, actions: [], keyboardAvailable: false };
+    assert.equal(f.subject.describeTask(task).warning, '按键监听不可用');
+    assert.equal(f.subject.describeTask(task).triggerLabel, '按键监听 · Ctrl + A（不可用）');
+    for (const keyboardAvailable of [true, undefined]) {
+      assert.equal(f.subject.describeTask({ ...task, keyboardAvailable }).warning, '');
+      assert.equal(f.subject.describeTask({ ...task, keyboardAvailable }).triggerLabel, '按键监听 · Ctrl + A');
+    }
+    assert.equal(f.subject.describeTask({ ...task, enabled: false }).warning, '');
+    assert.equal(f.subject.describeTask({ ...task, enabled: false }).triggerLabel, '按键监听 · Ctrl + A');
+    assert.equal(f.subject.describeTask({ ...task, trigger: taskModels.createTrigger() }).warning, '');
+    f.subject.openTaskEditor(task);
+    assert.equal('keyboardAvailable' in f.subject.editor.value, false);
+    f.subject.editor.value.actions = [taskModels.createAction()];
+    f.subject.editor.value.actions[0].programPath = 'app.exe';
+    const pending = f.subject.saveTask();
+    const request = f.requests.at(-1);
+    assert.equal('keyboardAvailable' in JSON.parse(request.init.body), false);
+    request.resolve(new Response(JSON.stringify({ detail: 'controlled failure' }), { status: 500 }));
+    await pending;
+  } finally { f.dispose(); }
+});
+
 test('keyboard triggers prioritize modifiers through editing, submission and preview', async () => {
   const f = fixture();
   try {
     const task = openValidTaskEditor(f);
     task.trigger.type = 'Keyboard';
     task.trigger.keys = ['B', 'Ctrl', 'A'];
-    assert.equal(f.subject.triggerLabel(task.trigger), '按键监听 · Ctrl + B + A');
+    assert.equal(f.subject.describeTask(task).triggerLabel, '按键监听 · Ctrl + B + A');
     const pending = f.subject.saveTask();
     const request = f.requests.at(-1);
     assert.deepEqual(JSON.parse(request.init.body).trigger.keys, ['Ctrl', 'B', 'A']);
@@ -889,14 +947,14 @@ test('initial task list can display before extension definitions without reporti
     assert.equal(f.subject.tasksLoaded.value, true);
     assert.equal(f.subject.tasks.value[0].name, 'Saved');
     assert.equal(f.subject.extensionsLoading.value, true);
-    assert.equal(f.subject.taskWarningText(task), '');
-    assert.ok(!f.subject.extensionTriggerLabel(task.trigger).includes('不可用'));
+    assert.equal(f.subject.describeTask(task).warning, '');
+    assert.ok(!f.subject.describeTask(task).triggerLabel.includes('不可用'));
     assert.ok(!f.subject.extensionActionLabel(task.actions[0]).includes('不可用'));
     f.requests[1].resolve({ ok: true, json: async () => [] });
     f.requests[2].resolve({ ok: true, json: async () => [] });
     await extensions;
     assert.equal(f.subject.extensionsLoaded.value, true);
-    assert.equal(f.subject.taskWarningText(task), '插件触发条件不可用\n部分插件动作不可用');
+    assert.equal(f.subject.describeTask(task).warning, '插件触发条件不可用\n部分插件动作不可用');
   } finally { f.dispose(); }
 });
 
@@ -1190,11 +1248,11 @@ test('deleted trigger configuration is unavailable in task warnings and overview
   try {
     f.subject.registeredTriggers.value = [{ pluginId: 'plugin', triggerId: 'log', triggerName: '日志触发', available: true, parameters: [{ key: 'rule', type: 'Select', options: [{ value: 'existing', label: '现有配置' }] }] }];
     const task = { trigger: { type: 'Extension', pluginId: 'plugin', triggerId: 'log', parameters: { rule: 'deleted' } }, actions: [] };
-    assert.equal(f.subject.taskWarningText(task), '插件触发条件不可用');
-    assert.match(f.subject.extensionTriggerLabel(task.trigger), /不可用/);
+    assert.equal(f.subject.describeTask(task).warning, '插件触发条件不可用');
+    assert.match(f.subject.describeTask(task).triggerLabel, /不可用/);
     task.trigger.parameters.rule = 'existing';
-    assert.equal(f.subject.taskWarningText(task), '');
-    assert.match(f.subject.extensionTriggerLabel(task.trigger), /现有配置/);
+    assert.equal(f.subject.describeTask(task).warning, '');
+    assert.match(f.subject.describeTask(task).triggerLabel, /现有配置/);
   } finally { f.dispose(); }
 });
 
@@ -1339,19 +1397,19 @@ test('task warnings distinguish unavailable triggers and plugin actions without 
   const f = fixture();
   try {
     const task = { trigger: { type: 'Extension', pluginId: 'plugin', triggerId: 'trigger' }, actions: [f.action] };
-    assert.equal(f.subject.taskWarningText(task), '插件触发条件不可用');
+    assert.equal(f.subject.describeTask(task).warning, '插件触发条件不可用');
     f.subject.registeredActions.value[0].available = false;
-    assert.equal(f.subject.taskWarningText(task), '插件触发条件不可用\n部分插件动作不可用');
+    assert.equal(f.subject.describeTask(task).warning, '插件触发条件不可用\n部分插件动作不可用');
     f.subject.registeredTriggers.value = [{ pluginId: 'plugin', triggerId: 'trigger', available: true }];
-    assert.equal(f.subject.taskWarningText(task), '部分插件动作不可用');
+    assert.equal(f.subject.describeTask(task).warning, '部分插件动作不可用');
     f.subject.registeredActions.value[0].available = true;
-    assert.equal(f.subject.taskWarningText(task), '');
+    assert.equal(f.subject.describeTask(task).warning, '');
     f.subject.registeredActions.value[0].dynamicOptions = false;
-    assert.equal(f.subject.taskWarningText(task), '部分插件动作不可用');
+    assert.equal(f.subject.describeTask(task).warning, '部分插件动作不可用');
     f.subject.registeredActions.value[0].parameters[0].options = [{ value: 'saved', label: '正常' }];
-    assert.equal(f.subject.taskWarningText(task), '');
+    assert.equal(f.subject.describeTask(task).warning, '');
     f.subject.registeredActions.value = [];
-    assert.equal(f.subject.taskWarningText(task), '部分插件动作不可用');
+    assert.equal(f.subject.describeTask(task).warning, '部分插件动作不可用');
   } finally { f.dispose(); }
 });
 
@@ -1365,13 +1423,13 @@ test('disabled or missing plugin extensions remain unavailable in overview witho
     f.subject.editor.value = { actions: [f.action] };
     assert.equal(await f.subject.loadActionOptions(0, 'name'), false);
     assert.equal(f.requests.length, 0);
-    const trigger = { pluginId: 'plugin', triggerId: 'trigger' };
+    const trigger = { type: 'Extension', pluginId: 'plugin', triggerId: 'trigger' };
     f.subject.registeredTriggers.value = [{ ...trigger, pluginDisplayName: '插件', triggerName: '触发条件', available: false, parameters: [] }];
-    assert.equal(f.subject.extensionTriggerLabel(trigger), '扩展 · 插件 · 触发条件（不可用）');
+    assert.equal(f.subject.describeTask({ trigger, actions: [] }).triggerLabel, '扩展 · 插件 · 触发条件（不可用）');
     f.subject.registeredActions.value = [];
     assert.equal(f.subject.extensionActionLabel(f.action), '扩展 · plugin · action（不可用）');
     f.subject.registeredTriggers.value = [];
-    assert.equal(f.subject.extensionTriggerLabel(trigger), '扩展 · plugin · trigger（不可用）');
+    assert.equal(f.subject.describeTask({ trigger, actions: [] }).triggerLabel, '扩展 · plugin · trigger（不可用）');
   } finally { f.dispose(); }
 });
 

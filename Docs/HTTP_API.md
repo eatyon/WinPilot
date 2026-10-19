@@ -83,6 +83,7 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 - `enabled` 只控制自动触发；禁用不停止当前执行。手动运行允许已禁用任务，同任务执行中不重入、不排队。
 - 动作 `type: "TaskState"` 使用 `taskName` 和 `state: "Toggle"/"Enable"/"Disable"` 控制目标任务的启用状态。
 - 列表中的只读 `cronAvailable` 与 `enabled` 独立，不属于保存字段；无后续时间不自动禁用任务，编辑或重新启用后重新计算。
+- 列表中的只读 `keyboardAvailable` 表示按键监听是否可用，不落盘；未启动、已禁用或状态未确定时省略。
 - 保存校验的 `errors` 可含 `name`、`trigger.cron`、`actions[0].programPath` 等字段路径，但不是所有 400/409 都含字段错误。
 
 | 方法 | 路径 | 请求与说明 | 成功响应 | 错误 |

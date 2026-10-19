@@ -15,6 +15,44 @@ public sealed partial class TaskServiceTest
         new(TaskTriggerType.Keyboard, Keys: ["Ctrl", "A", "B"]), [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
 
     [Fact]
+    public async Task KeyboardFailureIsReadOnlyAndOnlyReportedForEnabledKeyboardTasks()
+    {
+        using var listener = new WindowsKeyboardEventListener(NullLogger<WindowsKeyboardEventListener>.Instance);
+        listener.Triggered += _ => throw new IOException("controlled listener failure");
+        await using var fixture = new TaskServiceFixture(keyboardEvents: listener);
+        var task = fixture.Tasks.Create(KeyboardTask() with { Trigger = new(TaskTriggerType.Keyboard, Keys: ["A"]) });
+        fixture.Tasks.Create(KeyboardTask("another"));
+        fixture.Tasks.Create(KeyboardTask("disabled") with { Enabled = false });
+        fixture.Create("other", enabled: false);
+        Assert.Null(fixture.Tasks.GetKeyboardAvailability(task));
+        await using var app = await CreateTaskAppAsync(fixture);
+        using var client = app.GetTestClient();
+        await fixture.Tasks.StartAsync(CancellationToken.None);
+        await fixture.Logger.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(SpinWait.SpinUntil(() => listener.Availability == true, TimeSpan.FromSeconds(5)));
+        using (var healthy = JsonDocument.Parse(await client.GetStringAsync("/api/tasks")))
+            Assert.True(healthy.RootElement.EnumerateArray().Single(item => item.GetProperty("name").GetString() == task.Name).GetProperty("keyboardAvailable").GetBoolean());
+        var before = Environment.TickCount64;
+        Assert.True(SpinWait.SpinUntil(() => Environment.TickCount64 > before, TimeSpan.FromSeconds(5)));
+        listener.ReceiveInput(0x41, 0x1e, 0, unchecked((uint)Environment.TickCount64));
+        Assert.True(SpinWait.SpinUntil(() => listener.Availability == false, TimeSpan.FromSeconds(5)));
+        using var failed = JsonDocument.Parse(await client.GetStringAsync("/api/tasks"));
+        foreach (var item in failed.RootElement.EnumerateArray())
+        {
+            if (item.GetProperty("enabled").GetBoolean() && item.GetProperty("trigger").GetProperty("type").GetString() == "Keyboard")
+                Assert.False(item.GetProperty("keyboardAvailable").GetBoolean());
+            else Assert.False(item.TryGetProperty("keyboardAvailable", out _));
+        }
+        var stored = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, task.Name + ".json"));
+        Assert.DoesNotContain("keyboardAvailable", stored);
+        using var run = await client.PostAsync("/api/tasks/keyboard/run", null);
+        Assert.Equal(HttpStatusCode.NoContent, run.StatusCode);
+        Assert.Equal(1, fixture.Programs.Launches);
+        fixture.Tasks.SetEnabled(task.Name, false);
+        Assert.Null(fixture.Tasks.GetKeyboardAvailability(Assert.Single(fixture.Tasks.GetAll(), item => item.Name == task.Name)));
+    }
+
+    [Fact]
     public async Task KeyboardContractPrioritizesModifiersAndOmitsUnrelatedTriggerFields()
     {
         await using var fixture = new TaskServiceFixture();

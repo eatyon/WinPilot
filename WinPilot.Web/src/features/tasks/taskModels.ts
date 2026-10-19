@@ -81,7 +81,7 @@ export type Task = {
   trigger: Trigger;
   actions: Action[];
 };
-export type ListedTask = Task & { cronAvailable?: boolean };
+export type ListedTask = Task & { cronAvailable?: boolean; keyboardAvailable?: boolean };
 
 export type ActionOption = { value: string; label: string };
 

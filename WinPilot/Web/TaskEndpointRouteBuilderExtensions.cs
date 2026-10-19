@@ -19,7 +19,12 @@ public static class TaskEndpointRouteBuilderExtensions
         endpoints.MapGet("/api/tasks", (TaskService tasks) => Results.Json(tasks.GetAll().Select(task =>
         {
             var saved = TaskPersistenceFile.From(task);
-            return new { saved.Name, saved.Enabled, saved.Trigger, saved.Actions, CronAvailable = tasks.GetCronAvailability(task) };
+            return new
+            {
+                saved.Name, saved.Enabled, saved.Trigger, saved.Actions,
+                CronAvailable = tasks.GetCronAvailability(task),
+                KeyboardAvailable = tasks.GetKeyboardAvailability(task)
+            };
         }), JsonOptions));
         endpoints.MapGet("/api/tasks/variables", (TaskVariableCatalog variables) => Results.Ok(variables.GetAll()));
         endpoints.MapGet("/api/tasks/cron/preview", (string? expression) =>

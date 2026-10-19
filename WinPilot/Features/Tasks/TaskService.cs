@@ -95,6 +95,16 @@ public sealed class TaskService : BackgroundService
             return tasks.Values.OrderBy(task => task.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
     }
 
+    internal bool? GetKeyboardAvailability(WinPilotTask task)
+    {
+        lock (gate)
+        {
+            if (task.Trigger.Type != TaskTriggerType.Keyboard || !task.Enabled || !taskServiceStarted || isStopping ||
+                !tasks.TryGetValue(task.Name, out var current) || !ReferenceEquals(current, task)) return null;
+            return keyboardEvents?.Availability;
+        }
+    }
+
     internal bool? GetCronAvailability(WinPilotTask task)
     {
         lock (gate)

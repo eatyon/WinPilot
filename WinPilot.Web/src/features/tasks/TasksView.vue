@@ -16,7 +16,7 @@ import { focusInvalidInput } from '../../ui/focusInvalidInput';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
 import { taskStateOptions, createTrigger, createAction, parameterDefaults, actionPayload,
   multiSelectionLabel, multiParameterOptions, toggleMultiOption,
-  type Trigger, type Action, type Task, type ListedTask, type RegisteredTrigger, type RegisteredAction, type RegisteredVariable,
+  type Action, type Task, type ListedTask, type RegisteredTrigger, type RegisteredAction, type RegisteredVariable,
   type ActionOption } from './taskModels';
 import { validateTask, unavailableSelectValue, hasUnavailableParameter, invalidParameter } from './taskValidation';
 const tasks = ref<ListedTask[]>([]),
@@ -313,62 +313,58 @@ function selectExtensionAction(index: number, actionId: string) {
   action.parameters = parameterDefaults(definition?.parameters);
   loadActionOptionsForAction(index);
 }
+const taskRows = computed(() => tasks.value.map(task => ({ task, ...describeTask(task) })));
 const filteredTasks = computed(() => {
   const keyword = taskSearch.value.trim().toLocaleLowerCase();
   return keyword
-    ? tasks.value.filter((task) => task.name.toLocaleLowerCase().includes(keyword))
-    : tasks.value;
+    ? taskRows.value.filter(({ task }) => task.name.toLocaleLowerCase().includes(keyword))
+    : taskRows.value;
 });
-const triggerLabel = (trigger: Trigger, cronAvailable?: boolean) =>
-  trigger.type === 'Cron'
-    ? `Cron 计划 · ${trigger.cron || '未设置'}${cronAvailable === false ? '（不可用）' : ''}`
-    : trigger.type === 'Keyboard'
-      ? `按键监听 · ${orderKeys(trigger.keys ?? []).map(keyLabel).join(' + ') || '未选择按键'}`
-    : trigger.type === 'WinPilotStartup'
-      ? 'WinPilot 启动'
-      : trigger.type === 'Extension'
-        ? extensionTriggerLabel(trigger)
-        : `程序事件 · ${trigger.event === 'Started' ? '程序启动时' : trigger.event === 'Exited' ? '程序退出时' : '未选择事件'}`;
-function extensionTriggerLabel(trigger: Trigger) {
-  const definition = registeredTriggers.value.find(
-    (item) => item.pluginId === trigger.pluginId && item.triggerId === trigger.triggerId,
-  );
-  const parameter = definition?.parameters.find(
-    (item) =>
-      item.type === 'Select' &&
-      item.options?.some((option) => option.value === String(trigger.parameters?.[item.key] ?? '')),
-  );
-  const selected = parameter?.options?.find(
-    (option) => option.value === String(trigger.parameters?.[parameter.key] ?? ''),
-  );
-  const pluginName = definition?.pluginDisplayName || trigger.pluginId || '未选择插件';
-  const triggerName = definition?.triggerName || trigger.triggerId || '未选择配置';
-  const unavailable = extensionsLoaded.value && trigger.pluginId && trigger.triggerId && (
-    !definition?.available || definition.parameters?.some(parameter => hasUnavailableParameter(parameter, trigger.parameters?.[parameter.key]))
-  );
-  return `扩展 · ${pluginName} · ${triggerName}${selected ? ` - ${selected.label}` : ''}${unavailable ? '（不可用）' : ''}`;
-}
-function hasUnavailableTrigger(task: Task) {
-  if (!extensionsLoaded.value || task.trigger.type !== 'Extension' || !task.trigger.pluginId || !task.trigger.triggerId) return false;
-  const definition = registeredTriggers.value.find(
-    (item) =>
-      item.pluginId === task.trigger.pluginId && item.triggerId === task.trigger.triggerId,
-  );
-  return !definition?.available || Boolean(definition.parameters?.some(parameter =>
-    hasUnavailableParameter(parameter, task.trigger.parameters?.[parameter.key]),
-  ));
-}
-function taskWarningText(task: ListedTask) {
+const detailDisplay = computed(() => {
+  const task = detailTarget.value;
+  return task ? taskRows.value.find(row => row.task === task) ?? describeTask(task) : undefined;
+});
+function describeTask(task: ListedTask) {
+  const trigger = task.trigger;
+  let label: string;
+  let triggerWarning = '';
+  switch (trigger.type) {
+    case 'Cron':
+      label = `Cron 计划 · ${trigger.cron || '未设置'}`;
+      if (task.cronAvailable === false) triggerWarning = 'Cron 表达式没有后续执行时间';
+      break;
+    case 'Keyboard':
+      label = `按键监听 · ${orderKeys(trigger.keys ?? []).map(keyLabel).join(' + ') || '未选择按键'}`;
+      if (task.enabled && task.keyboardAvailable === false) triggerWarning = '按键监听不可用';
+      break;
+    case 'WinPilotStartup':
+      label = 'WinPilot 启动';
+      break;
+    case 'Extension': {
+      const definition = registeredTriggers.value.find(item => item.pluginId === trigger.pluginId && item.triggerId === trigger.triggerId);
+      const parameter = definition?.parameters?.find(item => item.type === 'Select'
+        && item.options?.some(option => option.value === String(trigger.parameters?.[item.key] ?? '')));
+      const selected = parameter?.options?.find(option => option.value === String(trigger.parameters?.[parameter.key] ?? ''));
+      const pluginName = definition?.pluginDisplayName || trigger.pluginId || '未选择插件';
+      const triggerName = definition?.triggerName || trigger.triggerId || '未选择配置';
+      label = `扩展 · ${pluginName} · ${triggerName}${selected ? ` - ${selected.label}` : ''}`;
+      if (extensionsLoaded.value && trigger.pluginId && trigger.triggerId && (!definition?.available
+        || definition.parameters?.some(item => hasUnavailableParameter(item, trigger.parameters?.[item.key]))))
+        triggerWarning = '插件触发条件不可用';
+      break;
+    }
+    default:
+      label = `程序事件 · ${trigger.event === 'Started' ? '程序启动时' : trigger.event === 'Exited' ? '程序退出时' : '未选择事件'}`;
+  }
   const warnings: string[] = [];
-  if (task.trigger.type === 'Cron' && task.cronAvailable === false) warnings.push('Cron 表达式没有后续执行时间');
-  if (hasUnavailableTrigger(task)) warnings.push('插件触发条件不可用');
+  if (triggerWarning) warnings.push(triggerWarning);
   if (task.actions.some(action => {
     if (!extensionsLoaded.value || action.type !== 'Extension') return false;
     const definition = actionDefinitionFor(action);
     if (!definition?.available) return true;
     return !definition.dynamicOptions && definition.parameters.some(parameter => hasUnavailableParameter(parameter, action.parameters?.[parameter.key]));
   })) warnings.push('部分插件动作不可用');
-  return warnings.join('\n');
+  return { triggerLabel: label + (triggerWarning ? '（不可用）' : ''), warning: warnings.join('\n') };
 }
 const actionCoreLabel = (action: Action) =>
   action.type === 'Extension'
@@ -707,14 +703,14 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <article v-for="task in filteredTasks" :key="task.name" class="task-row" @click="detailTarget = task">
+      <article v-for="{ task, warning } in filteredTasks" :key="task.name" class="task-row" @click="detailTarget = task">
         <div class="task-row-main">
           <button class="task-name-button" type="button">
             {{ task.name }}
           </button>
         </div>
         <div class="task-row-controls">
-          <span v-if="taskWarningText(task)" class="task-warning" role="img" :title="taskWarningText(task)" :aria-label="taskWarningText(task)">
+          <span v-if="warning" class="task-warning" role="img" :title="warning" :aria-label="warning">
             <AppIcon name="alert-circle" />
           </span>
           <label class="task-row-toggle" @click.stop>
@@ -989,12 +985,12 @@ onBeforeUnmount(() => {
       @close="variableHelpOpen = false"
     />
     <AppModal v-if="detailTarget" :title="detailTarget.name" @close="detailTarget = undefined">
-      <template v-if="taskWarningText(detailTarget)" #title-extra>
-        <span class="task-warning" role="img" :title="taskWarningText(detailTarget)" :aria-label="taskWarningText(detailTarget)">
+      <template v-if="detailDisplay?.warning" #title-extra>
+        <span class="task-warning" role="img" :title="detailDisplay.warning" :aria-label="detailDisplay.warning">
           <AppIcon name="alert-circle" />
         </span>
       </template>
-      <p>{{ triggerLabel(detailTarget.trigger, detailTarget.cronAvailable) }}</p>
+      <p>{{ detailDisplay?.triggerLabel }}</p>
       <p v-for="(action, index) in detailTarget.actions" :key="index">
         {{ index + 1 }}. {{ actionLabel(action, index, detailTarget.actions.length) }}
       </p>
