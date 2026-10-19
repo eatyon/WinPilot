@@ -4,6 +4,7 @@
 .app-select-trigger:hover:not(:disabled) { background: var(--surface-hover); }
 .app-select-trigger:focus-visible { border-color: var(--accent-focus-ring); outline: 2px solid var(--accent-focus-ring); outline-offset: 1px; }
 .app-select-trigger:disabled { opacity: .5; cursor: default; }
+.app-select-trigger[aria-invalid="true"] { border-color: var(--danger-border); }
 .app-select-chevron { width: 8px; height: 8px; flex: 0 0 8px; margin-top: -4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; color: var(--text-muted); transform: rotate(45deg); }
 .app-select-menu { position: fixed; z-index: 70; display: grid; overflow: hidden; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow-float); visibility: hidden; }
 .app-select-menu.is-positioned { visibility: visible; }

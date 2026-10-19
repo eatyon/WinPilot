@@ -123,7 +123,8 @@ public sealed class FileOperationRecoveryTest
         var failure = new AggregateException(new InvalidOperationException("保存失败"), new IOException("回滚失败"));
         var method = endpointType.GetMethod("Execute", BindingFlags.NonPublic | BindingFlags.Static)!;
         Func<IResult> action = () => throw failure;
-        object?[] arguments = endpointType == typeof(ProgramEndpointRouteBuilderExtensions) ? [action, true] : [action];
+        object?[] arguments = endpointType == typeof(ProgramEndpointRouteBuilderExtensions) || endpointType == typeof(TaskEndpointRouteBuilderExtensions)
+            ? [action, true] : [action];
         var error = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, arguments));
         Assert.Same(failure, error.InnerException);
     }

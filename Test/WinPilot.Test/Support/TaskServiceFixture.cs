@@ -37,8 +37,8 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     }
     internal void Create(string name, bool enabled = true, bool delay = false) => Tasks.Create(new(name, enabled,
         new(TaskTriggerType.WinPilotStartup), delay
-            ? [new(TaskActionType.Delay, DelaySeconds: 1), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]
-            : [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            ? [new(TaskActionType.Delay, DelaySeconds: 1), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]
+            : [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
     internal CommandProcessor Processor() => new("Test", new(), NullLogger.Instance, tasks: Tasks);
     internal async Task ProcessDueCronTasksAsync(DateTimeOffset now, CancellationToken token)
     {

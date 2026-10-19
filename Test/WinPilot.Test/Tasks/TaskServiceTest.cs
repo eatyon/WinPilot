@@ -1,13 +1,10 @@
 using System.Net;
-using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Cronos;
 using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
 using WinPilot.Features.Notifications;
@@ -31,7 +28,7 @@ public sealed partial class TaskServiceTest
             var task = new
             {
                 name = "Normalized", enabled = false,
-                trigger = new { type = "Process", @event = "Started", processPaths = new[] { " C:\\app.exe ", "c:\\APP.exe", " " } },
+                trigger = new { type = "Process", @event = "Started", processPaths = new[] { $" {Environment.ProcessPath} ", Environment.ProcessPath!.ToUpperInvariant(), " " } },
                 actions = new[] { new { type = "SendNotification", notificationTitle = (string?)null, notificationContent = "content", notificationChannel = (string?)null } }
             };
             using var response = create ? await client.PostAsJsonAsync("/api/tasks", task) : await client.PutAsJsonAsync("/api/tasks/Normalized", task);
@@ -44,7 +41,7 @@ public sealed partial class TaskServiceTest
             Assert.Equal("Process", json["trigger"]!["type"]!.GetValue<string>());
             Assert.Equal("Started", json["trigger"]!["event"]!.GetValue<string>());
             Assert.False(json["trigger"]!.AsObject().ContainsKey("cron"));
-            Assert.Equal("C:\\app.exe", Assert.Single(json["trigger"]!["processPaths"]!.AsArray())!.GetValue<string>());
+            Assert.Equal(Environment.ProcessPath, Assert.Single(json["trigger"]!["processPaths"]!.AsArray())!.GetValue<string>());
             Assert.False(json["actions"]![0]!.AsObject().ContainsKey("notificationTitle"));
             Assert.Equal("content", json["actions"]![0]!["notificationContent"]!.GetValue<string>());
             Assert.False(json["actions"]![0]!.AsObject().ContainsKey("notificationChannel"));
@@ -99,7 +96,7 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(initialize: paths =>
         {
             Directory.CreateDirectory(paths.TasksDirectory);
-            var task = new WinPilotTask("NAME", false, new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]);
+            var task = new WinPilotTask("NAME", false, new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
             File.WriteAllText(Path.Combine(paths.TasksDirectory, "Name.json"), JsonSerializer.Serialize(TaskPersistenceFile.From(task)));
         });
         Assert.Equal("NAME", Assert.Single(fixture.Tasks.GetAll()).Name);
@@ -172,7 +169,7 @@ public sealed partial class TaskServiceTest
         Assert.NotNull(received);
         var currentToken = received.CancellationToken;
         fixture.Tasks.Create(new("current", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "trigger"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var replay = useCurrentToken ? expired with { CancellationToken = currentToken } : expired;
         typeof(TaskService).GetMethod("ExtensionTriggered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .Invoke(fixture.Tasks, [replay]);
@@ -202,7 +199,7 @@ public sealed partial class TaskServiceTest
             _ => new TaskAction(type, PluginId: value, ActionId: "run", ContinueOnFailure: true)
         };
         fixture.Tasks.Create(new("test", true, new(TaskTriggerType.WinPilotStartup),
-            [action, new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [action, new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("test");
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains($"任务「test」第 1 个动作开始：{description}", fixture.Logger.Messages);
@@ -252,14 +249,7 @@ public sealed partial class TaskServiceTest
                 Assert.Equal("target", parameterKey);
                 return Task.FromResult<IReadOnlyList<PluginActionOption>>([new("saved", "已保存配置")]);
             });
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         using var triggers = JsonDocument.Parse(await client.GetStringAsync("/api/tasks/extensions/triggers"));
         Assert.Equal("ready", Assert.Single(triggers.RootElement.EnumerateArray()).GetProperty("triggerId").GetString());
@@ -276,20 +266,12 @@ public sealed partial class TaskServiceTest
     public async Task TaskApiReturnsOnlyFieldsForTheSelectedActionType()
     {
         await using var fixture = new TaskServiceFixture();
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         var task = new
         {
             name = "Sparse", enabled = true, trigger = new { type = "WinPilotStartup" },
-            actions = new[] { new { type = "StartProgram", programPath = "app.exe" } }
+            actions = new[] { new { type = "StartProgram", programPath = Environment.ProcessPath! } }
         };
         using var created = await client.PostAsJsonAsync("/api/tasks", task);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -326,15 +308,7 @@ public sealed partial class TaskServiceTest
         fixture.Create("Existing", enabled: false);
         var file = Path.Combine(fixture.Paths.TasksDirectory, "Existing.json");
         var original = File.ReadAllText(file);
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         var trigger = field == "trigger" ? "null" : """{"type":"WinPilotStartup"}""";
         var actions = field == "actions" ? "null" : field == "actions[0]" ? "[null]" : """[{"type":"Delay","delaySeconds":1}]""";
@@ -359,11 +333,12 @@ public sealed partial class TaskServiceTest
     public async Task DelayMustBePositive(int seconds)
     {
         await using var fixture = new TaskServiceFixture();
-        var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(new(
+        var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Create(new(
             "Delay", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.Delay, DelaySeconds: seconds)])));
 
         Assert.Equal("请输入有效的延迟秒数", error.Message);
+        Assert.Equal("actions[0].delaySeconds", error.Field);
         Assert.Empty(fixture.Tasks.GetAll());
     }
 
@@ -377,14 +352,7 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         fixture.Create("Existing", enabled: false);
         var original = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json"));
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         var route = "/api/tasks/Missing" + (method == "PATCH" ? "/enabled" : method == "POST" ? "/run" : "");
         using var request = new HttpRequestMessage(new HttpMethod(method), route);
@@ -416,14 +384,7 @@ public sealed partial class TaskServiceTest
         else fixture.Create("Existing", enabled: false);
         var files = Directory.GetFiles(fixture.Paths.TasksDirectory).ToDictionary(path => path, File.ReadAllText);
         var names = fixture.Tasks.GetAll().Select(task => task.Name).ToArray();
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         using var request = new HttpRequestMessage(new HttpMethod(method), method == "POST" ? "/api/tasks" : "/api/tasks/Original")
         {
@@ -437,6 +398,8 @@ public sealed partial class TaskServiceTest
         Assert.Equal(409, problem.RootElement.GetProperty("status").GetInt32());
         Assert.Equal("操作失败", problem.RootElement.GetProperty("title").GetString());
         Assert.Equal(fileOnly ? "同名任务文件已存在" : "同名任务已存在", problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(problem.RootElement.GetProperty("detail").GetString(),
+            Assert.Single(problem.RootElement.GetProperty("errors").GetProperty("name").EnumerateArray()).GetString());
         Assert.Equal(names, fixture.Tasks.GetAll().Select(task => task.Name));
         Assert.Equal(files.Count, Directory.GetFiles(fixture.Paths.TasksDirectory).Length);
         foreach (var file in files) Assert.Equal(file.Value, File.ReadAllText(file.Key));
@@ -454,14 +417,7 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         fixture.Create("Existing", enabled: false);
         var original = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json"));
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         var task = new WinPilotTask(field == "name" ? " " : "Existing", false, new(TaskTriggerType.WinPilotStartup),
             field == "actions" ? [] : [new(TaskActionType.Delay, DelaySeconds: field == "delay" ? 0 : 1)]);
@@ -474,25 +430,114 @@ public sealed partial class TaskServiceTest
         using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(400, problem.RootElement.GetProperty("status").GetInt32());
         Assert.Equal(message, problem.RootElement.GetProperty("detail").GetString());
+        var errorField = field == "delay" ? "actions[0].delaySeconds" : field;
+        Assert.Equal(message, Assert.Single(problem.RootElement.GetProperty("errors").GetProperty(errorField).EnumerateArray()).GetString());
         Assert.Equal(original, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Existing.json")));
         Assert.Single(fixture.Tasks.GetAll());
+    }
+
+    [Fact]
+    public async Task ExtensionTaskCanBeSavedWithoutCurrentRegistrations()
+    {
+        await using var fixture = new TaskServiceFixture();
+        var task = new WinPilotTask("UnavailableExtension", false,
+            new(TaskTriggerType.Extension, PluginId: "missing", TriggerId: "event"),
+            [new(TaskActionType.Extension, PluginId: "missing", ActionId: "run")]);
+        var saved = fixture.Tasks.Create(task);
+        var updated = fixture.Tasks.Update(task.Name, task);
+        foreach (var result in new[] { saved, updated })
+        {
+            Assert.Equal("missing", result.Trigger.PluginId);
+            Assert.Equal("event", result.Trigger.TriggerId);
+            Assert.Equal("missing", Assert.Single(result.Actions).PluginId);
+            Assert.Equal("run", Assert.Single(result.Actions).ActionId);
+        }
+        Assert.Single(fixture.Tasks.GetAll());
+    }
+
+    [Theory]
+    [InlineData("name", "name", "任务名称无效")]
+    [InlineData("cron", "trigger.cron", "Cron 表达式格式无效")]
+    [InlineData("paths", "trigger.processPaths", "程序路径必须是绝对路径")]
+    [InlineData("event", "trigger.event", "请选择事件")]
+    [InlineData("event-invalid", "trigger.event", "程序事件类型无效")]
+    [InlineData("program", "actions[0].programPath", "请选择要启动的程序")]
+    [InlineData("program-relative", "actions[0].programPath", "程序路径必须是绝对路径")]
+    [InlineData("program-type", "actions[0].programPath", "不支持此文件类型")]
+    [InlineData("program-missing", "actions[0].programPath", "找不到指定的程序文件")]
+    [InlineData("working-directory", "actions[0].workingDirectory", "起始目录不存在")]
+    [InlineData("working-directory-file", "actions[0].workingDirectory", "起始目录不存在")]
+    [InlineData("tag", "actions[0].tagName", "请选择快捷标签")]
+    [InlineData("process", "actions[0].processName", "请输入进程名")]
+    [InlineData("keyboard", "actions[0].keys", "请选择至少一个按键")]
+    [InlineData("extension-trigger-plugin", "trigger.pluginId", "请选择插件和触发条件")]
+    [InlineData("extension-trigger-id", "trigger.triggerId", "请选择插件和触发条件")]
+    [InlineData("extension-action-plugin", "actions[0].pluginId", "请选择插件和动作")]
+    [InlineData("extension-action-id", "actions[0].actionId", "请选择插件和动作")]
+    [InlineData("shell", "actions[0].shell", "Shell 仅支持 CMD 或 PowerShell")]
+    [InlineData("command", "actions[0].command", "请输入 Shell 命令")]
+    [InlineData("notification", "actions[0].notificationContent", "请输入通知内容或图片变量")]
+    [InlineData("image", "actions[0].notificationContent", "图片仅允许一个")]
+    public async Task TaskSaveValidationReturnsFieldPathsWithoutChangingFiles(string kind, string field, string message)
+    {
+        await using var fixture = new TaskServiceFixture();
+        fixture.Create("Original", enabled: false);
+        var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "Original.json");
+        var originalContent = File.ReadAllText(originalFile);
+        var task = new WinPilotTask("Target", false, new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.Delay, DelaySeconds: 1)]);
+        task = kind switch
+        {
+            "name" => task with { Name = "invalid?" },
+            "cron" => task with { Trigger = new(TaskTriggerType.Cron, Cron: "invalid") },
+            "paths" => task with { Trigger = new(TaskTriggerType.Process, ProcessPaths: ["relative.exe"], Event: TaskProcessEventType.Started) },
+            "event" => task with { Trigger = new(TaskTriggerType.Process, ProcessPaths: ["C:\\app.exe"]) },
+            "event-invalid" => task with { Trigger = new(TaskTriggerType.Process, ProcessPaths: ["C:\\app.exe"], Event: (TaskProcessEventType)999) },
+            "program" => task with { Actions = [new(TaskActionType.StartProgram)] },
+            "program-relative" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: "app.exe")] },
+            "program-type" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Path.Combine(fixture.Paths.ApplicationDirectory, "app.txt"))] },
+            "program-missing" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Path.Combine(fixture.Paths.ApplicationDirectory, "missing.exe"))] },
+            "working-directory" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, WorkingDirectory: Path.Combine(fixture.Paths.ApplicationDirectory, "missing"))] },
+            "working-directory-file" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, WorkingDirectory: Environment.ProcessPath!)] },
+            "tag" => task with { Actions = [new(TaskActionType.StartTag)] },
+            "process" => task with { Actions = [new(TaskActionType.CloseProcess)] },
+            "keyboard" => task with { Actions = [new(TaskActionType.Keyboard)] },
+            "extension-trigger-plugin" => task with { Trigger = new(TaskTriggerType.Extension, PluginId: " ", TriggerId: "event") },
+            "extension-trigger-id" => task with { Trigger = new(TaskTriggerType.Extension, PluginId: "plugin") },
+            "extension-action-plugin" => task with { Actions = [new(TaskActionType.Extension, PluginId: " ", ActionId: "run")] },
+            "extension-action-id" => task with { Actions = [new(TaskActionType.Extension, PluginId: "plugin")] },
+            "shell" => task with { Actions = [new(TaskActionType.Shell, Shell: "unsupported", Command: "echo test")] },
+            "command" => task with { Actions = [new(TaskActionType.Shell, Shell: "CMD")] },
+            "notification" => task with { Actions = [new(TaskActionType.SendNotification)] },
+            "image" => task with { Actions = [new(TaskActionType.SendNotification, NotificationContent: "&screenshot\n&screenshot")] },
+            _ => task
+        };
+        await using var app = await CreateTaskAppAsync(fixture);
+        using var client = app.GetTestClient();
+        foreach (var method in new[] { HttpMethod.Post, HttpMethod.Put })
+        {
+            using var request = new HttpRequestMessage(method, method == HttpMethod.Post ? "/api/tasks" : "/api/tasks/Original")
+            { Content = JsonContent.Create(task) };
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(message, problem.RootElement.GetProperty("detail").GetString());
+            Assert.Equal(message, Assert.Single(problem.RootElement.GetProperty("errors").GetProperty(field).EnumerateArray()).GetString());
+            Assert.Equal(originalContent, File.ReadAllText(originalFile));
+            Assert.Single(Directory.GetFiles(fixture.Paths.TasksDirectory));
+            Assert.Single(fixture.Tasks.GetAll());
+        }
     }
 
     [Fact]
     public async Task TaskResourceSuccessResponsesPreserve201200204AndLocation()
     {
         await using var fixture = new TaskServiceFixture();
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        await using var app = builder.Build();
-        app.MapTaskEndpoints();
-        await app.StartAsync();
+        await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
         var task = new WinPilotTask("Original", false, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]);
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
         using var created = await client.PostAsJsonAsync("/api/tasks", task);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         Assert.Equal("/api/tasks/Original", created.Headers.Location?.OriginalString);
@@ -534,8 +579,9 @@ public sealed partial class TaskServiceTest
         }
         else
         {
-            var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(task));
+            var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Create(task));
             Assert.Equal("延迟时间不能超过 86400 秒（24 小时）", error.Message);
+            Assert.Equal("actions[0].delaySeconds", error.Field);
             Assert.Empty(fixture.Tasks.GetAll());
         }
     }
@@ -579,7 +625,7 @@ public sealed partial class TaskServiceTest
             return WinPilot.PluginContract.PluginTaskActionResult.Success();
         });
         fixture.Tasks.Create(new("Example", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("Example");
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         fixture.Tasks.RunNow("Example");
@@ -614,7 +660,7 @@ public sealed partial class TaskServiceTest
             return WinPilot.PluginContract.PluginTaskActionResult.Success();
         });
         fixture.Tasks.Create(new("Example", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("Example");
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Task? stopping = null;
@@ -774,7 +820,7 @@ public sealed partial class TaskServiceTest
         });
         var task = new WinPilotTask("Example", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.Extension, PluginId: "test", ActionId: "block"),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]);
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
         fixture.Tasks.Create(task);
         fixture.Tasks.RunNow(task.Name);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -788,81 +834,6 @@ public sealed partial class TaskServiceTest
         Assert.Equal(0, fixture.Programs.Launches);
         if (operation == "delete") Assert.Empty(fixture.Tasks.GetAll());
         if (operation == "rename") Assert.Equal("Renamed", Assert.Single(fixture.Tasks.GetAll()).Name);
-    }
-
-
-
-
-
-
-
-
-    [Fact]
-    public async Task CronPollingFailureKeepsPollingInterval()
-    {
-        using var probe = new CronFailureProbeLogger();
-        await using var fixture = new TaskServiceFixture(logger: probe);
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
-        probe.BeforeLog = (level, message) =>
-        {
-            if (level == LogLevel.Warning && message.Contains("已停止该任务调度", StringComparison.Ordinal))
-            {
-                fixture.Tasks.SetEnabled("unreachable", false);
-                fixture.Tasks.SetEnabled("unreachable", true);
-                throw new InvalidOperationException("受控单任务异常");
-            }
-            if (level == LogLevel.Error && message.Contains("Cron 调度失败", StringComparison.Ordinal))
-                throw new InvalidOperationException("受控轮询边界异常");
-        };
-        fixture.Tasks.NotifyPluginsLoaded();
-        try
-        {
-            await fixture.Tasks.StartAsync(CancellationToken.None);
-            var observed = await probe.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.All(observed.Exceptions, exception =>
-            {
-                Assert.IsType<InvalidOperationException>(exception);
-                Assert.Equal("受控轮询边界异常", exception.Message);
-            });
-            Assert.True(observed.Interval >= TimeSpan.FromSeconds(1),
-                $"两次任务监听失败的间隔：{observed.Interval.TotalMilliseconds:F3} ms，应保留至少 1000 ms 的轮询延时");
-        }
-        finally
-        {
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var stopping = fixture.Tasks.StopAsync(cancellation.Token);
-            probe.Release();
-            await stopping;
-        }
-    }
-
-    [Fact]
-    public async Task CronBackgroundPollingStopsAfterWarningWithoutWaitingForAnotherTick()
-    {
-        using var probe = new CronFailureProbeLogger();
-        await using var fixture = new TaskServiceFixture(logger: probe);
-        var warned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        probe.BeforeLog = (level, message) =>
-        {
-            if (level == LogLevel.Warning && message.Contains("已停止该任务调度", StringComparison.Ordinal)) warned.TrySetResult();
-        };
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
-        fixture.Tasks.NotifyPluginsLoaded();
-        try
-        {
-            await fixture.Tasks.StartAsync(CancellationToken.None);
-            await warned.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        }
-        finally
-        {
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await fixture.Tasks.StopAsync(cancellation.Token);
-        }
-        Assert.Single(probe.Warnings);
-        Assert.Empty(probe.Exceptions);
-        Assert.True(fixture.Tasks.ExecuteTask?.IsCompleted);
     }
 
     [Theory]
@@ -885,9 +856,10 @@ public sealed partial class TaskServiceTest
     public async Task InvalidAutomaticTriggersAreRejectedWithoutSaving(TaskTriggerType type, string cron, string processPath)
     {
         await using var fixture = new TaskServiceFixture();
-        var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(new("invalid", true,
+        var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Create(new("invalid", true,
             new(type, Cron: cron, ProcessPaths: string.IsNullOrEmpty(processPath) ? [] : [processPath], Event: type == TaskTriggerType.Process ? TaskProcessEventType.Started : null),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")])));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)])));
+        Assert.Equal(type == TaskTriggerType.Cron ? "trigger.cron" : "trigger.processPaths", error.Field);
         Assert.Empty(fixture.Tasks.GetAll());
     }
 
@@ -1135,6 +1107,80 @@ public sealed partial class TaskServiceTest
         AssertTemporaryNotificationImageRemoved(notifications);
     }
 
+    [Theory]
+    [InlineData("app.exe", false)]
+    [InlineData("app.BAT", true)]
+    [InlineData("app.cmd", false)]
+    [InlineData("app.vbs", true)]
+    [InlineData("app.py", false)]
+    public async Task StartProgramSaveValidatesWithoutLaunchingAndPreservesOptionalFields(string filename, bool withWorkingDirectory)
+    {
+        await using var fixture = new TaskServiceFixture();
+        Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
+        var program = Path.Combine(fixture.Paths.ApplicationDirectory, filename);
+        File.WriteAllText(program, "test program");
+        var action = new TaskAction(TaskActionType.StartProgram, ProgramPath: program,
+            Arguments: "--example", WorkingDirectory: withWorkingDirectory ? fixture.Paths.ApplicationDirectory : "");
+        var task = new WinPilotTask("Program", false, new(TaskTriggerType.WinPilotStartup), [action]);
+        await using var app = await CreateTaskAppAsync(fixture);
+        using var client = app.GetTestClient();
+        using var created = await client.PostAsJsonAsync("/api/tasks", task);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var updated = await client.PutAsJsonAsync("/api/tasks/Program", task with { Name = "Renamed" });
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.Equal(action.Arguments, Assert.Single(fixture.Tasks.GetAll()).Actions[0].Arguments);
+        Assert.Equal(action.WorkingDirectory, Assert.Single(fixture.Tasks.GetAll()).Actions[0].WorkingDirectory);
+        Assert.Empty(fixture.Programs.Requests);
+    }
+
+    [Fact]
+    public async Task LoadingKeepsTasksWithUnavailableProgramFilesButSavingRejectsThem()
+    {
+        string stored = "";
+        await using var fixture = new TaskServiceFixture(initialize: paths =>
+        {
+            Directory.CreateDirectory(paths.TasksDirectory);
+            var task = new WinPilotTask("Unavailable", false, new(TaskTriggerType.WinPilotStartup),
+                [new(TaskActionType.StartProgram, ProgramPath: Path.Combine(paths.ApplicationDirectory, "missing.exe"),
+                    WorkingDirectory: Path.Combine(paths.ApplicationDirectory, "missing"))]);
+            stored = JsonSerializer.Serialize(TaskPersistenceFile.From(task));
+            File.WriteAllText(Path.Combine(paths.TasksDirectory, "Unavailable.json"), stored);
+        });
+        var loaded = Assert.Single(fixture.Tasks.GetAll());
+        Assert.Empty(fixture.Logger.Exceptions);
+        var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Update(loaded.Name, loaded));
+        Assert.Equal("actions[0].programPath", error.Field);
+        Assert.Equal("找不到指定的程序文件", error.Message);
+        Assert.Equal(stored, File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Unavailable.json")));
+        fixture.Tasks.Delete(loaded.Name);
+        Assert.Empty(fixture.Tasks.GetAll());
+    }
+
+    private static async Task<WebApplication> CreateTaskAppAsync(TaskServiceFixture fixture)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(fixture.Tasks);
+        builder.Services.AddSingleton(fixture.Extensions);
+        builder.Services.AddSingleton<TaskVariableCatalog>();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        });
+        var app = builder.Build();
+        try
+        {
+            app.MapTaskEndpoints();
+            await app.StartAsync();
+            return app;
+        }
+        catch
+        {
+            await app.DisposeAsync();
+            throw;
+        }
+    }
+
     private static IDisposable RegisterNotificationImage(TaskServiceFixture fixture, PluginImageContent image)
     {
         var scope = fixture.Extensions.CreateScope("test", "测试插件");
@@ -1146,7 +1192,7 @@ public sealed partial class TaskServiceTest
     private static void StartNotification(TaskServiceFixture fixture, TaskAction action)
     {
         fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.WinPilotStartup),
-            [action with { ContinueOnFailure = true }, new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [action with { ContinueOnFailure = true }, new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("Notification");
     }
 
@@ -1179,7 +1225,6 @@ public sealed partial class TaskServiceTest
         Assert.NotNull(notifications.ImageBytes);
         Assert.False(File.Exists(path));
     }
-
 
     private sealed class RecordingNotifications(Func<CancellationToken, Task<IReadOnlyList<NotificationChannelResult>>>? send = null) : INotificationService
     {

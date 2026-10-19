@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { reactive, computed, ref } from 'vue';
+import { loadScriptModule } from '../support/scriptModule.mjs';
+
+const component = new URL('../../src/features/desktop/KeyboardKeyPicker.vue', import.meta.url);
+const componentSource = readFileSync(component, 'utf8');
+const script = loadScriptModule(component, 'isKeyDisabled,toggle,expanded');
+
+function fixture(keys = [], collapsible = false) {
+  const props = reactive({ modelValue: [...keys], disabled: false, collapsible });
+  const events = [];
+  const context = {
+    exports: {},
+    require: name => name === 'vue' ? { computed, ref } : {},
+    defineProps: () => props,
+    withDefaults: value => value,
+    defineEmits: () => (event, value) => {
+      events.push(event);
+      if (event === 'update:modelValue') props.modelValue = value;
+    },
+  };
+  runInNewContext(script, context);
+  return { props, events, ...context.exports };
+}
+
+test('collapsible pickers start closed and expanding does not alter selected keys', () => {
+  const f = fixture(['A', 'B'], true);
+  const other = fixture([], true);
+  assert.equal(f.expanded.value, false);
+  f.expanded.value = true;
+  assert.equal(other.expanded.value, false);
+  f.expanded.value = false;
+  assert.deepEqual([...f.props.modelValue], ['A', 'B']);
+  assert.deepEqual(f.events, []);
+  f.toggle('A');
+  assert.deepEqual([...f.props.modelValue], ['B']);
+  assert.equal(f.expanded.value, false);
+});
+
+test('only task pickers opt into collapsing while the desktop keeps its keyboard visible', () => {
+  const source = componentSource;
+  const tasks = readFileSync(new URL('../../src/features/tasks/TaskActionEditor.vue', import.meta.url), 'utf8');
+  const desktop = readFileSync(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url), 'utf8');
+  assert.match(source, /collapsible: false/);
+  assert.match(source, /v-if="!collapsible \|\| expanded" class="physical-keyboard"/);
+  assert.match(source, /v-if="collapsible"[\s\S]*?:aria-expanded="expanded"/);
+  assert.match(tasks, /<KeyboardKeyPicker[^>]*\scollapsible\s*\/>/);
+  assert.doesNotMatch(desktop, /<KeyboardKeyPicker[^>]*\bcollapsible\b/);
+});
+
+test('collapse controls reuse the picker arrow without a tooltip or visible text', () => {
+  const source = componentSource;
+  assert.doesNotMatch(source, /:title=/);
+  assert.match(source, /:aria-label="expanded \? '收起键盘' : '展开键盘'"/);
+  assert.ok(source.includes('<span class="app-select-chevron" aria-hidden="true" />'));
+  assert.ok(!source.includes("{{ expanded ? '收起' : '展开' }}"));
+});
+
+test('three selected keys disable only unselected keys and removing one restores selection', () => {
+  const f = fixture(['Control', 'Shift']);
+  assert.equal(f.isKeyDisabled('A'), false);
+  f.toggle('A');
+  assert.equal(f.props.modelValue.length, 3);
+  assert.equal(f.isKeyDisabled('B'), true);
+  for (const key of f.props.modelValue) assert.equal(f.isKeyDisabled(key), false);
+  f.toggle('Shift');
+  assert.equal(f.props.modelValue.length, 2);
+  assert.equal(f.isKeyDisabled('B'), false);
+  f.toggle('B');
+  assert.equal(f.isKeyDisabled('Shift'), true);
+});
+
+test('global disabling still prevents removing selected keys', () => {
+  const f = fixture(['A']);
+  f.props.disabled = true;
+  assert.equal(f.isKeyDisabled('A'), true);
+  assert.equal(f.isKeyDisabled('B'), true);
+  f.toggle('A');
+  assert.equal(f.props.modelValue.length, 1);
+  assert.deepEqual(f.events, []);
+  f.props.disabled = false;
+  assert.equal(f.isKeyDisabled('A'), false);
+  assert.equal(f.isKeyDisabled('B'), false);
+});
+
+test('direct overflow attempts retain the existing three-key guard and limit event', () => {
+  const f = fixture(['A', 'B', 'C']);
+  f.toggle('D');
+  assert.equal(f.props.modelValue.length, 3);
+  assert.equal(f.props.modelValue.includes('D'), false);
+  assert.deepEqual(f.events, ['limit']);
+});
+
+test('all four physical keyboard groups use the same per-key disabled condition', () => {
+  const source = componentSource;
+  assert.equal([...source.matchAll(/:disabled="isKeyDisabled\(key\)"/g)].length, 4);
+  assert.match(source, /class="selected-key" :disabled="disabled"/);
+});

@@ -12,6 +12,23 @@ const properties = {
   bg: '--accent-bg', border: '--accent-border', focusRing: '--accent-focus-ring',
 };
 
+test('invalid form controls retain danger borders without replacing the normal focus ring', () => {
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const picker = readFileSync(new URL('../../src/components/AppPicker.css', import.meta.url), 'utf8');
+  const inputRule = '.field-control :is(input, textarea, select)[aria-invalid="true"]';
+  assert.ok(css.includes(inputRule));
+  assert.ok(css.indexOf(inputRule) > css.indexOf('.task-config-card .field-control textarea:focus'));
+  assert.ok(css.includes('.input-action:has(input[aria-invalid="true"]) :is(input, .input-action-button) { border-color: var(--danger-border); box-shadow: none; }'));
+  assert.ok(css.includes('.input-action:focus-within, .secret-input:focus-within { box-shadow: 0 0 0 2px var(--accent-focus-ring); }'));
+  assert.doesNotMatch(css, /box-shadow:[^;}]*var\(--danger-border\)|outline-color: var\(--danger-border\)/);
+  assert.ok(picker.includes('.app-select-trigger[aria-invalid="true"] { border-color: var(--danger-border); }'));
+  assert.doesNotMatch(picker, /outline-color: var\(--danger-border\)/);
+  for (const name of ['AppSelect', 'AppMultiSelect']) {
+    const source = readFileSync(new URL(`../../src/components/${name}.vue`, import.meta.url), 'utf8');
+    assert.match(source, /<button[\s\S]*?:aria-invalid="invalid \|\| undefined"/);
+  }
+});
+
 function contrast(first, second) {
   const luminance = hex => {
     const rgb = hex.slice(1).match(/../g).map(value => parseInt(value, 16) / 255);
@@ -164,6 +181,26 @@ test('status text and backgrounds stay readable in both explicit color modes', (
       }
     }
   }
+});
+
+test('keyboard page spacing belongs to the desktop container rather than the shared picker', () => {
+  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const desktop = readFileSync(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url), 'utf8');
+  const pickerStyle = styles.match(/\.virtual-keyboard\s*\{([^}]*)\}/)?.[1];
+  assert.ok(pickerStyle);
+  assert.doesNotMatch(pickerStyle, /margin(?:-top)?\s*:/);
+  assert.match(styles, /\.keyboard-help\s*\{\s*margin:\s*0;/);
+  assert.match(styles, /\.keyboard-panel-controls\s*\{\s*padding-top:\s*25px;/);
+  assert.ok(desktop.includes('class="keyboard-panel-controls"'));
+  assert.doesNotMatch(styles, /\.task-config-card[^{}]*\.(?:virtual-keyboard|keyboard-help)\s*\{/);
+});
+
+test('field validation messages share a small regular-weight style regardless of label inheritance', () => {
+  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const errorStyle = styles.match(/\.field-error\s*\{([^}]*)\}/)?.[1];
+  assert.ok(errorStyle);
+  assert.match(errorStyle, /font-size:\s*12px;/);
+  assert.match(errorStyle, /font-weight:\s*400;/);
 });
 
 test('host styles do not reference undefined CSS variables without fallbacks', () => {

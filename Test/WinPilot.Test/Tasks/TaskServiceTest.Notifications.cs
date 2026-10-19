@@ -141,7 +141,7 @@ public sealed partial class TaskServiceTest
         scope.Register([new("image", "图片触发")]);
         fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "image"),
             [new(TaskActionType.SendNotification, NotificationContent: "&image=\"前缀-&test.image\"", ContinueOnFailure: true),
-                new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
 
         scope.Emit(new("image", DateTimeOffset.Now, new Dictionary<string, object?> { ["&test.image"] = new PluginImageContent([1], "image/png") }));
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));

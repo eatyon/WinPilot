@@ -15,6 +15,7 @@ const props = withDefaults(
     options: readonly AppMultiSelectOption[];
     label: string;
     disabled?: boolean;
+    invalid?: boolean;
     maxHeight?: number;
     ariaLabel?: string;
     labelledBy?: string;
@@ -97,6 +98,7 @@ watch(
       type="button"
       :disabled="disabled || loading"
       :aria-busy="loading"
+      :aria-invalid="invalid || undefined"
       :aria-label="ariaLabel"
       :aria-labelledby="labelledBy"
       :aria-expanded="open"

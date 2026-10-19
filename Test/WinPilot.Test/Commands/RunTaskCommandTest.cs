@@ -101,8 +101,8 @@ public sealed class RunTaskCommandTest
         await using var fixture = new TaskServiceFixture();
         fixture.Programs.FailFirst = true;
         fixture.Tasks.Create(new("Example", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe", ContinueOnFailure: continueOnFailure),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, ContinueOnFailure: continueOnFailure),
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var replies = new List<string>();
         using var processor = fixture.Processor();
         await processor.ProcessAsync(Message("运行任务Example", replies.Add), "", CancellationToken.None);

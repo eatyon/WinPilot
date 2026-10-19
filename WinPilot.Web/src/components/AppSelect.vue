@@ -9,6 +9,7 @@ const props = withDefaults(
     modelValue: any;
     options: readonly AppSelectOption[];
     disabled?: boolean;
+    invalid?: boolean;
     placeholder?: string;
     ariaLabel?: string;
     id?: string;
@@ -92,6 +93,7 @@ watch(
       type="button"
       :disabled="disabled || loading"
       :aria-label="ariaLabel"
+      :aria-invalid="invalid || undefined"
       :aria-busy="loading"
       aria-haspopup="listbox"
       :aria-expanded="open"

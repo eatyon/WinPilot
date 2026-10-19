@@ -3,10 +3,6 @@ using System.Net;
 using System.Text.Json;
 using Cronos;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using System.Text.Json.Serialization;
-using WinPilot.Web;
 using Microsoft.Extensions.Logging;
 using WinPilot.Core.Tasks;
 using WinPilot.Features.Tasks;
@@ -98,9 +94,9 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("enabled", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.Create(new("disabled", false, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2030, 1, 15)));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         await fixture.ProcessDueCronTasksAsync(time.AddSeconds(59), CancellationToken.None);
@@ -118,7 +114,7 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("seconds", true, new(TaskTriggerType.Cron, Cron: "* * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time.AddMilliseconds(500), CancellationToken.None);
         Assert.Equal(0, fixture.Programs.Launches);
@@ -138,10 +134,10 @@ public sealed partial class TaskServiceTest
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2030, 1, 15)));
         Assert.Null(CronExpression.Parse("0 0 0 31 2 *", CronFormat.IncludeSeconds).GetNextOccurrence(time, TimeZoneInfo.Local));
         fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         Assert.Equal(new[] { "a-unreachable", "b-healthy" }, fixture.Tasks.GetAll().Select(task => task.Name));
 
         var failure = await Record.ExceptionAsync(() => fixture.ProcessDueCronTasksAsync(time.AddMinutes(1), CancellationToken.None));
@@ -160,10 +156,10 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(logger: probe);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var injected = 0;
         probe.BeforeLog = (level, message) =>
         {
@@ -187,7 +183,7 @@ public sealed partial class TaskServiceTest
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
         fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "unreachable.json");
         var original = File.ReadAllText(file);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
@@ -217,13 +213,13 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.Create(new("disabled", false, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.Create(new("healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.Create(new("startup", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var originals = Directory.GetFiles(fixture.Paths.TasksDirectory).ToDictionary(path => path, File.ReadAllText);
         await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
@@ -255,7 +251,7 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var task = fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(DateTimeOffset.Now, CancellationToken.None);
         Assert.False(fixture.Tasks.GetCronAvailability(task));
         fixture.Tasks.RunNow(task.Name);
@@ -277,7 +273,7 @@ public sealed partial class TaskServiceTest
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
         fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         Assert.Single(probe.Warnings);
@@ -315,7 +311,7 @@ public sealed partial class TaskServiceTest
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
         var task = fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "unreachable.json");
         var original = File.ReadAllText(file);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
@@ -345,7 +341,7 @@ public sealed partial class TaskServiceTest
         Assert.NotNull(due);
         Assert.Null(expression.GetNextOccurrence(due.Value.AddSeconds(1), TimeZoneInfo.Local));
         fixture.Tasks.Create(new("last", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 12 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         using var fileLock = lockFile
             ? File.Open(Path.Combine(fixture.Paths.TasksDirectory, "last.json"), FileMode.Open, FileAccess.Read, FileShare.Read)
@@ -364,7 +360,7 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("enabled", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         using var cancellation = new CancellationTokenSource();
@@ -381,7 +377,7 @@ public sealed partial class TaskServiceTest
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
         fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         probe.BeforeLog = (level, message) =>
         {
             if (level == LogLevel.Warning && message.Contains("没有后续执行时间", StringComparison.Ordinal))
@@ -426,7 +422,7 @@ public sealed partial class TaskServiceTest
             if (level == LogLevel.Warning && message.Contains("没有后续执行时间", StringComparison.Ordinal)) warned.TrySetResult();
         };
         fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
-            [new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.NotifyPluginsLoaded();
         try
         {
@@ -472,29 +468,5 @@ public sealed partial class TaskServiceTest
         }
         internal void Release() => release.Set();
         public void Dispose() => release.Dispose();
-    }
-    private static async Task<WebApplication> CreateTaskAppAsync(TaskServiceFixture fixture)
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(fixture.Tasks);
-        builder.Services.AddSingleton(fixture.Extensions);
-        builder.Services.AddSingleton<TaskVariableCatalog>();
-        builder.Services.ConfigureHttpJsonOptions(options =>
-        {
-            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        });
-        var app = builder.Build();
-        try
-        {
-            app.MapTaskEndpoints();
-            await app.StartAsync();
-            return app;
-        }
-        catch
-        {
-            await app.DisposeAsync();
-            throw;
-        }
     }
 }

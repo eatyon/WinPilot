@@ -1,99 +1,23 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowReactive, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, toRaw, watch } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import AppModal from '../../components/AppModal.vue';
 import AppSelect from '../../components/AppSelect.vue';
 import AppMultiSelect from '../../components/AppMultiSelect.vue';
-import KeyboardKeyPicker from '../desktop/KeyboardKeyPicker.vue';
+import TaskActionEditor from './TaskActionEditor.vue';
+import TaskVariableHelp from './TaskVariableHelp.vue';
 import CronEditor from './CronEditor.vue';
-import { readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
+import { apiErrorMessage, readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { executeRequest } from '../../api/requestExecutor';
 import { showToast } from '../../ui/toast';
+import { focusInvalidInput } from '../../ui/focusInvalidInput';
 import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
-type Trigger = {
-  event: '' | 'Started' | 'Exited';
-  type: 'Cron' | 'WinPilotStartup' | 'Process' | 'Extension';
-  cron: string;
-  processPaths: string[];
-  pluginId?: string;
-  triggerId?: string;
-  parameters?: Record<string, any>;
-};
-type RegisteredTrigger = {
-  pluginId: string;
-  pluginDisplayName: string;
-  triggerId: string;
-  triggerName: string;
-  available: boolean;
-  parameters: ParameterDefinition[];
-};
-type ParameterDefinition = {
-  key: string;
-  label: string;
-  type: 'Text' | 'Number' | 'Select' | 'Checkbox' | 'Textarea' | 'MultiCheckbox';
-  required: boolean;
-  defaultValue?: unknown;
-  options?: { value: string; label: string }[];
-};
-type RegisteredAction = {
-  pluginId: string;
-  pluginDisplayName: string;
-  actionId: string;
-  actionName: string;
-  available: boolean;
-  dynamicOptions?: boolean;
-  parameters: ParameterDefinition[];
-};
-type RegisteredVariable = {
-  name: string;
-  displayName: string;
-  description: string;
-  type: 'Text' | 'Image';
-  pluginId: string;
-  pluginDisplayName: string;
-};
-type Action = {
-  type:
-    | 'StartProgram'
-    | 'StartTag'
-    | 'CloseProcess'
-    | 'Delay'
-    | 'Keyboard'
-    | 'Shell'
-    | 'SendNotification'
-    | 'TaskState'
-    | 'Extension';
-  programPath: string;
-  arguments: string;
-  workingDirectory: string;
-  runElevated: boolean;
-  silent: boolean;
-  tagName: string;
-  processName: string;
-  force: boolean;
-  currentUserOnly: boolean;
-  delaySeconds: number | '';
-  keys: string[];
-  shell: 'CMD' | 'PowerShell';
-  command: string;
-  notificationTitle: string;
-  notificationContent: string;
-  notificationChannel: string;
-  taskName: string;
-  state: '' | 'Toggle' | 'Enable' | 'Disable';
-  pluginId?: string;
-  actionId?: string;
-  parameters?: Record<string, any>;
-  continueOnFailure: boolean;
-};
-type Task = {
-  name: string;
-  enabled: boolean;
-  cronAvailable?: boolean;
-  trigger: Trigger;
-  actions: Action[];
-};
-const tasks = ref<Task[]>([]),
+import { taskStateOptions, createTrigger, createAction, parameterDefaults, actionPayload,
+  multiSelectionLabel, multiParameterOptions, toggleMultiOption,
+  type Trigger, type Action, type Task, type ListedTask, type RegisteredTrigger, type RegisteredAction, type RegisteredVariable,
+  type ActionOption } from './taskModels';
+import { validateTask, unavailableSelectValue, hasUnavailableParameter, invalidParameter } from './taskValidation';
+const tasks = ref<ListedTask[]>([]),
   tasksLoaded = ref(false),
   tags = ref<{ name: string }[]>([]),
   registeredTriggers = ref<RegisteredTrigger[]>([]),
@@ -101,7 +25,7 @@ const tasks = ref<Task[]>([]),
   registeredVariables = ref<RegisteredVariable[]>([]),
   editor = ref<Task>(),
   originalName = ref(''),
-  detailTarget = ref<Task>(),
+  detailTarget = ref<ListedTask>(),
   deleteTarget = ref<Task>(),
   runTarget = ref<Task>(),
   pageError = ref(''),
@@ -127,13 +51,15 @@ async function runPageRequest<T>(url: string, init: RequestInit, handleResponse:
   }
 }
 
-async function performOperation(key: string, url: string, init: RequestInit, success: () => Promise<void> | void) {
+async function performOperation(key: string, url: string, init: RequestInit, success: () => Promise<void> | void,
+  readFailure?: (response: Response, signal: AbortSignal) => Promise<string>) {
   if (!isPageActive || pendingOperations.has(key)) return;
   const controller = new AbortController();
   pendingOperations.set(key, controller);
   try {
     await runPageRequest(url, { ...init, signal: controller.signal }, async response => {
-      if (!response.ok) throw new Error(await readApiError(response, '操作失败'));
+      if (!response.ok) throw new Error(readFailure
+        ? await readFailure(response, controller.signal) : await readApiError(response, '操作失败'));
     });
     if (isPageActive && !controller.signal.aborted) await success();
   } catch (cause) {
@@ -146,63 +72,102 @@ async function performOperation(key: string, url: string, init: RequestInit, suc
   }
 }
 
-function parameterDefaults(parameters: ParameterDefinition[] = []) {
-  return Object.fromEntries(parameters.map(parameter => [
-    parameter.key,
-    parameter.defaultValue == null
-      ? (parameter.type === 'MultiCheckbox' ? [] : parameter.type === 'Checkbox' ? false : '')
-      : JSON.parse(JSON.stringify(parameter.defaultValue)),
-  ]));
+const actionKeys = new WeakMap<Action, symbol>();
+function actionKey(action: Action) {
+  const identity = toRaw(action);
+  let key = actionKeys.get(identity);
+  if (!key) {
+    key = Symbol();
+    actionKeys.set(identity, key);
+  }
+  return key;
 }
-
-const taskStateOptions = [
-  { value: '', label: '请选择状态' },
-  { value: 'Toggle', label: '切换' },
-  { value: 'Enable', label: '启用' },
-  { value: 'Disable', label: '禁用' },
-];
-const actionOptions = [
-  ['StartProgram', '启动'],
-  ['StartTag', '快捷标签'],
-  ['CloseProcess', '关闭进程'],
-  ['Delay', '延迟'],
-  ['Shell', 'Shell'],
-  ['Keyboard', '键盘模拟'],
-  ['SendNotification', '发送通知'],
-  ['TaskState', '任务状态'],
-  ['Extension', '插件扩展'],
-] as const;
 const channelOptions = ref<{ value: string; label: string }[]>([]);
+const actionErrors = shallowReactive(new Map<Action, { message: string; snapshot: string; field?: string }>());
+const actionValidationFields: Partial<Record<Action['type'], string>> = {
+  StartProgram: 'programPath', StartTag: 'tagName', CloseProcess: 'processName', Delay: 'delaySeconds',
+  Keyboard: 'keys', Shell: 'command', SendNotification: 'notificationContent',
+};
+const editorForm = ref<HTMLElement>();
+const triggerErrorField = ref('');
+const invalidProcessPath = computed(() => Math.max(0, editor.value?.trigger.processPaths
+  .findIndex(path => path.trim() && !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(path.trim())) ?? -1));
+const invalidTriggerField = computed(() => {
+  if (!fieldErrors.value.extension || !editor.value) return undefined;
+  const trigger = editor.value.trigger;
+  if (triggerErrorField.value) return triggerErrorField.value;
+  if (!trigger.pluginId) return 'pluginId';
+  if (!trigger.triggerId) return 'triggerId';
+  const parameter = invalidParameter(triggerDefinitionFor(trigger.triggerId)?.parameters, trigger.parameters);
+  return parameter ? `parameters.${parameter.key}` : 'triggerId';
+});
+const inputSelector = 'input:not(:disabled), textarea:not(:disabled), .app-select-trigger:not(:disabled), .keyboard-expand-toggle:not(:disabled), .task-trigger-program-add:not(:disabled)';
+function fieldInput(container: HTMLElement | null | undefined, field: string) {
+  const target = Array.from(container?.querySelectorAll<HTMLElement>('[data-task-field]') ?? [])
+    .find(element => element.dataset.taskField === field);
+  return target?.matches(inputSelector) ? target : target?.querySelector<HTMLElement>(inputSelector);
+}
+function invalidActionField(action: Action) {
+  const error = actionErrors.get(action);
+  if (!error) return undefined;
+  const field = error.field ?? actionValidationFields[action.type];
+  if (field !== undefined) return field;
+  if (action.type === 'TaskState') return action.taskName.trim() ? 'state' : 'taskName';
+  if (!action.pluginId) return 'pluginId';
+  if (!action.actionId) return 'actionId';
+  const parameter = invalidParameter(actionDefinitionFor(action)?.parameters, action.parameters);
+  return parameter ? `parameters.${parameter.key}` : 'actionId';
+}
+async function focusTaskError(currentEditor: Task, signal?: AbortSignal) {
+  await nextTick();
+  if (!isPageActive || signal?.aborted || editor.value !== currentEditor) return;
+  for (const field of ['name', 'cron', 'event', 'processPaths', 'extension']) {
+    if (!fieldErrors.value[field]) continue;
+    const target = field === 'extension' ? invalidTriggerField.value ?? field : field;
+    let input = fieldInput(editorForm.value, target);
+    if (field === 'processPaths') {
+      input = fieldInput(editorForm.value, `processPaths.${invalidProcessPath.value}`)
+        ?? fieldInput(editorForm.value, 'addProcess');
+    }
+    if (input) { focusInvalidInput(input); return; }
+  }
+  for (const [index, action] of currentEditor.actions.entries()) {
+    const field = invalidActionField(action);
+    if (!field) continue;
+    const container = editorForm.value?.querySelector<HTMLElement>(`[data-task-action="${index}"]`);
+    const input = fieldInput(container, field) ?? fieldInput(container, 'type');
+    if (input) {
+      focusInvalidInput(input, field === 'keys' ? input.closest<HTMLElement>('.selected-keys') : undefined);
+      return;
+    }
+  }
+}
 function clearTriggerErrors() {
+  triggerErrorField.value = '';
   delete fieldErrors.value.cron;
-  delete fieldErrors.value.processPaths;
   delete fieldErrors.value.event;
+  delete fieldErrors.value.processPaths;
   delete fieldErrors.value.extension;
 }
-function clearActionError(index: number) {
-  delete fieldErrors.value[`action-${index}`];
-}
+watch(() => editor.value?.name, () => { delete fieldErrors.value.name; }, { flush: 'sync' });
+watch(() => JSON.stringify(editor.value?.trigger), clearTriggerErrors, { flush: 'sync' });
 watch(
-  () => editor.value?.actions.map((action) => action.pluginId),
-  (current, previous) => {
-    current?.forEach((pluginId, index) => {
-      if (pluginId !== previous?.[index]) clearActionError(index);
-    });
+  () => editor.value?.actions.map(action => [action, JSON.stringify(actionPayload(action))] as const),
+  current => {
+    const snapshots = new Map<Action, string>();
+    for (const [action, snapshot] of current ?? []) snapshots.set(toRaw(action), snapshot);
+    for (const [action, error] of actionErrors)
+      if (snapshots.get(toRaw(action)) !== error.snapshot) actionErrors.delete(action);
   },
 );
 function selectActionType(index: number, type: Action['type']) {
   if (!editor.value) return;
   editor.value.actions[index].type = type;
   if (type === 'Extension') editor.value.actions[index].parameters = {};
-  clearActionError(index);
-}
-function actionDefinitionsFor(pluginId?: string) {
-  return registeredActions.value.filter((item) => item.pluginId === pluginId);
 }
 function actionDefinitionFor(action?: Action) {
   return registeredActions.value.find(item => item.pluginId === action?.pluginId && item.actionId === action?.actionId);
 }
-type ActionOption = { value: string; label: string };
 const pendingActionOptions = new Map<string, Promise<ActionOption[]>>();
 const detailActionOptions = ref(new Map<string, ActionOption[]>());
 function actionOptionsKey(pluginId: string, actionId: string, parameterKey: string) {
@@ -295,37 +260,7 @@ function selectExtensionAction(index: number, actionId: string) {
   const definition = actionDefinitionFor({ ...action, actionId });
   action.actionId = actionId;
   action.parameters = parameterDefaults(definition?.parameters);
-  clearActionError(index);
   loadActionOptionsForAction(index);
-}
-function multiSelectionLabel(value: unknown) {
-  if (!Array.isArray(value) || value.length === 0) return '请选择配置';
-  return `已选择 ${value.length} 项`;
-}
-function multiParameterOptions(parameter: ParameterDefinition, value: unknown) {
-  const available = (parameter.options ?? []).map((option) => ({ ...option, unavailable: false }));
-  const known = new Set(available.map((option) => option.value));
-  const missing = Array.isArray(value)
-    ? value
-        .map(String)
-        .filter((item) => !known.has(item))
-        .map((item) => ({ value: item, label: `${item}（不可用）`, unavailable: true }))
-    : [];
-  return [...available, ...missing];
-}
-function unavailableSelectValue(parameter: ParameterDefinition, value: unknown) {
-  const selected = String(value ?? '');
-  return selected && !parameter.options?.some((option) => option.value === selected) ? selected : '';
-}
-function toggleMultiOption(action: Pick<Action, 'parameters'>, parameterKey: string, value: string, checked: boolean) {
-  action.parameters ??= {};
-  const selected = Array.isArray(action.parameters[parameterKey])
-    ? (action.parameters[parameterKey] as string[])
-    : [];
-  const position = selected.indexOf(value);
-  if (!checked && position >= 0) selected.splice(position, 1);
-  else if (checked && position < 0) selected.push(value);
-  action.parameters[parameterKey] = selected;
 }
 const filteredTasks = computed(() => {
   const keyword = taskSearch.value.trim().toLocaleLowerCase();
@@ -333,48 +268,14 @@ const filteredTasks = computed(() => {
     ? tasks.value.filter((task) => task.name.toLocaleLowerCase().includes(keyword))
     : tasks.value;
 });
-const createTrigger = (): Trigger => ({
-  event: '',
-  type: 'Cron',
-  cron: '',
-  processPaths: [],
-  pluginId: '',
-  triggerId: '',
-  parameters: {},
-});
-const createAction = (): Action => ({
-  type: 'StartProgram',
-  programPath: '',
-  arguments: '',
-  workingDirectory: '',
-  runElevated: false,
-  silent: false,
-  tagName: '',
-  processName: '',
-  force: false,
-  currentUserOnly: false,
-  delaySeconds: '',
-  keys: [],
-  shell: 'PowerShell',
-  command: '',
-  notificationTitle: '',
-  notificationContent: '',
-  notificationChannel: '',
-  taskName: '',
-  state: '',
-  pluginId: '',
-  actionId: '',
-  parameters: {},
-  continueOnFailure: false,
-});
 const triggerLabel = (trigger: Trigger, cronAvailable?: boolean) =>
   trigger.type === 'Cron'
     ? `Cron 计划 · ${trigger.cron || '未设置'}${cronAvailable === false ? '（不可用）' : ''}`
     : trigger.type === 'WinPilotStartup'
-      ? 'WinPilot 启动时'
+      ? 'WinPilot 启动'
       : trigger.type === 'Extension'
         ? extensionTriggerLabel(trigger)
-        : `程序事件 · 程序${trigger.event === 'Started' ? '启动' : '退出'}时`;
+        : `程序事件 · ${trigger.event === 'Started' ? '程序启动时' : trigger.event === 'Exited' ? '程序退出时' : '未选择事件'}`;
 function extensionTriggerLabel(trigger: Trigger) {
   const definition = registeredTriggers.value.find(
     (item) => item.pluginId === trigger.pluginId && item.triggerId === trigger.triggerId,
@@ -404,7 +305,7 @@ function hasUnavailableTrigger(task: Task) {
     hasUnavailableParameter(parameter, task.trigger.parameters?.[parameter.key]),
   ));
 }
-function taskWarningText(task: Task) {
+function taskWarningText(task: ListedTask) {
   const warnings: string[] = [];
   if (task.trigger.type === 'Cron' && task.cronAvailable === false) warnings.push('Cron 表达式没有后续执行时间');
   if (hasUnavailableTrigger(task)) warnings.push('插件触发条件不可用');
@@ -432,8 +333,8 @@ const actionCoreLabel = (action: Action) =>
               : action.type === 'SendNotification'
                 ? `发送通知 · ${action.notificationContent || '未设置'}`
                 : action.type === 'TaskState'
-                    ? `任务状态 · ${taskStateOptions.find(option => option.value === action.state)?.label ?? '请选择状态'} · ${action.taskName || '未选择任务'}`
-                    : `启动程序 · ${action.programPath || '未指定'}`;
+                  ? `任务状态 · ${taskStateOptions.find(option => option.value === action.state)?.label ?? '请选择状态'} · ${action.taskName || '未选择任务'}`
+                  : `启动程序 · ${action.programPath || '未指定'}`;
 const actionLabel = (action: Action, index: number, total: number) =>
   `${actionCoreLabel(action)}${action.continueOnFailure && index < total - 1 ? ' · 失败后继续' : ''}`;
 function extensionActionLabel(action: Action) {
@@ -472,6 +373,7 @@ function openTaskEditor(task?: Task) {
   originalName.value = task?.name ?? '';
   detailTarget.value = undefined;
   fieldErrors.value = {};
+  actionErrors.clear();
   pageError.value = '';
   editor.value?.actions.forEach((action, index) => {
     if (action.type === 'Extension') loadActionOptionsForAction(index);
@@ -501,9 +403,6 @@ async function loadTasks() {
 const extensionPlugins = computed(() => [
   ...new Map(registeredTriggers.value.map((item) => [item.pluginId, item])).values(),
 ]);
-const actionPlugins = computed(() => [
-  ...new Map(registeredActions.value.map((item) => [item.pluginId, item])).values(),
-]);
 const extensionTriggers = computed(() =>
   registeredTriggers.value.filter((item) => item.pluginId === editor.value?.trigger.pluginId),
 );
@@ -515,135 +414,95 @@ function selectExtensionPlugin(pluginId: string) {
   editor.value.trigger.pluginId = pluginId;
   editor.value.trigger.triggerId = '';
   editor.value.trigger.parameters = {};
-  clearTriggerErrors();
 }
 function selectExtensionTrigger(triggerId: string) {
   if (!editor.value) return;
   const definition = triggerDefinitionFor(triggerId);
   editor.value.trigger.triggerId = triggerId;
   editor.value.trigger.parameters = parameterDefaults(definition?.parameters);
-  clearTriggerErrors();
 }
 function selectTriggerParameter(key: string, value: unknown) {
   if (!editor.value) return;
   editor.value.trigger.parameters ??= {};
   editor.value.trigger.parameters[key] = value;
-  clearTriggerErrors();
 }
-function isRequiredParameterMissing(parameter: ParameterDefinition, value: unknown) {
-  if (!parameter.required) return false;
-  if (parameter.type === 'MultiCheckbox') return !Array.isArray(value) || value.length === 0;
-  if (parameter.type === 'Checkbox') return false;
-  return value === null || value === undefined || !String(value).trim();
-}
-function hasUnavailableParameter(parameter: ParameterDefinition, value: unknown) {
-  if (parameter.type === 'Select') return Boolean(unavailableSelectValue(parameter, value));
-  if (parameter.type !== 'MultiCheckbox' || !Array.isArray(value)) return false;
-  return value
-    .map(String)
-    .some((selected) => !parameter.options?.some((option) => option.value === selected));
-}
-function parameterValidationError(definitions: ParameterDefinition[] = [], values?: Record<string, unknown>) {
-  const missing = definitions.find(parameter => isRequiredParameterMissing(parameter, values?.[parameter.key]));
-  if (missing)
-    return missing.type === 'Select' || missing.type === 'MultiCheckbox'
-      ? `请选择${missing.label}`
-      : `请输入${missing.label}`;
-  const unavailable = definitions.find(parameter => hasUnavailableParameter(parameter, values?.[parameter.key]));
-  return unavailable ? `${unavailable.label}包含不可用配置，请重新选择` : '';
-}
-function validate(value: Task) {
-  const result: Record<string, string> = {};
-  if (!value.name.trim()) result.name = '请输入任务名称';
-  const trigger = value.trigger;
-  if (trigger.type === 'Cron' && !trigger.cron.trim()) result.cron = '请输入 Cron 表达式';
-  if (trigger.type === 'Process') {
-    if (trigger.event !== 'Started' && trigger.event !== 'Exited') result.event = '请选择事件';
-    const paths = trigger.processPaths.map((path) => path.trim()).filter(Boolean);
-    if (!paths.length) result.processPaths = '请至少选择一个程序绝对路径';
-    else if (paths.some((path) => !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(path)))
-      result.processPaths = '程序路径必须是绝对路径';
-  }
-  if (trigger.type === 'Extension' && (!trigger.pluginId || !trigger.triggerId))
-    result.extension = '请选择插件和触发条件';
-  if (trigger.type === 'Extension' && trigger.pluginId && trigger.triggerId) {
-    const definition = registeredTriggers.value.find(
-      (item) => item.pluginId === trigger.pluginId && item.triggerId === trigger.triggerId,
-    );
-    const error = parameterValidationError(definition?.parameters, trigger.parameters);
-    if (error) result.extension = error;
-  }
-  value.actions.forEach((action, index) => {
-    if (action.type === 'TaskState') {
-      if (!action.taskName.trim()) result[`action-${index}`] = '请选择任务';
-      else if (!taskStateOptions.some(option => option.value !== '' && option.value === action.state))
-        result[`action-${index}`] = '请选择状态';
-    }
-    if (action.type === 'Extension' && (!action.pluginId || !action.actionId))
-      result[`action-${index}`] = '请选择插件和动作';
-    if (action.type === 'Extension' && action.pluginId && action.actionId) {
-      const definition = actionDefinitionsFor(action.pluginId).find(
-        (item) => item.actionId === action.actionId,
-      );
-      const error = parameterValidationError(definition?.parameters, action.parameters);
-      if (error) result[`action-${index}`] = error;
-    }
-    if (action.type === 'StartProgram' && !action.programPath.trim())
-      result[`action-${index}`] = '请选择要启动的程序';
-    if (action.type === 'StartTag' && !action.tagName.trim())
-      result[`action-${index}`] = '请选择快捷标签';
-    if (action.type === 'CloseProcess' && !action.processName.trim())
-      result[`action-${index}`] = '请输入进程名';
-    if (action.type === 'Delay' && (!Number.isInteger(action.delaySeconds) || Number(action.delaySeconds) <= 0))
-      result[`action-${index}`] = '请输入有效的延迟秒数';
-    else if (action.type === 'Delay' && Number(action.delaySeconds) > 86400)
-      result[`action-${index}`] = '延迟时间不能超过 86400 秒（24 小时）';
-    if (action.type === 'Keyboard' && !action.keys.length) result[`action-${index}`] = '请选择至少一个按键';
-    if (action.type === 'Shell' && !action.command.trim()) result[`action-${index}`] = '请输入 Shell 命令';
-    if (action.type === 'SendNotification' && !action.notificationContent.trim())
-      result[`action-${index}`] = '请填写通知内容';
-  });
-  return result;
-}
-const actionFields: Record<Action['type'], readonly (keyof Action)[]> = {
-  StartProgram: ['programPath', 'arguments', 'workingDirectory', 'runElevated', 'silent'],
-  StartTag: ['tagName'],
-  CloseProcess: ['processName', 'force', 'currentUserOnly'],
-  Delay: ['delaySeconds'],
-  Keyboard: ['keys'],
-  Shell: ['shell', 'command'],
-  SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
-  TaskState: ['taskName', 'state'],
-  Extension: ['pluginId', 'actionId', 'parameters'],
-};
-function actionPayload(action: Action) {
-  return {
-    type: action.type,
-    ...Object.fromEntries(actionFields[action.type].map(key => [key, action[key]])),
-    ...(action.continueOnFailure ? { continueOnFailure: true } : {}),
-  };
-}
+const validate = (value: Task) => validateTask(value, registeredTriggers.value, registeredActions.value);
 async function saveTask() {
-  if (!editor.value || safeModeEnabled.value) return;
+  if (!editor.value || safeModeEnabled.value || pendingOperations.has('save')) return;
   const value = JSON.parse(JSON.stringify(editor.value)) as Task;
   value.name = value.name.trim();
   value.trigger.processPaths = value.trigger.processPaths.map((path) => path.trim()).filter(Boolean);
   if (value.actions.length) value.actions[value.actions.length - 1].continueOnFailure = false;
-  fieldErrors.value = validate(value);
-  if (Object.keys(fieldErrors.value).length) {
-    showToast('请检查任务表单中的必填项');
+  const errors = validate(value);
+  if (Object.keys(errors).length) {
+    triggerErrorField.value = '';
+    fieldErrors.value = Object.fromEntries(Object.entries(errors).filter(([key]) => !key.startsWith('action-')));
+    actionErrors.clear();
+    editor.value.actions.forEach((action, index) => {
+      const message = errors[`action-${index}`];
+      if (message) actionErrors.set(action, { message, snapshot: JSON.stringify(actionPayload(action)) });
+    });
+    showToast('请检查任务表单中的配置');
+    await focusTaskError(editor.value);
     return;
   }
   const url = originalName.value ? `/api/tasks/${encodeURIComponent(originalName.value)}` : '/api/tasks';
   const currentEditor = editor.value;
+  const submittedName = currentEditor.name;
+  const submittedTrigger = JSON.stringify(currentEditor.trigger);
+  const submittedActions = currentEditor.actions.map(action => ({ action, snapshot: JSON.stringify(actionPayload(action)) }));
   await performOperation('save', url, {
     method: originalName.value ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...value, actions: value.actions.map(actionPayload) }),
+    body: JSON.stringify({
+      ...value,
+      trigger: { ...value.trigger, event: value.trigger.type === 'Process' ? value.trigger.event : undefined },
+      actions: value.actions.map(actionPayload),
+    }),
   }, async () => {
     if (editor.value === currentEditor) editor.value = undefined;
     showToast('任务已保存', 'success');
     await loadTasks();
+  }, async (response, signal) => {
+    let problem: unknown;
+    try { problem = await response.json(); }
+    catch (cause) { if (isAbortError(cause)) throw cause; return '操作失败'; }
+    const errors = problem && typeof problem === 'object' && !Array.isArray(problem)
+      ? (problem as Record<string, unknown>).errors : undefined;
+    let applied = false;
+    if ((response.status === 400 || response.status === 409) && isPageActive && !signal.aborted && editor.value === currentEditor
+      && errors && typeof errors === 'object' && !Array.isArray(errors)) {
+      triggerErrorField.value = '';
+      fieldErrors.value = {};
+      actionErrors.clear();
+      const triggerFields: Record<string, string> = {
+        'trigger.cron': 'cron', 'trigger.event': 'event', 'trigger.processPaths': 'processPaths',
+        'trigger.pluginId': 'extension', 'trigger.triggerId': 'extension', 'trigger.parameters': 'extension',
+      };
+      for (const [path, messages] of Object.entries(errors)) {
+        if (!Array.isArray(messages)) continue;
+        const message = messages.find(value => typeof value === 'string' && value.trim());
+        if (!message) continue;
+        const triggerField = triggerFields[path.split(/[.\[\]]/).slice(0, 2).join('.')];
+        const actionIndex = path.match(/^actions\[(\d+)\](?:\.|$)/)?.[1];
+        const submitted = actionIndex === undefined ? undefined : submittedActions[Number(actionIndex)];
+        if (path === 'name' && currentEditor.name === submittedName) {
+          fieldErrors.value.name = message;
+          applied = true;
+        } else if (triggerField && JSON.stringify(currentEditor.trigger) === submittedTrigger) {
+          fieldErrors.value[triggerField] = message;
+          if (triggerField === 'extension' && !triggerErrorField.value)
+            triggerErrorField.value = path.replace(/^trigger\./, '');
+          applied = true;
+        } else if (submitted && currentEditor.actions.includes(submitted.action)
+          && JSON.stringify(actionPayload(submitted.action)) === submitted.snapshot) {
+          actionErrors.set(submitted.action, { message, snapshot: submitted.snapshot, field: path.replace(/^actions\[\d+\]\.?/, '') });
+          applied = true;
+        }
+      }
+    }
+    if (applied) await focusTaskError(currentEditor, signal);
+    return applied ? '请检查任务表单中的配置' : apiErrorMessage(problem, '操作失败');
   });
 }
 async function deleteTask() {
@@ -704,43 +563,6 @@ async function openVariableHelp() {
       variableHelpController = undefined;
     }
   }
-}
-function copyTextLegacy(text: string, container: HTMLElement): boolean {
-  const input = document.createElement('textarea');
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  input.value = text;
-  input.readOnly = true;
-  input.style.position = 'fixed';
-  input.style.left = '-9999px';
-  input.style.opacity = '0';
-  input.setAttribute('aria-hidden', 'true');
-  if (!container.isConnected) return false;
-  container.append(input);
-  try {
-    input.select();
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    input.remove();
-    previousFocus?.focus({ preventScroll: true });
-  }
-}
-async function copyVariable(name: string, event: Event) {
-  const container = event.currentTarget instanceof HTMLElement
-    ? event.currentTarget.closest<HTMLElement>('[role="dialog"]')
-    : null;
-  if (!container) return;
-  try {
-    if (window.isSecureContext && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(name);
-      showToast('变量已复制', 'success');
-      return;
-    }
-  } catch {
-  }
-  if (copyTextLegacy(name, container)) showToast('变量已复制', 'success');
-  else showToast('自动复制失败，请选中文本手动复制');
 }
 onMounted(() => {
   void loadTasks();
@@ -811,10 +633,10 @@ onBeforeUnmount(() => {
       :dismiss-on-backdrop="false"
       @close="editor = undefined"
     >
-      <div class="task-form">
-        <label class="field-control">
+      <div ref="editorForm" class="task-form">
+        <label class="field-control" data-task-field="name">
           <span>任务名称 *</span>
-          <input v-model="editor.name" />
+          <input v-model="editor.name" :aria-invalid="Boolean(fieldErrors.name) || undefined" />
           <small v-if="fieldErrors.name" class="field-error">{{ fieldErrors.name }}</small>
         </label>
         <label class="toggle-control">
@@ -833,23 +655,23 @@ onBeforeUnmount(() => {
             <AppSelect
               v-model="editor.trigger.type"
               :options="[
-                { value: 'Cron', label: '按计划执行' },
+                { value: 'Cron', label: 'Cron 计划' },
                 { value: 'Process', label: '程序事件' },
-                { value: 'WinPilotStartup', label: 'WinPilot 启动时' },
+                { value: 'WinPilotStartup', label: 'WinPilot 启动' },
                 { value: 'Extension', label: '插件扩展' },
               ]"
-              @change="clearTriggerErrors"
             />
           </label>
           <CronEditor
+            data-task-field="cron"
             v-if="editor.trigger.type === 'Cron'"
             v-model="editor.trigger.cron"
-            :error="fieldErrors.cron"
+            v-model:error="fieldErrors.cron"
           />
           <div v-else-if="editor.trigger.type === 'Process'" class="task-trigger-process">
             <label class="field-control" data-task-field="event">
               <span>事件 *</span>
-              <AppSelect v-model="editor.trigger.event" :options="[
+              <AppSelect v-model="editor.trigger.event" :invalid="Boolean(fieldErrors.event)" :options="[
                 { value: '', label: '请选择事件' },
                 { value: 'Started', label: '程序启动时' },
                 { value: 'Exited', label: '程序退出时' },
@@ -866,7 +688,7 @@ onBeforeUnmount(() => {
                 <div class="input-action">
                   <input
                     v-model="editor.trigger.processPaths[index]"
-                    :aria-invalid="Boolean(fieldErrors.processPaths && index === 0) || undefined"
+                    :aria-invalid="Boolean(fieldErrors.processPaths && index === invalidProcessPath) || undefined"
                     aria-label="程序绝对路径"
                     placeholder="程序绝对路径，例如：C:\Program Files\App\App.exe"
                   />
@@ -897,10 +719,11 @@ onBeforeUnmount(() => {
             <small v-if="editor.trigger.event && fieldErrors.processPaths" class="field-error">{{ fieldErrors.processPaths }}</small>
           </div>
           <div v-else-if="editor.trigger.type === 'Extension'" class="task-trigger-extension">
-            <label class="field-control">
+            <label class="field-control" data-task-field="pluginId">
               <span>插件 *</span>
               <AppSelect
                 :model-value="editor.trigger.pluginId || ''"
+                :invalid="invalidTriggerField === 'pluginId'"
                 :options="[
                   { value: '', label: '请选择插件' },
                   ...extensionPlugins.map((plugin) => ({
@@ -909,22 +732,23 @@ onBeforeUnmount(() => {
                   })),
                   ...(editor.trigger.pluginId &&
                   !extensionPlugins.some((item) => item.pluginId === editor?.trigger.pluginId)
-                    ? [{ value: editor.trigger.pluginId, label: `${editor.trigger.pluginId}（不可用）` }]
+                    ? [{ value: editor.trigger.pluginId, label: `${editor.trigger.pluginId}${'（不可用）'}` }]
                     : []),
                 ]"
                 @change="selectExtensionPlugin($event)"
               />
             </label>
-            <label class="field-control">
+            <label class="field-control" data-task-field="triggerId">
               <span>触发条件 *</span>
               <AppSelect
                 :model-value="editor.trigger.triggerId || ''"
+                :invalid="invalidTriggerField === 'triggerId'"
                 :options="[
                   { value: '', label: '请选择触发条件' },
                   ...extensionTriggers.map((item) => ({ value: item.triggerId, label: item.triggerName })),
                   ...(editor.trigger.triggerId &&
                   !extensionTriggers.some((item) => item.triggerId === editor?.trigger.triggerId)
-                    ? [{ value: editor.trigger.triggerId, label: `${editor.trigger.triggerId}（不可用）` }]
+                    ? [{ value: editor.trigger.triggerId, label: `${editor.trigger.triggerId}${'（不可用）'}` }]
                     : []),
                 ]"
                 @change="selectExtensionTrigger($event)"
@@ -934,11 +758,13 @@ onBeforeUnmount(() => {
               <label
                 v-for="parameter in triggerDefinitionFor(editor.trigger.triggerId)?.parameters"
                 :key="parameter.key"
+                :data-task-field="`parameters.${parameter.key}`"
                 class="field-control"
               >
                 <span>{{ parameter.label }}{{ parameter.required ? ' *' : '' }}</span>
                 <AppSelect
                   v-if="parameter.type === 'Select'"
+                  :invalid="invalidTriggerField === `parameters.${parameter.key}`"
                   :model-value="editor.trigger.parameters?.[parameter.key] ?? ''"
                   :options="[
                     { value: '', label: '请选择配置' },
@@ -951,24 +777,28 @@ onBeforeUnmount(() => {
                 />
                 <AppMultiSelect
                   v-else-if="parameter.type === 'MultiCheckbox'"
+                  :invalid="invalidTriggerField === `parameters.${parameter.key}`"
                   :model-value="editor.trigger.parameters?.[parameter.key] ?? []"
                   :options="multiParameterOptions(parameter, editor.trigger.parameters?.[parameter.key])"
                   :label="multiSelectionLabel(editor.trigger.parameters?.[parameter.key])"
-                  @toggle="(value, checked) => { if (editor) toggleMultiOption(editor.trigger, parameter.key, value, checked); clearTriggerErrors(); }"
+                  @toggle="(value, checked) => { if (editor) toggleMultiOption(editor.trigger, parameter.key, value, checked); }"
                 />
                 <input
                   v-else-if="parameter.type === 'Checkbox'"
+                  :aria-invalid="invalidTriggerField === `parameters.${parameter.key}` || undefined"
                   type="checkbox"
                   :checked="Boolean(editor.trigger.parameters?.[parameter.key])"
                   @change="selectTriggerParameter(parameter.key, ($event.target as HTMLInputElement).checked)"
                 />
                 <textarea
                   v-else-if="parameter.type === 'Textarea'"
+                  :aria-invalid="invalidTriggerField === `parameters.${parameter.key}` || undefined"
                   :value="editor.trigger.parameters?.[parameter.key] ?? ''"
                   @input="selectTriggerParameter(parameter.key, ($event.target as HTMLTextAreaElement).value)"
                 />
                 <input
                   v-else
+                  :aria-invalid="invalidTriggerField === `parameters.${parameter.key}` || undefined"
                   :type="parameter.type === 'Number' ? 'number' : 'text'"
                   :value="editor.trigger.parameters?.[parameter.key] ?? ''"
                   @input="selectTriggerParameter(parameter.key, parameter.type === 'Number' ? ($event.target as HTMLInputElement).valueAsNumber : ($event.target as HTMLInputElement).value)"
@@ -988,7 +818,7 @@ onBeforeUnmount(() => {
               ＋ 添加动作
             </button>
           </div>
-          <article v-for="(action, index) in editor.actions" :key="index" class="task-config-card">
+          <article v-for="(action, index) in editor.actions" :key="actionKey(action)" :data-task-action="index" class="task-config-card">
             <div class="task-config-heading">
               <strong>动作 {{ index + 1 }}</strong>
               <div>
@@ -1018,224 +848,19 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <AppSelect
-              :model-value="action.type"
-              :options="actionOptions.map(([value, label]) => ({ value, label }))"
-              @change="selectActionType(index, $event)"
+            <TaskActionEditor
+              :action="action"
+              :tasks="tasks"
+              :tags="tags"
+              :registered-actions="registeredActions"
+              :channel-options="channelOptions"
+              :error="actionErrors.get(action)?.message"
+              :invalid-field="invalidActionField(action)"
+              :load-options="parameterKey => loadActionOptions(index, parameterKey)"
+              @select-type="selectActionType(index, $event)"
+              @select-extension-action="selectExtensionAction(index, $event)"
+              @show-variables="openVariableHelp"
             />
-            <template v-if="action.type === 'Extension'">
-              <label class="field-control">
-                <span>插件 *</span>
-                <AppSelect
-                  v-model="action.pluginId"
-                  :options="[
-                    { value: '', label: '请选择插件' },
-                    ...actionPlugins.map((plugin) => ({
-                      value: plugin.pluginId,
-                      label: plugin.pluginDisplayName,
-                    })),
-                    ...(action.pluginId && !actionPlugins.some((item) => item.pluginId === action.pluginId)
-                      ? [{ value: action.pluginId, label: `${action.pluginId}（不可用）` }]
-                      : []),
-                  ]"
-                  @change="
-                    action.actionId = '';
-                    action.parameters = {};
-                  "
-                />
-              </label>
-              <label class="field-control">
-                <span>动作 *</span>
-                <AppSelect
-                  :model-value="action.actionId || ''"
-                  :options="[
-                    { value: '', label: '请选择动作' },
-                    ...actionDefinitionsFor(action.pluginId).map((definition) => ({
-                      value: definition.actionId,
-                      label: definition.actionName,
-                    })),
-                    ...(action.actionId &&
-                    !actionDefinitionsFor(action.pluginId).some((item) => item.actionId === action.actionId)
-                      ? [{ value: action.actionId, label: `${action.actionId}（不可用）` }]
-                      : []),
-                  ]"
-                  @change="selectExtensionAction(index, $event)"
-                />
-              </label>
-              <template
-                v-if="
-                  action.actionId &&
-                  actionDefinitionsFor(action.pluginId).find((item) => item.actionId === action.actionId)
-                "
-              >
-                <div
-                  v-for="parameter in actionDefinitionsFor(action.pluginId).find(
-                    (item) => item.actionId === action.actionId,
-                  )?.parameters"
-                  :key="parameter.key"
-                  class="field-control"
-                >
-                  <span v-if="parameter.type !== 'Checkbox'">
-                    {{ parameter.label }}{{ parameter.required ? ' *' : '' }}
-                  </span>
-                  <textarea
-                    v-if="parameter.type === 'Textarea'"
-                    v-model="action.parameters![parameter.key]"
-                    rows="3"
-                  ></textarea>
-                  <input
-                    v-else-if="parameter.type === 'Number'"
-                    v-model.number="action.parameters![parameter.key]"
-                    type="number"
-                  />
-                  <AppSelect
-                    v-else-if="parameter.type === 'Select'"
-                    v-model="action.parameters![parameter.key]"
-                    :before-open="() => loadActionOptions(index, parameter.key)"
-                    :disabled="
-                      !actionDefinitionsFor(action.pluginId).find((item) => item.actionId === action.actionId)?.dynamicOptions &&
-                      !parameter.options?.length &&
-                      !unavailableSelectValue(parameter, action.parameters?.[parameter.key])
-                    "
-                    :options="[
-                      { value: '', label: parameter.options?.length ? '请选择配置' : '暂无可用配置' },
-                      ...(unavailableSelectValue(parameter, action.parameters?.[parameter.key])
-                        ? [
-                            {
-                              value: unavailableSelectValue(parameter, action.parameters?.[parameter.key]),
-                              label: `${unavailableSelectValue(parameter, action.parameters?.[parameter.key])}（不可用）`,
-                              disabled: true,
-                            },
-                          ]
-                        : []),
-                      ...(parameter.options || []),
-                    ]"
-                  />
-                  <label v-else-if="parameter.type === 'Checkbox'" class="toggle-control">
-                    <input v-model="action.parameters![parameter.key]" type="checkbox" />
-                    <span>{{ parameter.label }}</span>
-                  </label>
-                  <AppMultiSelect
-                    v-else-if="parameter.type === 'MultiCheckbox'"
-                    :before-open="() => loadActionOptions(index, parameter.key)"
-                    :model-value="
-                      Array.isArray(action.parameters?.[parameter.key])
-                        ? action.parameters![parameter.key]
-                        : []
-                    "
-                    :options="multiParameterOptions(parameter, action.parameters?.[parameter.key])"
-                    :disabled="
-                      !actionDefinitionsFor(action.pluginId).find((item) => item.actionId === action.actionId)?.dynamicOptions &&
-                      multiParameterOptions(parameter, action.parameters?.[parameter.key]).length === 0
-                    "
-                    :label="
-                      multiParameterOptions(parameter, action.parameters?.[parameter.key]).length === 0
-                        ? '暂无可用配置'
-                        : multiSelectionLabel(action.parameters?.[parameter.key])
-                    "
-                    :aria-label="parameter.label"
-                    @toggle="(value, checked) => toggleMultiOption(action, parameter.key, value, checked)"
-                  />
-                  <input v-else v-model="action.parameters![parameter.key]" type="text" />
-                </div>
-              </template>
-            </template>
-            <template v-if="action.type === 'StartProgram'">
-              <input v-model="action.programPath" placeholder="程序 / 脚本路径" />
-              <input v-model="action.arguments" placeholder="参数" />
-              <input v-model="action.workingDirectory" placeholder="起始目录" />
-            </template>
-            <AppSelect
-              v-else-if="action.type === 'StartTag'"
-              v-model="action.tagName"
-              :options="[
-                { value: '', label: '请选择标签' },
-                ...tags.map((tag) => ({ value: tag.name, label: tag.name })),
-              ]"
-            />
-            <template v-else-if="action.type === 'CloseProcess'">
-              <input v-model="action.processName" placeholder="进程名" />
-              <div class="task-process-options">
-                <label class="toggle-control">
-                  <input v-model="action.force" type="checkbox" />
-                  <span>强制关闭</span>
-                </label>
-                <label class="toggle-control">
-                  <input v-model="action.currentUserOnly" type="checkbox" />
-                  <span>当前用户</span>
-                </label>
-              </div>
-            </template>
-            <input
-              v-else-if="action.type === 'Delay'"
-              v-model.number="action.delaySeconds"
-              type="number"
-              min="1"
-              max="86400"
-              step="1"
-              title=""
-              placeholder="秒"
-              aria-label="延迟时间（秒）"
-            />
-            <template v-else-if="action.type === 'Shell'">
-              <AppSelect
-                v-model="action.shell"
-                :options="[
-                  { value: 'PowerShell', label: 'PowerShell' },
-                  { value: 'CMD', label: 'CMD' },
-                ]"
-              />
-              <input v-model="action.command" placeholder="输入要执行的命令" />
-            </template>
-            <template v-else-if="action.type === 'SendNotification'">
-              <div class="field-control">
-                <div class="notification-content-heading">
-                  <span>
-                    通知内容
-                    <b>*</b>
-                  </span>
-                  <button
-                    class="variable-help-button"
-                    type="button"
-                    title="查看可用变量"
-                    aria-label="查看可用变量"
-                    @click="openVariableHelp"
-                  >
-                    <AppIcon name="help" />
-                  </button>
-                </div>
-                <textarea v-model="action.notificationContent" placeholder="通知内容" rows="4"></textarea>
-              </div>
-              <div class="field-control">
-                <span>
-                  发送渠道
-                  <b>*</b>
-                </span>
-                <AppSelect
-                  v-model="action.notificationChannel"
-                  :options="channelOptions"
-                />
-              </div>
-            </template>
-              <template v-else-if="action.type === 'TaskState'">
-    <label class="field-control" data-task-field="taskName">
-      <span>任务 *</span>
-      <AppSelect v-model="action.taskName" :options="[
-        { value: '', label: '请选择任务' },
-        ...tasks.map(task => ({ value: task.name, label: task.name })),
-        ...(action.taskName && !tasks.some(task => task.name === action.taskName)
-          ? [{ value: action.taskName, label: `${action.taskName}（不存在）` }] : []),
-      ]" />
-    </label>
-    <label class="field-control" data-task-field="state">
-      <span>状态 *</span>
-      <AppSelect v-model="action.state" :options="taskStateOptions" />
-    </label>
-  </template>
-<KeyboardKeyPicker v-else-if="action.type === 'Keyboard'" v-model="action.keys" />
-            <small v-if="fieldErrors[`action-${index}`]" class="field-error">
-              {{ fieldErrors[`action-${index}`] }}
-            </small>
             <label v-if="index < editor.actions.length - 1" class="toggle-control">
               <input v-model="action.continueOnFailure" type="checkbox" />
               <span>动作失败后继续执行</span>
@@ -1248,38 +873,13 @@ onBeforeUnmount(() => {
         <button class="button button-primary" type="button" :disabled="pendingOperations.has('save')" @click="saveTask">保存</button>
       </template>
     </AppModal>
-    <AppModal
+    <TaskVariableHelp
       v-if="variableHelpOpen"
-      title="可用变量"
-      :dismiss-on-backdrop="false"
+      :variables="registeredVariables"
+      :loading="variableHelpLoading"
+      :error="variableHelpError"
       @close="variableHelpOpen = false"
-    >
-      <div class="variable-help-content">
-        <p class="field-hint">变量来自当前已启用并完成注册的插件</p>
-        <p v-if="variableHelpLoading" class="loading-hint">正在读取变量…</p>
-        <p v-else-if="variableHelpError" class="status-message error">{{ variableHelpError }}</p>
-        <p v-else-if="!registeredVariables.length">暂无可用变量</p>
-        <div v-else class="variable-help-list">
-          <article v-for="variable in registeredVariables" :key="variable.name" class="variable-help-item">
-            <div class="variable-help-code">
-              <code>{{ variable.name }}</code>
-              <button
-                class="variable-copy-button"
-                type="button"
-                :title="`复制 ${variable.name}`"
-                :aria-label="`复制 ${variable.name}`"
-                @click="copyVariable(variable.name, $event)"
-              >
-                <AppIcon name="copy" />
-              </button>
-            </div>
-            <strong>{{ variable.displayName }}</strong>
-            <small>{{ variable.description || '未提供变量说明' }}</small>
-            <small>来源：{{ variable.pluginDisplayName }}</small>
-          </article>
-        </div>
-      </div>
-    </AppModal>
+    />
     <AppModal v-if="detailTarget" :title="detailTarget.name" @close="detailTarget = undefined">
       <template v-if="taskWarningText(detailTarget)" #title-extra>
         <span class="task-warning" role="img" :title="taskWarningText(detailTarget)" :aria-label="taskWarningText(detailTarget)">

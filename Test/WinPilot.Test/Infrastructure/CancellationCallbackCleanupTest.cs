@@ -54,7 +54,7 @@ public sealed class CancellationCallbackCleanupTest
         });
         var task = fixture.Tasks.Create(new("original", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block"),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton(fixture.Tasks);

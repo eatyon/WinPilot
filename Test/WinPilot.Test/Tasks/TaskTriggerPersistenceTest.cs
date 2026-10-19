@@ -47,7 +47,7 @@ public sealed class TaskTriggerPersistenceTest
         {
             name = "process", enabled = false,
             trigger = new { type = "Process", @event = processEvent.ToString(), processPaths = new[] { "C:\\app.exe" } },
-            actions = new[] { new { type = "StartProgram", programPath = "app.exe" } }
+            actions = new[] { new { type = "StartProgram", programPath = Environment.ProcessPath! } }
         });
         string file = "";
         await using var fixture = new TaskServiceFixture(initialize: paths =>
@@ -75,7 +75,7 @@ public sealed class TaskTriggerPersistenceTest
         {
             name = "invalid", enabled = false,
             trigger = new { type, @event = processEvent, processPaths = new[] { "C:\\app.exe" } },
-            actions = new[] { new { type = "StartProgram", programPath = "app.exe" } }
+            actions = new[] { new { type = "StartProgram", programPath = Environment.ProcessPath! } }
         });
         string file = "";
         await using var fixture = new TaskServiceFixture(initialize: paths =>

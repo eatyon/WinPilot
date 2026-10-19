@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
+import '../../components/AppPicker.css';
 import { functionKeys, mainKeyboardRows, navigationRows, numpadRows, wideKeys, keyLabel } from './keyboardLayout';
-const props = withDefaults(defineProps<{ modelValue: string[]; disabled?: boolean; help?: string }>(), {
+const props = withDefaults(defineProps<{ modelValue: string[]; disabled?: boolean; invalid?: boolean; help?: string; collapsible?: boolean }>(), {
   disabled: false,
   help: '可选择普通按键或最多 3 个组合键',
+  collapsible: false,
 });
 const emit = defineEmits<{ 'update:modelValue': [string[]]; limit: [] }>();
 const selected = computed(() => props.modelValue);
+const expanded = ref(false);
+const isKeyDisabled = (key: string) => props.disabled || (selected.value.length >= 3 && !selected.value.includes(key));
 function toggle(key: string) {
   if (props.disabled) return;
   if (!selected.value.includes(key) && selected.value.length >= 3) {
@@ -22,13 +26,20 @@ function toggle(key: string) {
 <template>
   <div class="virtual-keyboard">
     <p class="keyboard-help">{{ help }}</p>
-    <div class="selected-keys" aria-live="polite">
-      <span v-if="!selected.length">尚未选择按键</span>
-      <button v-for="key in selected" :key="key" type="button" class="selected-key" :disabled="disabled" @click="toggle(key)">
-        {{ keyLabel(key) }} ×
+    <div class="selected-keys" :aria-invalid="invalid || undefined">
+      <div class="selected-key-values" aria-live="polite">
+        <span v-if="!selected.length">尚未选择按键</span>
+        <button v-for="key in selected" :key="key" type="button" class="selected-key" :disabled="disabled" @click="toggle(key)">
+          {{ keyLabel(key) }} ×
+        </button>
+      </div>
+      <button v-if="collapsible" class="icon-button keyboard-expand-toggle" type="button"
+        :aria-expanded="expanded"
+        :aria-label="expanded ? '收起键盘' : '展开键盘'" @click="expanded = !expanded">
+        <span class="app-select-chevron" aria-hidden="true" />
       </button>
     </div>
-    <div class="physical-keyboard">
+    <div v-if="!collapsible || expanded" class="physical-keyboard">
       <section class="main-keyboard">
         <div class="key-row function-row">
           <button
@@ -37,7 +48,7 @@ function toggle(key: string) {
             type="button"
             class="virtual-key"
             :class="{ selected: selected.includes(key) }"
-            :disabled="disabled"
+            :disabled="isKeyDisabled(key)"
             :aria-pressed="selected.includes(key)"
             @click="toggle(key)"
           >
@@ -51,7 +62,7 @@ function toggle(key: string) {
             type="button"
             class="virtual-key"
             :class="{ selected: selected.includes(key), wide: wideKeys.includes(key) }"
-            :disabled="disabled"
+            :disabled="isKeyDisabled(key)"
             :aria-pressed="selected.includes(key)"
             @click="toggle(key)"
           >
@@ -69,7 +80,7 @@ function toggle(key: string) {
               type="button"
               class="virtual-key"
               :class="{ selected: selected.includes(key) }"
-              :disabled="disabled"
+              :disabled="isKeyDisabled(key)"
               :aria-pressed="selected.includes(key)"
               @click="toggle(key)"
             >
@@ -86,7 +97,7 @@ function toggle(key: string) {
               type="button"
               class="virtual-key"
               :class="{ selected: selected.includes(key), wide: wideKeys.includes(key) }"
-              :disabled="disabled"
+              :disabled="isKeyDisabled(key)"
               :aria-pressed="selected.includes(key)"
               @click="toggle(key)"
             >

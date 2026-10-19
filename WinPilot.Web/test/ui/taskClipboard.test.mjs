@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { loadScriptModule } from '../support/scriptModule.mjs';
+
+const component = new URL('../../src/features/tasks/TaskVariableHelp.vue', import.meta.url);
 
 function fixture(connected = true, fail = false) {
-  const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
-  const helper = source.slice(source.indexOf('function copyTextLegacy('), source.indexOf('async function copyVariable('));
   let selected = false;
   let removed = false;
   let restored = false;
@@ -21,6 +20,7 @@ function fixture(connected = true, fail = false) {
   };
   const context = {
     exports: {}, HTMLElement: Element,
+    defineProps: () => ({}), defineEmits: () => () => {}, require: () => ({}),
     document: {
       activeElement: previous,
       createElement: () => input,
@@ -33,8 +33,8 @@ function fixture(connected = true, fail = false) {
       },
     },
   };
-  runInNewContext(ts.transpileModule(helper + '\nexports.copy = copyTextLegacy;', {}).outputText, context);
-  return { copy: () => context.exports.copy('$time', container), state: () => ({ selected, removed, restored }) };
+  runInNewContext(loadScriptModule(component, 'copyTextLegacy'), context);
+  return { copy: () => context.exports.copyTextLegacy('$time', container), state: () => ({ selected, removed, restored }) };
 }
 
 test('legacy variable copy selects inside the dialog and cleans up', () => {
@@ -53,4 +53,28 @@ test('legacy variable copy does not append into a closed dialog', () => {
   const f = fixture(false);
   assert.equal(f.copy(), false);
   assert.equal(f.state().selected, false);
+});
+
+test('variable help uses the system clipboard without invoking the fallback', async () => {
+  const copied = [], toasts = [];
+  class Element {
+    closest(selector) {
+      assert.equal(selector, '[role="dialog"]');
+      return this;
+    }
+  }
+  const context = {
+    exports: {}, HTMLElement: Element,
+    defineProps: () => ({}), defineEmits: () => () => {},
+    require: name => name.endsWith('/toast') ? { showToast: (...args) => toasts.push(args) } : {},
+    window: { isSecureContext: true },
+    navigator: { clipboard: { writeText: async text => copied.push(text) } },
+    document: { createElement: () => { throw new Error('unexpected fallback'); } },
+  };
+  runInNewContext(loadScriptModule(component, 'copyVariable'), context);
+  await context.exports.copyVariable('$time', { currentTarget: new Element() });
+  assert.deepEqual(copied, ['$time']);
+  assert.deepEqual(toasts, [['变量已复制', 'success']]);
+  await context.exports.copyVariable('$ignored', { currentTarget: null });
+  assert.deepEqual(copied, ['$time']);
 });

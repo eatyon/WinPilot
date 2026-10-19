@@ -32,6 +32,7 @@ public sealed partial class TaskServiceTest
             if (missing.Length > 0)
             {
                 Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.True(body.RootElement.GetProperty("errors").TryGetProperty("actions[0]." + missing, out _));
                 Assert.False(File.Exists(Path.Combine(fixture.Paths.TasksDirectory, "controller.json")));
             }
             else
@@ -76,9 +77,9 @@ public sealed partial class TaskServiceTest
     public async Task TaskStateActionRequiresTaskAndState(string? name, TaskStateOperation? state, string field)
     {
         await using var fixture = new TaskServiceFixture();
-        var error = Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Create(new("invalid", true,
+        var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Create(new("invalid", true,
             new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.TaskState, TaskName: name, State: state)])));
-        Assert.Equal(field == "taskName" ? "请选择任务" : state is null ? "请选择状态" : "任务状态无效", error.Message);
+        Assert.Equal("actions[0]." + field, error.Field);
         Assert.Empty(fixture.Tasks.GetAll());
     }
 
@@ -101,7 +102,7 @@ public sealed partial class TaskServiceTest
         });
         var task = fixture.Tasks.Create(new("running", true, new(TaskTriggerType.Cron, Cron: "* * * * * *"),
             [new(TaskActionType.Extension, PluginId: "test", ActionId: "wait"),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow(task.Name);
         try
         {
@@ -126,7 +127,7 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("self", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.TaskState, TaskName: "self", State: state),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("self");
         Assert.False(Assert.Single(fixture.Tasks.GetAll()).Enabled);
         Assert.Equal(1, fixture.Programs.Launches);
@@ -140,7 +141,7 @@ public sealed partial class TaskServiceTest
         fixture.Create("target");
         fixture.Tasks.Create(new("controller", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.Delete("target");
         fixture.Tasks.RunNow("controller");
         Assert.IsType<FileNotFoundException>(Assert.Single(fixture.Logger.Exceptions));
@@ -154,7 +155,7 @@ public sealed partial class TaskServiceTest
         fixture.Create("target");
         fixture.Tasks.Create(new("controller", true, new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
-             new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "target.json");
         var original = File.ReadAllText(file);
         using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))

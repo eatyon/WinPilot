@@ -459,7 +459,7 @@ onBeforeUnmount(() => {
           <span>启用键盘模拟</span>
         </label>
       </div>
-      <div v-if="keyboardEnabled && !safeModeEnabled">
+      <div v-if="keyboardEnabled && !safeModeEnabled" class="keyboard-panel-controls">
         <KeyboardKeyPicker
           :model-value="selectedKeys"
           :disabled="isSendingKeys"

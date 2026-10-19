@@ -124,7 +124,7 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         var parsed = Expressions(fixture.Tasks)[task.Name].Expression;
         var file = Path.Combine(fixture.Paths.TasksDirectory, "original.json");
         var content = File.ReadAllText(file);
-        Assert.Throws<InvalidOperationException>(() => fixture.Tasks.Update(task.Name, Cron(task.Name, "invalid")));
+        Assert.Throws<TaskValidationException>(() => fixture.Tasks.Update(task.Name, Cron(task.Name, "invalid")));
         Directory.CreateDirectory(Path.Combine(fixture.Paths.TasksDirectory, "blocked.json"));
         Assert.ThrowsAny<IOException>(() => fixture.Tasks.Update(task.Name, Cron("blocked", "0 * * * * *")));
         var cached = Assert.Single(Expressions(fixture.Tasks));
@@ -460,13 +460,16 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         await using var fixture = new TaskServiceFixture(clock: clock);
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
+        var blockedProgram = Path.Combine(fixture.Paths.ApplicationDirectory, "blocked.exe");
+        File.WriteAllText(blockedProgram, "test program");
         fixture.Programs.BeforeLaunch = request =>
         {
-            if (request.ProgramPath != "blocked.exe") return;
+            if (request.ProgramPath != blockedProgram) return;
             entered.TrySetResult();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
         };
-        fixture.Tasks.Create(Cron("blocked", "* * * * * *", "blocked.exe"));
+        fixture.Tasks.Create(Cron("blocked", "* * * * * *", blockedProgram));
         fixture.Tasks.Create(Cron("other", "* * * * * *"));
         try
         {
@@ -479,7 +482,7 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             clock.Advance(TimeSpan.FromSeconds(1));
             await clock.NextTimer();
             await Until(() => fixture.Programs.Launches == 2);
-            Assert.DoesNotContain(fixture.Programs.Requests, request => request.ProgramPath == "blocked.exe");
+            Assert.DoesNotContain(fixture.Programs.Requests, request => request.ProgramPath == blockedProgram);
             fixture.Tasks.SetEnabled("blocked", false);
         }
         finally { release.Set(); }
@@ -643,8 +646,8 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         await Until(() => fixture.Programs.Launches == 1);
     }
 
-    private static WinPilotTask Cron(string name, string expression, string path = "app.exe") =>
-        new(name, true, new(TaskTriggerType.Cron, Cron: expression), [new(TaskActionType.StartProgram, ProgramPath: path)]);
+    private static WinPilotTask Cron(string name, string expression, string? path = null) =>
+        new(name, true, new(TaskTriggerType.Cron, Cron: expression), [new(TaskActionType.StartProgram, ProgramPath: path ?? Environment.ProcessPath!)]);
     private static async Task Start(TaskServiceFixture fixture, Clock clock)
     {
         fixture.Tasks.NotifyPluginsLoaded();

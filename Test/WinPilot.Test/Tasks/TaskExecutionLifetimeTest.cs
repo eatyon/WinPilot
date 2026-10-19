@@ -43,7 +43,7 @@ public sealed class TaskExecutionLifetimeTest
             return PluginTaskActionResult.Success();
         });
         fixture.Tasks.Create(new("cancel", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+            [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.RunNow("cancel");
         var record = Running(fixture.Tasks)["cancel"]!;
         var source = Source(record);
@@ -130,7 +130,7 @@ public sealed class TaskExecutionLifetimeTest
         foreach (var name in new[] { "first", "second" })
         {
             fixture.Tasks.Create(new(name, false, new(TaskTriggerType.WinPilotStartup),
-                [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: "app.exe")]));
+                [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
             fixture.Tasks.RunNow(name);
         }
         var second = Running(fixture.Tasks)["second"]!;

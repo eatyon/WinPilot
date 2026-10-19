@@ -57,13 +57,13 @@ public static class TaskEndpointRouteBuilderExtensions
             var saved = tasks.Create(task);
             context.Response.Headers.Location = "/api/tasks/" + Uri.EscapeDataString(saved.Name);
             return Results.Json(TaskPersistenceFile.From(saved), JsonOptions, statusCode: StatusCodes.Status201Created);
-        }));
+        }, saving: true));
         endpoints.MapPut("/api/tasks/{name}", (string name, WinPilotTask task, TaskService tasks) => Execute(() =>
         {
             if (ValidateTaskStructure(task) is { } error) return error;
             var saved = tasks.Update(name, task);
             return Results.Json(TaskPersistenceFile.From(saved), JsonOptions);
-        }));
+        }, saving: true));
         endpoints.MapPatch("/api/tasks/{name}/enabled", (string name, TaskEnabledRequest request, TaskService tasks) =>
             Execute(() => Results.Json(TaskPersistenceFile.From(tasks.SetEnabled(name, request.Enabled)), JsonOptions)));
         endpoints.MapDelete("/api/tasks/{name}", (string name, TaskService tasks) => Execute(() =>
@@ -90,11 +90,19 @@ public static class TaskEndpointRouteBuilderExtensions
         return errors.Count == 0 ? null : Results.ValidationProblem(errors);
     }
 
-    private static IResult Execute(Func<IResult> action)
+    private static IResult Execute(Func<IResult> action, bool saving = false)
     {
         try { return action(); }
+        catch (TaskValidationException exception) when (saving)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { [exception.Field] = [exception.Message] },
+                statusCode: StatusCodes.Status400BadRequest, title: "操作失败", detail: exception.Message);
+        }
         catch (ResourceNameConflictException exception)
         {
+            if (saving)
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["name"] = [exception.Message] },
+                    statusCode: StatusCodes.Status409Conflict, title: "操作失败", detail: exception.Message);
             return Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "操作失败", detail: exception.Message);
         }
         catch (FileNotFoundException exception)
