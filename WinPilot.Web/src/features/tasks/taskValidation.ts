@@ -38,6 +38,10 @@ export function validateTask(value: Task, registeredTriggers: readonly Registere
     result.name = '任务名称无效';
   const trigger = value.trigger;
   if (trigger.type === 'Cron' && !trigger.cron.trim()) result.cron = '请输入 Cron 表达式';
+  if (trigger.type === 'Keyboard') {
+    if (!trigger.keys.length) result.keys = '请选择至少一个按键';
+    else if (trigger.keys.length > 3) result.keys = '最多选择 3 个按键';
+  }
   if (trigger.type === 'Process') {
     if (trigger.event !== 'Started' && trigger.event !== 'Exited') result.event = '请选择事件';
     const paths = trigger.processPaths.map((path) => path.trim()).filter(Boolean);

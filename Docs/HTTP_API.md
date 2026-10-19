@@ -78,7 +78,7 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 
 任务保存对象为 `{ name, enabled, trigger, actions }`，只提交所选类型需要的字段。保存响应是规范化后的保存快照，不是原请求回显。
 
-- 触发类型：`Cron`、`Process`、`WinPilotStartup`、`Extension`。程序事件使用 `event: "Started"/"Exited"` 和 `processPaths`。
+- 触发类型：`Cron`、`Process`、`WinPilotStartup`、`Keyboard`、`Extension`。程序事件使用 `event: "Started"/"Exited"` 和 `processPaths`；按键监听使用 `keys`（1～3 个按键）。
 - Cron 为六字段：秒、分、时、日、月、周。例如 `0 30 8 * * *` 表示每天 08:30；周日支持 0 或 7，周一至周六为 1～6。
 - `enabled` 只控制自动触发；禁用不停止当前执行。手动运行允许已禁用任务，同任务执行中不重入、不排队。
 - 动作 `type: "TaskState"` 使用 `taskName` 和 `state: "Toggle"/"Enable"/"Disable"` 控制目标任务的启用状态。

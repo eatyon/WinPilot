@@ -41,7 +41,7 @@ public sealed class SendInputKeyboardInputSimulator : IKeyboardInputSimulator
         }
     };
 
-    private static ushort GetVirtualKey(KeyboardKey key) => key switch
+    internal static ushort GetVirtualKey(KeyboardKey key) => key switch
     {
         KeyboardKey.Ctrl => 0x11,
         KeyboardKey.Shift => 0x10,

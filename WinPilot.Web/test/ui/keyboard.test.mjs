@@ -135,6 +135,27 @@ test('all picker instances display fixed modifier order without mutating their i
   assert.deepEqual([...f.props.modelValue], ['Win', 'Ctrl', 'Alt']);
 });
 
+test('keyboard triggers use the same picker help and typography as keyboard actions', () => {
+  const tasks = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(tasks, /class="task-trigger-keyboard" data-task-field="keys"/);
+  const picker = tasks.match(/<KeyboardKeyPicker[^>]*v-model="editor.trigger.keys"[^>]*\/>/)?.[0];
+  assert.ok(picker);
+  assert.doesNotMatch(picker, /\bhelp=/);
+  assert.match(styles, /\.task-trigger-process, \.task-trigger-extension, \.task-trigger-keyboard\s*\{\s*display: grid; gap: 12px; margin-top: 12px;/);
+});
+
+test('desktop and task feature names consistently use key monitoring and simulation', () => {
+  const desktop = readFileSync(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url), 'utf8');
+  const tasks = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  const models = readFileSync(new URL('../../src/features/tasks/taskModels.ts', import.meta.url), 'utf8');
+  assert.match(desktop, /启用按键模拟/);
+  assert.match(models, /\['Keyboard', '按键模拟'\]/);
+  assert.match(tasks, /value: 'Keyboard', label: '按键监听'/);
+  assert.match(tasks, /按键模拟 ·/);
+  assert.doesNotMatch(desktop + tasks + models, /键盘(?:模拟|监听)/);
+});
+
 test('global disabling still prevents removing selected keys', () => {
   const f = fixture(['A']);
   f.props.disabled = true;

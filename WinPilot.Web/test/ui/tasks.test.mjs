@@ -366,6 +366,43 @@ function attachEditorForm(f, fields, actions = []) {
   return calls;
 }
 
+test('keyboard triggers prioritize modifiers through editing, submission and preview', async () => {
+  const f = fixture();
+  try {
+    const task = openValidTaskEditor(f);
+    task.trigger.type = 'Keyboard';
+    task.trigger.keys = ['B', 'Ctrl', 'A'];
+    assert.equal(f.subject.triggerLabel(task.trigger), '按键监听 · Ctrl + B + A');
+    const pending = f.subject.saveTask();
+    const request = f.requests.at(-1);
+    assert.deepEqual(JSON.parse(request.init.body).trigger.keys, ['Ctrl', 'B', 'A']);
+    request.resolve(new Response(JSON.stringify({ detail: '保存失败' }), { status: 500 }));
+    await pending;
+    f.subject.openTaskEditor(task);
+    assert.deepEqual([...f.subject.editor.value.trigger.keys], ['Ctrl', 'B', 'A']);
+    f.subject.editor.value.trigger.keys.pop();
+    assert.deepEqual([...task.trigger.keys], ['B', 'Ctrl', 'A']);
+    const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+    assert.ok(source.indexOf("value: 'Keyboard', label: '按键监听'") < source.indexOf("value: 'Extension', label: '插件扩展'"));
+  } finally { f.dispose(); }
+});
+
+test('keyboard trigger validation focuses its picker and clears after selecting keys', async () => {
+  const f = fixture();
+  try {
+    const task = openValidTaskEditor(f);
+    task.trigger.type = 'Keyboard';
+    const calls = attachEditorForm(f, ['keys']);
+    await f.subject.saveTask();
+    assert.equal(f.subject.fieldErrors.value.keys, '请选择至少一个按键');
+    assert.deepEqual(calls, ['keys:scroll', 'keys:focus', 'keys:animate']);
+    assert.equal(f.requests.length, 0);
+    task.trigger.keys.push('F8');
+    assert.equal(f.subject.fieldErrors.value.keys, undefined);
+    assert.equal(f.subject.validate(task).keys, undefined);
+  } finally { f.dispose(); }
+});
+
 test('save focuses and shakes only the first invalid task field in form order', async () => {
   const f = fixture();
   try {
@@ -406,11 +443,12 @@ test('each built-in action focuses its invalid control rather than its type sele
 });
 
 test('keyboard validation focuses the expand button but scrolls and shakes the whole selection bar', async () => {
-  for (const reducedMotion of [false, true]) {
+  for (const [target, reducedMotion] of [['trigger', false], ['trigger', true], ['action', false], ['action', true]]) {
     const f = fixture({ reducedMotion });
     try {
       const task = openValidTaskEditor(f);
-      task.actions[0].type = 'Keyboard';
+      if (target === 'trigger') task.trigger.type = 'Keyboard';
+      else task.actions[0].type = 'Keyboard';
       const calls = [];
       const bar = {
         scrollIntoView: () => calls.push('bar:scroll'),
@@ -424,7 +462,7 @@ test('keyboard validation focuses the expand button but scrolls and shakes the w
       };
       const field = { dataset: { taskField: 'keys' }, matches: () => false, querySelector: () => button };
       f.subject.editorForm.value = {
-        querySelectorAll: () => [],
+        querySelectorAll: () => target === 'trigger' ? [field] : [],
         querySelector: () => ({ querySelectorAll: () => [field] }),
       };
       await f.subject.saveTask();

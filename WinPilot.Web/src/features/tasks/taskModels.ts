@@ -1,8 +1,9 @@
 export type Trigger = {
-  type: 'Cron' | 'WinPilotStartup' | 'Process' | 'Extension';
+  type: 'Cron' | 'WinPilotStartup' | 'Process' | 'Extension' | 'Keyboard';
   event: '' | 'Started' | 'Exited';
   cron: string;
   processPaths: string[];
+  keys: string[];
   pluginId?: string;
   triggerId?: string;
   parameters?: Record<string, any>;
@@ -106,10 +107,12 @@ export const createTrigger = (): Trigger => ({
   cron: '',
   event: '',
   processPaths: [],
+  keys: [],
   pluginId: '',
   triggerId: '',
   parameters: {},
 });
+
 export const createAction = (): Action => ({
   type: 'StartProgram',
   programPath: '',

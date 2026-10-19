@@ -28,12 +28,12 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     internal WinPilot.Features.Plugins.PluginTaskExtensionRegistry Extensions { get; } = new(new(), new(), new());
     internal TaskLogger Logger { get; } = new();
     internal TaskService Tasks { get; }
-    internal TaskServiceFixture(INotificationService? notifications = null, Microsoft.Extensions.Logging.ILogger<TaskService>? logger = null, Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null, Action<PortableDataPaths>? initialize = null, TimeProvider? clock = null)
+    internal TaskServiceFixture(INotificationService? notifications = null, Microsoft.Extensions.Logging.ILogger<TaskService>? logger = null, Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null, Action<PortableDataPaths>? initialize = null, TimeProvider? clock = null, WindowsKeyboardEventListener? keyboardEvents = null)
     {
         initialize?.Invoke(paths);
         Tasks = new(paths, Programs, new ProgramTagService(paths),
             new KeyboardInputService(keyboard), terminals, new DesktopScreenshotService(new Screenshot()),
-            notifications ?? new Notifications(), processEvents, logger ?? Logger, Extensions, lifetime: lifetime, clock: clock);
+            notifications ?? new Notifications(), processEvents, logger ?? Logger, Extensions, lifetime: lifetime, clock: clock, keyboardEvents: keyboardEvents);
     }
     internal void Create(string name, bool enabled = true, bool delay = false) => Tasks.Create(new(name, enabled,
         new(TaskTriggerType.WinPilotStartup), delay
@@ -124,13 +124,16 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         internal System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
         internal System.Collections.Concurrent.ConcurrentQueue<Exception> Exceptions { get; } = new();
         internal volatile bool ActionCancelled;
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
         public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId eventId,
             TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            Messages.Enqueue(formatter(state, exception));
+            var message = formatter(state, exception);
+            Messages.Enqueue(message);
+            if (message == "任务服务已启动") Started.TrySetResult();
             if (exception is not null) Exceptions.Enqueue(exception);
             if (ActionCancelled) Cancelled.TrySetResult();
         }

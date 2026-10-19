@@ -470,6 +470,9 @@ public sealed partial class TaskServiceTest
     [InlineData("tag", "actions[0].tagName", "请选择快捷标签")]
     [InlineData("process", "actions[0].processName", "请输入进程名")]
     [InlineData("keyboard", "actions[0].keys", "请选择至少一个按键")]
+    [InlineData("keyboard-count", "actions[0].keys", "最多选择 3 个按键")]
+    [InlineData("keyboard-duplicate", "actions[0].keys", "按键不能重复")]
+    [InlineData("keyboard-invalid", "actions[0].keys", "包含不支持的按键")]
     [InlineData("extension-trigger-plugin", "trigger.pluginId", "请选择插件和触发条件")]
     [InlineData("extension-trigger-id", "trigger.triggerId", "请选择插件和触发条件")]
     [InlineData("extension-action-plugin", "actions[0].pluginId", "请选择插件和动作")]
@@ -502,6 +505,9 @@ public sealed partial class TaskServiceTest
             "tag" => task with { Actions = [new(TaskActionType.StartTag)] },
             "process" => task with { Actions = [new(TaskActionType.CloseProcess)] },
             "keyboard" => task with { Actions = [new(TaskActionType.Keyboard)] },
+            "keyboard-count" => task with { Actions = [new(TaskActionType.Keyboard, Keys: ["A", "B", "C", "D"])] },
+            "keyboard-duplicate" => task with { Actions = [new(TaskActionType.Keyboard, Keys: ["A", "a"])] },
+            "keyboard-invalid" => task with { Actions = [new(TaskActionType.Keyboard, Keys: ["NoSuchKey"])] },
             "extension-trigger-plugin" => task with { Trigger = new(TaskTriggerType.Extension, PluginId: " ", TriggerId: "event") },
             "extension-trigger-id" => task with { Trigger = new(TaskTriggerType.Extension, PluginId: "plugin") },
             "extension-action-plugin" => task with { Actions = [new(TaskActionType.Extension, PluginId: " ", ActionId: "run")] },

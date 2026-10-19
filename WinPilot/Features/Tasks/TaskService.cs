@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Cronos;
 using Microsoft.Win32;
 using WinPilot.Core;
+using WinPilot.Core.Input;
 using WinPilot.Core.Notifications;
 using WinPilot.Core.Programs;
 using WinPilot.Core.Tasks;
@@ -38,6 +39,7 @@ public sealed class TaskService : BackgroundService
     private readonly DesktopScreenshotService screenshots;
     private readonly INotificationService notifications;
     private readonly WindowsProcessEventListener processEvents;
+    private readonly WindowsKeyboardEventListener? keyboardEvents;
     private readonly PluginTaskExtensionRegistry extensions;
     private readonly TaskVariableCatalog variableCatalog;
     private readonly ILogger<TaskService> logger;
@@ -64,7 +66,7 @@ public sealed class TaskService : BackgroundService
     private bool processListenerStarted;
     private long processListenerGeneration;
 
-    public TaskService(PortableDataPaths paths, IProgramManager programs, ProgramTagService tags, KeyboardInputService keyboard, TerminalSessionManager terminals, DesktopScreenshotService screenshots, INotificationService notifications, WindowsProcessEventListener processEvents, ILogger<TaskService> logger, PluginTaskExtensionRegistry? extensions = null, TaskVariableCatalog? variableCatalog = null, IHostApplicationLifetime? lifetime = null, TimeProvider? clock = null)
+    public TaskService(PortableDataPaths paths, IProgramManager programs, ProgramTagService tags, KeyboardInputService keyboard, TerminalSessionManager terminals, DesktopScreenshotService screenshots, INotificationService notifications, WindowsProcessEventListener processEvents, ILogger<TaskService> logger, PluginTaskExtensionRegistry? extensions = null, TaskVariableCatalog? variableCatalog = null, IHostApplicationLifetime? lifetime = null, TimeProvider? clock = null, WindowsKeyboardEventListener? keyboardEvents = null)
     {
         this.paths = paths;
         this.programs = programs;
@@ -74,6 +76,8 @@ public sealed class TaskService : BackgroundService
         this.screenshots = screenshots;
         this.notifications = notifications;
         this.processEvents = processEvents;
+        this.keyboardEvents = keyboardEvents;
+        if (keyboardEvents is not null) keyboardEvents.Triggered += KeyboardTriggered;
         this.extensions = extensions ?? new(new(), new(), new());
         this.variableCatalog = variableCatalog ?? new(this.extensions);
         this.logger = logger;
@@ -119,6 +123,7 @@ public sealed class TaskService : BackgroundService
             ClearCronState(task.Name);
             if (cron is not null) cronExpressions[task.Name] = (task, cron);
             UpdateProcessDetectionState();
+            UpdateKeyboardDetectionState();
             RefreshCronSchedule();
         }
         return task;
@@ -160,6 +165,7 @@ public sealed class TaskService : BackgroundService
                 ClearCronState(task.Name);
                 if (cron is not null) cronExpressions[task.Name] = (task, cron);
                 UpdateProcessDetectionState();
+                UpdateKeyboardDetectionState();
                 RefreshCronSchedule();
             }
             return task;
@@ -187,6 +193,7 @@ public sealed class TaskService : BackgroundService
             ClearCronState(name);
             if (cron is not null) cronExpressions[name] = (task, cron);
             UpdateProcessDetectionState();
+            UpdateKeyboardDetectionState();
             RefreshCronSchedule();
             return task;
         }
@@ -207,6 +214,7 @@ public sealed class TaskService : BackgroundService
                 cancellation = RequestTaskCancellation(name);
                 ClearCronState(name);
                 UpdateProcessDetectionState();
+                UpdateKeyboardDetectionState();
                 RefreshCronSchedule();
             }
         }
@@ -234,6 +242,7 @@ public sealed class TaskService : BackgroundService
             serviceToken = token;
             taskServiceStarted = true;
             StartProcessListenerIfNeeded();
+            UpdateKeyboardDetectionState();
         }
 
         logger.LogInformation("任务服务已启动");
@@ -268,6 +277,7 @@ public sealed class TaskService : BackgroundService
         lock (gate)
         {
             isStopping = true;
+            UpdateKeyboardDetectionState();
             cronRetryStartedAt.Clear();
             taskServiceStarted = false;
             processListenerGeneration++;
@@ -286,6 +296,7 @@ public sealed class TaskService : BackgroundService
             lock (gate)
             {
                 isStopping = true;
+                UpdateKeyboardDetectionState();
                 cronRetryStartedAt.Clear();
                 taskServiceStarted = false;
                 processListenerGeneration++;
@@ -298,7 +309,8 @@ public sealed class TaskService : BackgroundService
         }
         finally { CancelExecutions(cancellations); }
 
-        var stopping = Task.WhenAll(pending.Append(base.StopAsync(cancellationToken)));
+        var keyboardStopping = keyboardEvents?.StopAsync(cancellationToken) ?? Task.CompletedTask;
+        var stopping = Task.WhenAll(pending.Append(base.StopAsync(cancellationToken)).Append(keyboardStopping));
         _ = stopping.ContinueWith(completed => { _ = completed.Exception; }, CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         try { await stopping.WaitAsync(cancellationToken).ConfigureAwait(false); }
@@ -314,12 +326,14 @@ public sealed class TaskService : BackgroundService
         stoppingRegistration.Dispose();
         processEvents.Changed -= ProcessEventsChanged;
         extensions.Triggered -= ExtensionTriggered;
+        if (keyboardEvents is not null) keyboardEvents.Triggered -= KeyboardTriggered;
         KeyValuePair<string, TaskExecution>[] cancellations = [];
         try
         {
             lock (gate)
             {
                 isStopping = true;
+                UpdateKeyboardDetectionState();
                 cronRetryStartedAt.Clear();
                 taskServiceStarted = false;
                 processListenerGeneration++;
@@ -330,7 +344,30 @@ public sealed class TaskService : BackgroundService
             }
         }
         finally { CancelExecutions(cancellations); }
+        keyboardEvents?.Dispose();
         base.Dispose();
+    }
+
+    private void UpdateKeyboardDetectionState()
+    {
+        keyboardEvents?.Update(!taskServiceStarted || isStopping ? [] : tasks.Values
+            .Where(task => task.Enabled && task.Trigger.Type == TaskTriggerType.Keyboard)
+            .Select(task => new KeyboardTriggerBinding(task, task.Trigger.Keys!.Select(key => Enum.Parse<KeyboardKey>(key, true)).ToArray())).ToArray());
+    }
+
+    private void KeyboardTriggered(KeyboardTriggerBinding binding)
+    {
+        if (binding.Owner is WinPilotTask task) _ = TriggerKeyboardTask(task);
+    }
+
+    internal Task TriggerKeyboardTask(WinPilotTask task)
+    {
+        lock (gate)
+        {
+            if (!taskServiceStarted || isStopping || !task.Enabled || task.Trigger.Type != TaskTriggerType.Keyboard)
+                return Task.CompletedTask;
+        }
+        return RunAsync(task, $"按键监听「{string.Join(" + ", task.Trigger.Keys ?? [])}」", serviceToken, null, dispatch: true);
     }
 
     private void RefreshCronSchedule()
@@ -1213,6 +1250,7 @@ public sealed class TaskService : BackgroundService
         Trigger = task.Trigger with
         {
             Cron = task.Trigger.Cron ?? "",
+            Keys = KeyboardInputService.OrderKeyNames(task.Trigger.Keys),
             ProcessPaths = (task.Trigger.ProcessPaths ?? []).Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         },
         Actions = task.Actions.Select(action => action with
@@ -1275,6 +1313,10 @@ public sealed class TaskService : BackgroundService
                 throw new TaskValidationException("trigger.cron", "Cron 表达式格式无效", exception);
             }
         }
+        else if (task.Trigger.Type == TaskTriggerType.Keyboard)
+        {
+            ValidateKeys(task.Trigger.Keys, "trigger.keys");
+        }
         else if (task.Trigger.Type == TaskTriggerType.Extension)
         {
             if (string.IsNullOrWhiteSpace(task.Trigger.PluginId))
@@ -1310,8 +1352,9 @@ public sealed class TaskService : BackgroundService
                     throw new TaskValidationException($"actions[{index}].delaySeconds", "请输入有效的延迟秒数");
                 case TaskActionType.Delay when action.DelaySeconds > 86400:
                     throw new TaskValidationException($"actions[{index}].delaySeconds", "延迟时间不能超过 86400 秒（24 小时）");
-                case TaskActionType.Keyboard when action.Keys is null || action.Keys.Count == 0:
-                    throw new TaskValidationException($"actions[{index}].keys", "请选择至少一个按键");
+                case TaskActionType.Keyboard:
+                    ValidateKeys(action.Keys, $"actions[{index}].keys");
+                    break;
                 case TaskActionType.Extension when string.IsNullOrWhiteSpace(action.PluginId):
                     throw new TaskValidationException($"actions[{index}].pluginId", "请选择插件和动作");
                 case TaskActionType.Extension when string.IsNullOrWhiteSpace(action.ActionId):
@@ -1334,6 +1377,21 @@ public sealed class TaskService : BackgroundService
     }
 
     private static bool IsSupportedShell(string? shell) => shell is not null && (shell.Equals("cmd", StringComparison.OrdinalIgnoreCase) || shell.Equals("powershell", StringComparison.OrdinalIgnoreCase));
+
+    private static void ValidateKeys(IReadOnlyList<string>? keys, string field)
+    {
+        if (keys is null || keys.Count == 0)
+            throw new TaskValidationException(field, "请选择至少一个按键");
+        if (keys.Count > 3)
+            throw new TaskValidationException(field, "最多选择 3 个按键");
+        var parsed = new HashSet<KeyboardKey>();
+        foreach (var name in keys)
+        {
+            if (!Enum.TryParse<KeyboardKey>(name, true, out var key) || !string.Equals(Enum.GetName(key), name, StringComparison.OrdinalIgnoreCase))
+                throw new TaskValidationException(field, "包含不支持的按键");
+            if (!parsed.Add(key)) throw new TaskValidationException(field, "按键不能重复");
+        }
+    }
 
     private static void ValidateName(string name)
     {

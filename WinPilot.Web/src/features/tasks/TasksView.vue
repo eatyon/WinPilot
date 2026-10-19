@@ -7,7 +7,8 @@ import AppMultiSelect from '../../components/AppMultiSelect.vue';
 import TaskActionEditor from './TaskActionEditor.vue';
 import TaskVariableHelp from './TaskVariableHelp.vue';
 import CronEditor from './CronEditor.vue';
-import { orderKeys } from '../desktop/keyboardLayout';
+import KeyboardKeyPicker from '../desktop/KeyboardKeyPicker.vue';
+import { keyLabel, orderKeys } from '../desktop/keyboardLayout';
 import { apiErrorMessage, readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
 import { executeRequest } from '../../api/requestExecutor';
 import { showToast } from '../../ui/toast';
@@ -167,7 +168,7 @@ function invalidActionField(action: Action) {
 async function focusTaskError(currentEditor: Task, signal?: AbortSignal) {
   await nextTick();
   if (!isPageActive || signal?.aborted || editor.value !== currentEditor) return;
-  for (const field of ['name', 'cron', 'event', 'processPaths', 'extension']) {
+  for (const field of ['name', 'cron', 'event', 'processPaths', 'keys', 'extension']) {
     if (!fieldErrors.value[field]) continue;
     const target = field === 'extension' ? invalidTriggerField.value ?? field : field;
     let input = fieldInput(editorForm.value, target);
@@ -175,7 +176,10 @@ async function focusTaskError(currentEditor: Task, signal?: AbortSignal) {
       input = fieldInput(editorForm.value, `processPaths.${invalidProcessPath.value}`)
         ?? fieldInput(editorForm.value, 'addProcess');
     }
-    if (input) { focusInvalidInput(input); return; }
+    if (input) {
+      focusInvalidInput(input, field === 'keys' ? input.closest<HTMLElement>('.selected-keys') : undefined);
+      return;
+    }
   }
   for (const [index, action] of currentEditor.actions.entries()) {
     const field = invalidActionField(action);
@@ -193,6 +197,7 @@ function clearTriggerErrors() {
   delete fieldErrors.value.cron;
   delete fieldErrors.value.event;
   delete fieldErrors.value.processPaths;
+  delete fieldErrors.value.keys;
   delete fieldErrors.value.extension;
 }
 watch(() => editor.value?.name, () => { delete fieldErrors.value.name; }, { flush: 'sync' });
@@ -317,6 +322,8 @@ const filteredTasks = computed(() => {
 const triggerLabel = (trigger: Trigger, cronAvailable?: boolean) =>
   trigger.type === 'Cron'
     ? `Cron 计划 · ${trigger.cron || '未设置'}${cronAvailable === false ? '（不可用）' : ''}`
+    : trigger.type === 'Keyboard'
+      ? `按键监听 · ${orderKeys(trigger.keys ?? []).map(keyLabel).join(' + ') || '未选择按键'}`
     : trigger.type === 'WinPilotStartup'
       ? 'WinPilot 启动'
       : trigger.type === 'Extension'
@@ -420,6 +427,7 @@ function openTaskEditor(task?: Task) {
       ...(action.type === 'Keyboard' ? { keys: orderKeys(action.keys ?? []) } : {}),
     })) : [createAction()],
   };
+  if (editor.value.trigger.type === 'Keyboard') editor.value.trigger.keys = orderKeys(editor.value.trigger.keys);
   originalName.value = task?.name ?? '';
   detailTarget.value = undefined;
   fieldErrors.value = {};
@@ -510,6 +518,7 @@ async function saveTask() {
   const value = JSON.parse(JSON.stringify(editor.value)) as Task;
   value.name = value.name.trim();
   value.trigger.processPaths = value.trigger.processPaths.map((path) => path.trim()).filter(Boolean);
+  if (value.trigger.type === 'Keyboard') value.trigger.keys = orderKeys(value.trigger.keys);
   for (const action of value.actions) if (action.type === 'Keyboard') action.keys = orderKeys(action.keys);
   if (value.actions.length) value.actions[value.actions.length - 1].continueOnFailure = false;
   const errors = validate(value);
@@ -535,7 +544,11 @@ async function saveTask() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...value,
-      trigger: { ...value.trigger, event: value.trigger.type === 'Process' ? value.trigger.event : undefined },
+      trigger: {
+        ...value.trigger,
+        event: value.trigger.type === 'Process' ? value.trigger.event : undefined,
+        keys: value.trigger.type === 'Keyboard' ? value.trigger.keys : undefined,
+      },
       actions: value.actions.map(actionPayload),
     }),
   }, async () => {
@@ -555,7 +568,7 @@ async function saveTask() {
       fieldErrors.value = {};
       actionErrors.clear();
       const triggerFields: Record<string, string> = {
-        'trigger.cron': 'cron', 'trigger.event': 'event', 'trigger.processPaths': 'processPaths',
+        'trigger.cron': 'cron', 'trigger.event': 'event', 'trigger.processPaths': 'processPaths', 'trigger.keys': 'keys',
         'trigger.pluginId': 'extension', 'trigger.triggerId': 'extension', 'trigger.parameters': 'extension',
       };
       for (const [path, messages] of Object.entries(errors)) {
@@ -743,6 +756,7 @@ onBeforeUnmount(() => {
                 { value: 'Cron', label: 'Cron 计划' },
                 { value: 'Process', label: '程序事件' },
                 { value: 'WinPilotStartup', label: 'WinPilot 启动' },
+                { value: 'Keyboard', label: '按键监听' },
                 { value: 'Extension', label: '插件扩展' },
               ]"
             />
@@ -753,6 +767,10 @@ onBeforeUnmount(() => {
             v-model="editor.trigger.cron"
             v-model:error="fieldErrors.cron"
           />
+          <div v-else-if="editor.trigger.type === 'Keyboard'" class="task-trigger-keyboard" data-task-field="keys">
+            <KeyboardKeyPicker v-model="editor.trigger.keys" :invalid="Boolean(fieldErrors.keys)" collapsible />
+            <small v-if="fieldErrors.keys" class="field-error">{{ fieldErrors.keys }}</small>
+          </div>
           <div v-else-if="editor.trigger.type === 'Process'" class="task-trigger-process">
             <label class="field-control" data-task-field="event">
               <span>事件 *</span>

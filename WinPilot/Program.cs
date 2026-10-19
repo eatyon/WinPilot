@@ -85,6 +85,7 @@ internal static class Program
         builder.Services.AddSingleton<ProgramTagService>();
         builder.Services.AddSingleton<IProgramManager, WindowsProgramManager>();
         builder.Services.AddSingleton<WindowsProcessEventListener>();
+        builder.Services.AddSingleton<WindowsKeyboardEventListener>();
         builder.Services.AddSingleton<TaskService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TaskService>());
         builder.Services.AddSingleton<ISystemResourceMonitor, WindowsSystemResourceMonitor>();

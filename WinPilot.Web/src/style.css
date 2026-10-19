@@ -305,7 +305,7 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
 .task-trigger-programs { display: grid; gap: 10px; margin-top: 10px; }
 .task-trigger-program-controls { display: grid; gap: 6px; }
 .task-trigger-program-controls .field-hint { margin: 0; }
-.task-trigger-process, .task-trigger-extension { display: grid; gap: 12px; margin-top: 12px; }
+.task-trigger-process, .task-trigger-extension, .task-trigger-keyboard { display: grid; gap: 12px; margin-top: 12px; }
 .task-trigger-program-add { width: fit-content; margin-top: 2px; }
 .icon-button { border: 0; background: transparent; color: var(--accent-text); font-size: 12px; }
 .icon-button:disabled { color: var(--text-subtle); }
