@@ -141,7 +141,6 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
     private sealed class Screenshot : IDesktopScreenshotProvider { public DesktopScreenshot Capture() => throw new NotSupportedException(); }
     private sealed class Notifications : INotificationService
     {
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default,
-            string? channel = null, bool ignoreChannelEnabled = false) => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
     }
 }

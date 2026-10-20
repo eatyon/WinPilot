@@ -126,8 +126,7 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
         {
             token.ThrowIfCancellationRequested();
             var message = new NotificationMessage("WinPilot 安全事件", Describe(type, sourceIp, isLoopback, lockoutDuration, enabled), Event: $"Security.{type}");
-            var allEnabled = settings.Channel == NotificationChannelCatalog.AllEnabled;
-            var results = await notifications.SendAsync(message, token, channel: allEnabled ? null : settings.Channel, ignoreChannelEnabled: !allEnabled).ConfigureAwait(false);
+            var results = await notifications.SendAsync(message, settings.Channel, token).ConfigureAwait(false);
             foreach (var result in results.Where(result => !result.Succeeded)) logger.LogWarning("安全事件通知发送失败，事件：{Event}，通知渠道：{Channel}", EventName(type), result.Channel);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }

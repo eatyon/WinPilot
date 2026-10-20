@@ -151,9 +151,9 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 
 | 方法 | 路径 | 请求与说明 | 成功响应 | 错误 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/settings/notifications/command-bots` | 只读取配置，不建立状态订阅 | 200 四渠道启用开关 | — |
+| GET | `/api/settings/notifications/command-bots` | 读取各机器人的启用设置 | 200 机器人启用设置 | 403 |
 | GET | `/api/notifications/command-bots/commands` | 已注册命令，包含通配命令 | 200 命令分组数组 | — |
-| GET | `/api/settings/notifications/command-bots/{bot}` | 普通渠道为 `{ enabled, prefix }`；OneBot 另含 `webSocketUrl, token`；安全模式仅返回 `enabled`，`no-store` | 200 机器人设置 | — |
+| GET | `/api/settings/notifications/command-bots/{bot}` | 读取指定机器人配置：`{ enabled, prefix }`；OneBot 另含 `webSocketUrl, token`；`no-store` | 200 机器人设置 | 403 |
 | PUT | `/api/settings/notifications/command-bots/{bot}` | 普通渠道提交 `{ enabled, prefix? }`，省略 prefix 时保留原值；OneBot 提交完整选项；响应为状态而非设置 | 200 机器人状态 | 400、403、500 |
 | GET | `/api/notifications/command-bots/{bot}/status` | 单次读取 | 200 机器人状态 | — |
 | POST | `/api/notifications/command-bots/{bot}/reconnect` | 无请求体；请求重新连接，不保证返回时已连接成功 | 200 机器人状态 | 400、403、500 |
@@ -163,10 +163,10 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 
 | 方法 | 路径 | 请求与说明 | 成功响应 | 错误 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/notifications/channels` | 首项空 value 表示“已启用渠道” | 200 `{ value, label }` 数组 | — |
-| GET | `/api/settings/notifications` | 安全模式仅返回各渠道启用开关；`no-store` | 200 通知设置 | — |
-| PATCH | `/api/settings/notifications/{channel}` | JSON 提交通知设置，仅保存指定渠道字段；`channel` 取通知渠道 ID，响应为整份设置 | 200 合并后的通知设置 | 400、500 |
-| POST | `/api/notifications/test` | JSON `{ channel, title, content, imagePath }`；指定具体渠道，标题或内容至少一项非空；忽略渠道启用开关，逐项检查 `succeeded` | 200 渠道投递结果数组 | 400 |
+| GET | `/api/notifications/channels` | 读取可选通知渠道 | 200 `{ value, label }` 数组 | — |
+| GET | `/api/settings/notifications` | 读取通知渠道配置；`no-store` | 200 通知设置 | 403 |
+| PATCH | `/api/settings/notifications/{channel}` | 更新指定通知渠道配置（Windows 除外）；JSON 提交通知设置 | 200 合并后的通知设置 | 400、403、500 |
+| POST | `/api/notifications/test` | 发送测试通知；JSON `{ channel, title, content, imagePath }`；channel 必填，标题或内容至少一项非空；检查 `succeeded` 判断投递结果 | 200 渠道投递结果数组 | 400 |
 | POST | `/api/notifications/qqbot/bind-user` | 无请求体；`data` JSON 的 `type` 为 `code/success/error`，分别携带 `code/openId/message`；取消结束流，`no-cache` | 200 SSE | — |
 | POST | `/api/notifications/qqbot/bind-group` | 同 bind-user 协议，获取群 OpenID；超时和绑定失败由 `type: "error"` 报告 | 200 SSE | — |
 

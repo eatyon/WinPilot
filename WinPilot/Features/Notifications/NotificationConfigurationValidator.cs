@@ -28,8 +28,7 @@ internal static class NotificationConfigurationValidator
         if ((settings.Events ?? []).Any(type => !Enum.IsDefined(type)))
             throw new InvalidOperationException("安全事件类型无效");
         var channel = (settings.Channel ?? "").Trim();
-        if (channel.Length > 0 && !channel.Equals(NotificationChannelCatalog.AllEnabled, StringComparison.OrdinalIgnoreCase)
-            && !NotificationChannelCatalog.All.Any(item => item.Id.Equals(channel, StringComparison.OrdinalIgnoreCase)))
+        if (channel.Length > 0 && NotificationChannelCatalog.Find(channel) is null)
             throw new InvalidOperationException("安全通知渠道无效");
     }
 }

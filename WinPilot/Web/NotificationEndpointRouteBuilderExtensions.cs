@@ -2,7 +2,6 @@ using WinPilot.Core;
 using WinPilot.Core.Notifications;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
-using WinPilot.Features.Security;
 
 namespace WinPilot.Web;
 
@@ -11,16 +10,12 @@ public static class NotificationEndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapNotificationEndpoints(this IEndpointRouteBuilder endpoints, string configurationFile, INotificationService notifications)
     {
         endpoints.MapGet("/api/notifications/channels", () => Results.Ok(NotificationChannelCatalog.All
-            .Select(channel => new { value = channel.Id, label = channel.DisplayName })
-            .Prepend(new { value = "", label = NotificationChannelCatalog.EnabledDisplayName })));
-        endpoints.MapGet("/api/settings/notifications", ([Microsoft.AspNetCore.Mvc.FromServices] SafeModeService safeMode, HttpContext context) =>
+            .Select(channel => new { value = channel.Id, label = channel.DisplayName })));
+        endpoints.MapGet("/api/settings/notifications", (HttpContext context) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = WinPilotSettings.LoadAndInitialize(configurationFile).Notifications;
-            return safeMode.Enabled
-                ? Results.Ok(new { settings.WindowsEnabled, settings.WebhookEnabled, settings.TelegramEnabled,
-                    settings.WorkWeixinEnabled, settings.FeishuEnabled, settings.OneBotEnabled, settings.QQBotEnabled })
-                : Results.Ok(settings);
+            return Results.Ok(settings);
         });
         endpoints.MapPatch("/api/settings/notifications/{channel}", async (string channel, NotificationSettings settings, ILoggerFactory loggerFactory, CommandBotConfiguration bots, HttpContext context) =>
         {
@@ -30,13 +25,12 @@ public static class NotificationEndpointRouteBuilderExtensions
                 ValidateSendTarget(channel.ToLowerInvariant(), settings);
                 var merged = await bots.SaveNotificationsAsync(configurationFile, existing => channel.ToLowerInvariant() switch
                 {
-                    "windows" => existing with { WindowsEnabled = settings.WindowsEnabled },
-                    "webhook" => existing with { WebhookEnabled = settings.WebhookEnabled, WebhookUrl = settings.WebhookUrl, WebhookSendTo = settings.WebhookSendTo },
-                    "telegram" => existing with { TelegramEnabled = settings.TelegramEnabled, TelegramBotToken = settings.TelegramBotToken, TelegramChatId = settings.TelegramChatId, TelegramApiBaseUrl = settings.TelegramApiBaseUrl, TelegramProxyUrl = settings.TelegramProxyUrl, TelegramProxyEnabled = settings.TelegramProxyEnabled },
-                    "workweixin" => existing with { WorkWeixinEnabled = settings.WorkWeixinEnabled, WorkWeixinWebhookUrl = settings.WorkWeixinWebhookUrl },
-                    "feishu" => existing with { FeishuEnabled = settings.FeishuEnabled, FeishuWebhookUrl = settings.FeishuWebhookUrl, FeishuAppId = settings.FeishuAppId, FeishuAppSecret = settings.FeishuAppSecret },
-                    "onebot" => existing with { OneBotEnabled = settings.OneBotEnabled, OneBotEndpoint = settings.OneBotEndpoint, OneBotUserId = settings.OneBotUserId, OneBotGroupId = settings.OneBotGroupId, OneBotToken = settings.OneBotToken, OneBotSendTarget = settings.OneBotSendTarget },
-                    "qqbot" => existing with { QQBotEnabled = settings.QQBotEnabled, QQBotAppId = settings.QQBotAppId, QQBotClientSecret = settings.QQBotClientSecret, QQBotOpenId = settings.QQBotOpenId, QQBotGroupOpenId = settings.QQBotGroupOpenId, QQBotSendTarget = settings.QQBotSendTarget, QQBotMessageFormat = settings.QQBotMessageFormat },
+                    "webhook" => existing with { WebhookUrl = settings.WebhookUrl, WebhookSendTo = settings.WebhookSendTo },
+                    "telegram" => existing with { TelegramBotToken = settings.TelegramBotToken, TelegramChatId = settings.TelegramChatId, TelegramApiBaseUrl = settings.TelegramApiBaseUrl, TelegramProxyUrl = settings.TelegramProxyUrl, TelegramProxyEnabled = settings.TelegramProxyEnabled },
+                    "workweixin" => existing with { WorkWeixinWebhookUrl = settings.WorkWeixinWebhookUrl },
+                    "feishu" => existing with { FeishuWebhookUrl = settings.FeishuWebhookUrl, FeishuAppId = settings.FeishuAppId, FeishuAppSecret = settings.FeishuAppSecret },
+                    "onebot" => existing with { OneBotEndpoint = settings.OneBotEndpoint, OneBotUserId = settings.OneBotUserId, OneBotGroupId = settings.OneBotGroupId, OneBotToken = settings.OneBotToken, OneBotSendTarget = settings.OneBotSendTarget },
+                    "qqbot" => existing with { QQBotAppId = settings.QQBotAppId, QQBotClientSecret = settings.QQBotClientSecret, QQBotOpenId = settings.QQBotOpenId, QQBotGroupOpenId = settings.QQBotGroupOpenId, QQBotSendTarget = settings.QQBotSendTarget, QQBotMessageFormat = settings.QQBotMessageFormat },
                     _ => throw new InvalidOperationException("通知渠道无效")
                 }, context.RequestAborted);
                 var channelName = NotificationChannelCatalog.GetDisplayName(channel);
@@ -49,11 +43,11 @@ public static class NotificationEndpointRouteBuilderExtensions
         });
         endpoints.MapPost("/api/notifications/test", async (NotificationTestRequest request, HttpContext context) =>
         {
-            if (string.IsNullOrWhiteSpace(request.Channel)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["channel"] = ["请选择通知渠道"] });
-            if (!NotificationChannelCatalog.All.Any(channel => string.Equals(channel.Id, request.Channel, StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrWhiteSpace(request.Channel)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["channel"] = ["请选择发送渠道"] });
+            if (NotificationChannelCatalog.Find(request.Channel) is null)
                 return Results.BadRequest(new { message = "通知渠道无效" });
             if (string.IsNullOrWhiteSpace(request.Content) && string.IsNullOrWhiteSpace(request.Title)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["content"] = ["请输入测试内容"] });
-            var results = await notifications.SendAsync(new NotificationMessage(request.Title ?? "WinPilot 测试通知", request.Content, request.ImagePath), context.RequestAborted, request.Channel, ignoreChannelEnabled: true);
+            var results = await notifications.SendAsync(new NotificationMessage(request.Title ?? "WinPilot 测试通知", request.Content, request.ImagePath), request.Channel, context.RequestAborted);
             if (results.Count == 0) return Results.BadRequest(new { message = "没有可用的通知渠道" });
             return Results.Ok(results);
         });

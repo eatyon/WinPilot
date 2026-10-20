@@ -27,7 +27,7 @@ public sealed class PluginHostActionApiTest
         var api = new PluginHostActionApi(new RecordingProgramManager(), new KeyboardInputService(new NoOpKeyboardInputSimulator()),
             terminals, new RecordingNotificationService(), logger);
 
-        var result = await api.ExecuteAsync(new(type, new Dictionary<string, object?> { ["content"] = "测试", ["keys"] = new[] { "F11" } }));
+        var result = await api.ExecuteAsync(new(type, new Dictionary<string, object?> { ["channel"] = "QQBot", ["content"] = "测试", ["keys"] = new[] { "F11" } }));
 
         Assert.Equal(succeeds, result.Succeeded);
         Assert.Collection(logger.Entries,
@@ -66,9 +66,9 @@ public sealed class PluginHostActionApiTest
     }
 
     [Theory]
-    [InlineData(null, false)]
-    [InlineData("qqbot", true)]
-    public async Task SendNotification_RoutesThroughNotificationService(string? channel, bool ignoreEnabled)
+    [InlineData("Windows")]
+    [InlineData("qqbot")]
+    public async Task SendNotification_RoutesThroughNotificationService(string? channel)
     {
         var notifications = new RecordingNotificationService();
         await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
@@ -83,7 +83,6 @@ public sealed class PluginHostActionApiTest
         Assert.Equal("签到完成", notifications.Message?.Content);
         Assert.Equal("", notifications.Message?.Title);
         Assert.Equal(channel, notifications.Channel);
-        Assert.Equal(ignoreEnabled, notifications.IgnoreEnabled);
     }
 
     [Fact]
@@ -97,6 +96,25 @@ public sealed class PluginHostActionApiTest
         Assert.False(result.Succeeded);
     }
 
+    [Theory]
+    [InlineData(null, "请选择发送渠道")]
+    [InlineData("", "请选择发送渠道")]
+    [InlineData(" ", "请选择发送渠道")]
+    [InlineData("all-enabled", "通知渠道无效")]
+    [InlineData("unknown", "通知渠道无效")]
+    public async Task SendNotificationRejectsInvalidChannelBeforeImageWork(string? channel, string message)
+    {
+        var notifications = new RecordingNotificationService();
+        await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
+        var api = CreateApi(terminals, notifications);
+        var parameters = new Dictionary<string, object?> { ["content"] = "content", ["image"] = new PluginImageContent([], "invalid") };
+        if (channel is not null) parameters["channel"] = channel;
+        var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, parameters));
+        Assert.False(result.Succeeded);
+        Assert.Equal(message, result.Error);
+        Assert.Null(notifications.Message);
+    }
+
     [Fact]
     public async Task SendNotification_WritesImageForDeliveryAndRemovesTemporaryFile()
     {
@@ -107,6 +125,7 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
+            ["channel"] = "QQBot",
             ["image"] = new PluginImageContent(image, "image/png")
         }));
 
@@ -127,6 +146,7 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
+            ["channel"] = "QQBot",
             ["content"] = "测试通知", ["image"] = new PluginImageContent(new byte[length], "image/png")
         }));
 
@@ -149,6 +169,7 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
+            ["channel"] = "QQBot",
             ["image"] = new PluginImageContent(image, contentType)
         }));
 
@@ -174,6 +195,7 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
+            ["channel"] = "QQBot",
             ["image"] = new PluginImageContent([1], contentType)
         }));
 
@@ -291,10 +313,8 @@ public sealed class PluginHostActionApiTest
     }
 
     [Theory]
-    [InlineData("", null, false)]
-    [InlineData(" \t ", null, false)]
-    [InlineData(" QQBot ", "QQBot", true)]
-    public async Task SendNotification_NormalizesChannelWhitespace(string channel, string? expectedChannel, bool ignoreEnabled)
+    [InlineData(" QQBot ", "QQBot")]
+    public async Task SendNotification_NormalizesChannelWhitespace(string channel, string? expectedChannel)
     {
         var notifications = new RecordingNotificationService();
         await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
@@ -307,7 +327,6 @@ public sealed class PluginHostActionApiTest
 
         Assert.True(result.Succeeded);
         Assert.Equal(expectedChannel, notifications.Channel);
-        Assert.Equal(ignoreEnabled, notifications.IgnoreEnabled);
     }
 
     [Fact]
@@ -320,6 +339,7 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
+            ["channel"] = "QQBot",
             ["content"] = content
         }));
 
@@ -344,6 +364,7 @@ public sealed class PluginHostActionApiTest
 
             var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
             {
+                ["channel"] = "QQBot",
                 ["image"] = new PluginImageContent(await File.ReadAllBytesAsync(path), "image/png")
             }));
 
@@ -703,6 +724,7 @@ public sealed class PluginHostActionApiTest
 
     private static PluginHostActionStep ImageNotification() => new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
     {
+        ["channel"] = "QQBot",
         ["image"] = new PluginImageContent([137, 80, 78, 71], "image/png")
     });
 
@@ -718,13 +740,11 @@ public sealed class PluginHostActionApiTest
     {
         public NotificationMessage? Message { get; private set; }
         public string? Channel { get; private set; }
-        public bool IgnoreEnabled { get; private set; }
         public byte[]? ImageBytes { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
         {
             Message = message;
             Channel = channel;
-            IgnoreEnabled = ignoreChannelEnabled;
             ImageBytes = message.ImagePath is null ? null : File.ReadAllBytes(message.ImagePath);
             return send?.Invoke(cancellationToken) ?? Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)]);
         }

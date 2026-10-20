@@ -7,52 +7,58 @@ public sealed class NotificationService : INotificationService, IDisposable
 {
     private readonly PortableDataPaths paths;
     private readonly ILogger<NotificationService> logger;
-    private readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
-    private readonly WebhookNotificationChannel webhook;
-    private readonly WorkWeixinNotificationChannel workWeixin;
-    private readonly FeishuNotificationChannel feishu;
-    private readonly OneBotNotificationChannel oneBot;
-    private readonly QQBotNotificationChannel qqbot;
+    private readonly object resourcesGate = new();
+    private HttpClient? httpClient;
+    private WebhookNotificationChannel? webhook;
+    private WorkWeixinNotificationChannel? workWeixin;
+    private FeishuNotificationChannel? feishu;
+    private OneBotNotificationChannel? oneBot;
+    private QQBotNotificationChannel? qqbot;
+    private bool disposed;
+
+    private WebhookNotificationChannel Webhook => GetChannel(ref webhook, static client => new WebhookNotificationChannel(client));
+    private WorkWeixinNotificationChannel WorkWeixin => GetChannel(ref workWeixin, static client => new WorkWeixinNotificationChannel(client));
+    private FeishuNotificationChannel Feishu => GetChannel(ref feishu, static client => new FeishuNotificationChannel(client));
+    private OneBotNotificationChannel OneBot => GetChannel(ref oneBot, static client => new OneBotNotificationChannel(client));
+    private QQBotNotificationChannel QQBot => GetChannel(ref qqbot, static client => new QQBotNotificationChannel(client));
 
     public NotificationService(PortableDataPaths paths, ILogger<NotificationService> logger)
     {
         this.paths = paths;
         this.logger = logger;
-        webhook = new(httpClient);
-        workWeixin = new(httpClient);
-        feishu = new(httpClient);
-        oneBot = new(httpClient);
-        qqbot = new(httpClient);
     }
 
     public async Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
         NotificationMessage message,
-        CancellationToken cancellationToken = default,
-        string? channel = null,
-        bool ignoreChannelEnabled = false)
+        string? channel,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var id = NotificationChannelCatalog.RequireChannel(channel);
         var settings = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
         var secrets = NotificationFailureDiagnostics.Secrets(settings);
-        var channels = new List<Task<NotificationChannelResult>>();
-        if (IsSelected(channel, NotificationChannelCatalog.Webhook) && (ignoreChannelEnabled || settings.WebhookEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Webhook, () => webhook.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.Telegram) && (ignoreChannelEnabled || settings.TelegramEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Telegram, () => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.WorkWeixin) && (ignoreChannelEnabled || settings.WorkWeixinEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.WorkWeixin, () => workWeixin.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.Windows) && (ignoreChannelEnabled || settings.WindowsEnabled))
-            channels.Insert(0, SendChannel(NotificationChannelCatalog.Windows, () => WindowsNotificationChannel.SendAsync(message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.Feishu) && (ignoreChannelEnabled || settings.FeishuEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.Feishu, () => feishu.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.OneBot) && (ignoreChannelEnabled || settings.OneBotEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.OneBot, () => oneBot.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        if (IsSelected(channel, NotificationChannelCatalog.QQBot) && (ignoreChannelEnabled || settings.QQBotEnabled))
-            channels.Add(SendChannel(NotificationChannelCatalog.QQBot, () => qqbot.SendAsync(settings, message, cancellationToken), cancellationToken, secrets));
-        return await Task.WhenAll(channels);
+        var result = await SendChannel(id, () => id switch
+        {
+            NotificationChannelCatalog.Windows => WindowsNotificationChannel.SendAsync(message, cancellationToken),
+            NotificationChannelCatalog.Webhook => Webhook.SendAsync(settings, message, cancellationToken),
+            NotificationChannelCatalog.Telegram => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken),
+            NotificationChannelCatalog.WorkWeixin => WorkWeixin.SendAsync(settings, message, cancellationToken),
+            NotificationChannelCatalog.Feishu => Feishu.SendAsync(settings, message, cancellationToken),
+            NotificationChannelCatalog.OneBot => OneBot.SendAsync(settings, message, cancellationToken),
+            NotificationChannelCatalog.QQBot => QQBot.SendAsync(settings, message, cancellationToken),
+            _ => throw new InvalidOperationException("通知渠道无效")
+        }, cancellationToken, secrets);
+        return [result];
     }
 
-    private static bool IsSelected(string? selected, string channel) =>
-        string.IsNullOrWhiteSpace(selected) || string.Equals(selected, channel, StringComparison.OrdinalIgnoreCase);
+    private T GetChannel<T>(ref T? channel, Func<HttpClient, T> create) where T : class
+    {
+        lock (resourcesGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            return channel ??= create(httpClient ??= new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+        }
+    }
 
     internal async Task<NotificationChannelResult> SendChannel(string id, Func<Task> send, CancellationToken cancellationToken,
         IEnumerable<string>? secrets = null)
@@ -83,8 +89,19 @@ public sealed class NotificationService : INotificationService, IDisposable
 
     public void Dispose()
     {
-        httpClient.Dispose();
-        qqbot.Dispose();
-        feishu.Dispose();
+        HttpClient? client;
+        QQBotNotificationChannel? qqbotChannel;
+        FeishuNotificationChannel? feishuChannel;
+        lock (resourcesGate)
+        {
+            if (disposed) return;
+            disposed = true;
+            client = httpClient;
+            qqbotChannel = qqbot;
+            feishuChannel = feishu;
+        }
+        client?.Dispose();
+        qqbotChannel?.Dispose();
+        feishuChannel?.Dispose();
     }
 }

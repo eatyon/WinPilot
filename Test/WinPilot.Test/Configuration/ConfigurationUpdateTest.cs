@@ -74,7 +74,9 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.False(settings.CommandBots.FeishuEnabled);
         Assert.False(settings.CommandBots.OneBotEnabled);
         Assert.False(settings.CommandBots.QQBotEnabled);
-        Assert.False(settings.Notifications.WindowsEnabled);
+        Assert.True(root["notifications"]!["TelegramProxyEnabled"] is not null);
+        foreach (var channel in NotificationChannelCatalog.All)
+            Assert.False(root["notifications"]!.AsObject().ContainsKey(channel.Id + "Enabled"));
         Assert.Equal("http://127.0.0.1:7890", settings.Notifications.TelegramProxyUrl);
         Assert.False(settings.SafeModeEnabled);
         Assert.Equal("", settings.SecurityNotifications.Channel);
@@ -136,7 +138,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
                 case 1: WinPilotSettings.Update(FilePath, current => current with { SafeModeEnabled = true }); break;
                 case 2: WinPilotSettings.Update(FilePath, current => current with { Notifications = current.Notifications with { QQBotAppId = "app" } }); break;
                 case 3: WinPilotSettings.Update(FilePath, current => current with { CommandBots = current.CommandBots with { TelegramPrefix = "/" } }); break;
-                case 4: WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Channel = "all-enabled" } }); break;
+                case 4: WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Channel = "telegram" } }); break;
             }
         })));
         var saved = WinPilotSettings.LoadAndInitialize(FilePath);
@@ -144,7 +146,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.True(saved.SafeModeEnabled);
         Assert.Equal("app", saved.Notifications.QQBotAppId);
         Assert.Equal("/", saved.CommandBots.TelegramPrefix);
-        Assert.Equal("all-enabled", saved.SecurityNotifications.Channel);
+        Assert.Equal("telegram", saved.SecurityNotifications.Channel);
         Assert.False(File.Exists(FilePath + ".tmp"));
     }
 
@@ -227,8 +229,6 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.Equal(target, loaded.Notifications.OneBotSendTarget);
         Assert.Equal(target, loaded.Notifications.QQBotSendTarget);
         Assert.Equal(format, loaded.Notifications.QQBotMessageFormat);
-        Assert.False(loaded.Notifications.OneBotEnabled);
-        Assert.False(loaded.Notifications.QQBotEnabled);
         Assert.Equal("", loaded.Notifications.OneBotUserId);
         Assert.Equal("", loaded.Notifications.QQBotClientSecret);
         Assert.Equal(original, File.ReadAllText(FilePath));
@@ -237,7 +237,7 @@ public sealed class ConfigurationUpdateTest : IDisposable
     [Fact]
     public void AllNotificationChannelsAndEventsLoadWithoutChangingSavedValues()
     {
-        foreach (var channel in NotificationChannelCatalog.All.Select(item => item.Id).Append(NotificationChannelCatalog.AllEnabled).Append(""))
+        foreach (var channel in NotificationChannelCatalog.All.Select(item => item.Id).Append(""))
         {
             var savedChannel = channel.ToUpperInvariant();
             WinPilotSettings.Update(FilePath, current => current with

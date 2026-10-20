@@ -17,6 +17,8 @@ using WinPilot.Core;
 using WinPilot.Core.Notifications;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
+using WinPilot.Features.Security;
+using WinPilot.Features.Terminal;
 using WinPilot.Web;
 
 namespace WinPilot.Test;
@@ -66,16 +68,15 @@ public sealed class NotificationChannelTest
                 var saved = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
                 Assert.Equal(target, channel == "onebot" ? saved.OneBotSendTarget : saved.QQBotSendTarget);
                 if (channel == "qqbot") Assert.Equal(format, saved.QQBotMessageFormat);
-                Assert.False(saved.OneBotEnabled);
-                Assert.False(saved.QQBotEnabled);
             }
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     [Theory]
-    [InlineData(null, "请选择通知渠道")]
-    [InlineData(" ", "请选择通知渠道")]
+    [InlineData(null, "请选择发送渠道")]
+    [InlineData("", "请选择发送渠道")]
+    [InlineData(" ", "请选择发送渠道")]
     [InlineData("unknown", "通知渠道无效")]
     [InlineData("all-enabled", "通知渠道无效")]
     [InlineData(" Windows ", "通知渠道无效")]
@@ -126,7 +127,6 @@ public sealed class NotificationChannelTest
         Assert.True(json.RootElement[0].GetProperty("succeeded").GetBoolean());
         Assert.Equal(1, notifications.Calls);
         Assert.Equal(channel, notifications.Channel);
-        Assert.True(notifications.IgnoreChannelEnabled);
         Assert.Equal(new NotificationMessage("test", "content"), notifications.Message);
     }
 
@@ -156,6 +156,7 @@ public sealed class NotificationChannelTest
         {
             var paths = PortableDataPaths.Create(root);
             WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile);
+            var original = File.ReadAllText(paths.ConfigurationFile);
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseTestServer();
             builder.Services.AddSingleton<CommandBotConfiguration>();
@@ -175,9 +176,9 @@ public sealed class NotificationChannelTest
             await configuration.Gate.WaitAsync();
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var client = app.GetTestClient();
-            using var request = new HttpRequestMessage(HttpMethod.Patch, "/api/settings/notifications/windows")
+            using var request = new HttpRequestMessage(HttpMethod.Patch, "/api/settings/notifications/webhook")
             {
-                Content = JsonContent.Create(new NotificationSettings { WindowsEnabled = true })
+                Content = JsonContent.Create(new NotificationSettings { WebhookUrl = "https://example.com" })
             };
             var sending = client.SendAsync(request, cancellation.Token);
             try
@@ -187,7 +188,7 @@ public sealed class NotificationChannelTest
                 cancellation.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sending);
                 Assert.IsAssignableFrom<OperationCanceledException>(await completed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
-                Assert.False(WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications.WindowsEnabled);
+                Assert.Equal(original, File.ReadAllText(paths.ConfigurationFile));
             }
             finally { cancellation.Cancel(); configuration.Gate.Release(); }
         }
@@ -240,14 +241,11 @@ public sealed class NotificationChannelTest
         public int Calls { get; private set; }
         public string? Channel { get; private set; }
         public NotificationMessage? Message { get; private set; }
-        public bool IgnoreChannelEnabled { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default,
-            string? channel = null, bool ignoreChannelEnabled = false)
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
         {
             Calls++;
             Channel = channel;
             Message = message;
-            IgnoreChannelEnabled = ignoreChannelEnabled;
             return Task.FromResult(Results);
         }
     }
@@ -268,10 +266,8 @@ public sealed class NotificationChannelTest
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var options = json.RootElement.EnumerateArray().ToArray();
-        Assert.Equal("", options[0].GetProperty("value").GetString());
-        Assert.Equal(NotificationChannelCatalog.EnabledDisplayName, options[0].GetProperty("label").GetString());
         Assert.Equal(NotificationChannelCatalog.All.Select(channel => (channel.Id, channel.DisplayName)),
-            options.Skip(1).Select(option => (option.GetProperty("value").GetString()!, option.GetProperty("label").GetString()!)));
+            options.Select(option => (option.GetProperty("value").GetString()!, option.GetProperty("label").GetString()!)));
         Assert.False(File.Exists(paths.ConfigurationFile));
     }
 
@@ -360,9 +356,9 @@ public sealed class NotificationChannelTest
     [Fact]
     public void QQBotJsonFieldsFollowApiAndStorageNaming()
     {
-        var settings = new NotificationSettings { QQBotEnabled = true, QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group" };
+        var settings = new NotificationSettings { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group" };
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(settings, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-        Assert.True(json.RootElement.GetProperty("qqBotEnabled").GetBoolean());
+        Assert.False(json.RootElement.TryGetProperty("qqBotEnabled", out _));
         Assert.Equal("app", json.RootElement.GetProperty("qqBotAppId").GetString());
         Assert.Equal("secret", json.RootElement.GetProperty("qqBotClientSecret").GetString());
         Assert.Equal("user", json.RootElement.GetProperty("qqBotOpenId").GetString());
@@ -375,7 +371,7 @@ public sealed class NotificationChannelTest
         new WinPilotSettings { Port = 9123, Notifications = settings }.Save(data.Paths.ConfigurationFile);
         using var saved = JsonDocument.Parse(File.ReadAllText(data.Paths.ConfigurationFile));
         var notifications = saved.RootElement.GetProperty("notifications");
-        Assert.True(notifications.GetProperty("QQBotEnabled").GetBoolean());
+        Assert.False(notifications.TryGetProperty("QQBotEnabled", out _));
         Assert.Equal("app", notifications.GetProperty("QQBotAppId").GetString());
         Assert.Equal("secret", notifications.GetProperty("QQBotClientSecret").GetString());
         Assert.Equal("user", notifications.GetProperty("QQBotOpenId").GetString());
@@ -502,28 +498,27 @@ public sealed class NotificationChannelTest
     }
 
     [Fact]
-    public async Task RoutingPreservesEnabledSelectionResultOrderAndFailureIsolation()
+    public async Task RoutingSendsOnlyTheSelectedChannelAndPreservesFailures()
     {
         await using var server = await LocalServer.CreateAsync();
         using var data = new TestData();
-        var settings = new NotificationSettings
+        new WinPilotSettings { Notifications = new NotificationSettings
         {
-            WebhookEnabled = true, WebhookUrl = server.Url + "/failure",
-            TelegramEnabled = true, TelegramApiBaseUrl = server.Url, TelegramBotToken = "123:test", TelegramChatId = "42",
-            FeishuEnabled = true, FeishuWebhookUrl = server.Url + "/feishu",
-            OneBotEnabled = true, OneBotEndpoint = server.Url, OneBotUserId = "42"
-        };
-        new WinPilotSettings { Port = 9123, Notifications = settings }.Save(data.Paths.ConfigurationFile);
+            WebhookUrl = server.Url + "/failure",
+            TelegramApiBaseUrl = server.Url, TelegramBotToken = "123:test", TelegramChatId = "42",
+            FeishuWebhookUrl = server.Url + "/feishu",
+            OneBotEndpoint = server.Url, OneBotUserId = "42"
+        } }.Save(data.Paths.ConfigurationFile);
         using var service = new NotificationService(data.Paths, NullLogger<NotificationService>.Instance);
-        var results = await service.SendAsync(new("标题", "正文"));
-        Assert.Equal(new[] { "Webhook", "Telegram", "飞书", "OneBot" }, results.Select(result => result.Channel));
-        Assert.False(results[0].Succeeded);
-        Assert.All(results.Skip(1), result => Assert.True(result.Succeeded));
-        Assert.Single(await service.SendAsync(new("标题", "正文"), channel: "TELEGRAM"));
-        new WinPilotSettings { Port = 9123, Notifications = settings with { TelegramEnabled = false } }.Save(data.Paths.ConfigurationFile);
-        Assert.Empty(await service.SendAsync(new("标题", "正文"), channel: "telegram"));
-        Assert.True(Assert.Single(await service.SendAsync(new("标题", "正文"), channel: "telegram", ignoreChannelEnabled: true)).Succeeded);
-        Assert.Empty(await service.SendAsync(new("标题", "正文"), channel: "unknown"));
+        var failed = Assert.Single(await service.SendAsync(new("标题", "正文"), channel: "Webhook"));
+        Assert.Equal("Webhook", failed.Channel);
+        Assert.False(failed.Succeeded);
+        var succeeded = Assert.Single(await service.SendAsync(new("标题", "正文"), channel: "TELEGRAM"));
+        Assert.Equal("Telegram", succeeded.Channel);
+        Assert.True(succeeded.Succeeded);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SendAsync(new("标题", "正文"), channel: "unknown"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SendAsync(new("标题", "正文"), channel: "all-enabled"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SendAsync(new("标题", "正文"), channel: null));
     }
 
     [Fact]
@@ -534,7 +529,7 @@ public sealed class NotificationChannelTest
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.SendAsync(
-            new("标题", "正文"), cancellation.Token, "windows", ignoreChannelEnabled: true));
+            new("标题", "正文"), "windows", cancellation.Token));
     }
 
     [Fact]

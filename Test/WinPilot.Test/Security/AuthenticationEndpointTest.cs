@@ -312,7 +312,8 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
             "/api/plugins/{id}/enable", "/api/plugins/scan", "/api/plugins/options/settings/{source}",
             "/api/plugin-page-sessions/{sessionId}", "/api/plugin-page-sessions/{sessionId}/messages",
             "/api/settings/test",
-            "/api/notifications/diagnostic",
+            "/api/notifications/diagnostic", "/api/notifications/command-bots/commands",
+            "/api/notifications/command-bots/{bot}/status", "/api/notifications/command-bots/{bot}/events",
         })
             app.MapMethods(route, ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], () => Results.NoContent());
         app.MapGet("/assets/diagnostic.js", () => Results.Text(new string('a', 4096), "text/javascript"));
@@ -787,6 +788,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("GET", "/API/PROGRAMS/")]
     [InlineData("GET", "/api/programs/users")]
     [InlineData("HEAD", "/api/programs/users")]
+    [InlineData("HEAD", "/api/programs")]
     [InlineData("POST", "/api/programs/usage")]
     [InlineData("POST", "/api/programs/close")]
     [InlineData("POST", "/api/programs/launch")]
@@ -798,12 +800,21 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("DELETE", "/api/tasks/test")]
     [InlineData("PATCH", "/api/settings/general/port")]
     [InlineData("PATCH", "/api/settings/notifications/telegram")]
-    [InlineData("POST", "/api/notifications/test")]
-    [InlineData("POST", "/api/notifications/qqbot/bind-user")]
-    [InlineData("POST", "/api/notifications/qqbot/bind-group")]
+    [InlineData("GET", "/api/settings/notifications")]
+    [InlineData("HEAD", "/api/settings/notifications")]
+    [InlineData("GET", "/api/settings/notifications/command-bots")]
+    [InlineData("GET", "/api/settings/notifications/command-bots/telegram")]
+    [InlineData("GET", "/api/settings/notifications/command-bots/feishu")]
+    [InlineData("GET", "/api/settings/notifications/command-bots/onebot")]
+    [InlineData("GET", "/api/settings/notifications/command-bots/qqbot")]
     [InlineData("PUT", "/api/settings/security/password")]
     [InlineData("PUT", "/api/settings/security/notifications")]
     [InlineData("PUT", "/api/settings/updates")]
+    [InlineData("POST", "/api/settings/test")]
+    [InlineData("DELETE", "/api/settings/test")]
+    [InlineData("OPTIONS", "/api/settings/test")]
+    [InlineData("CUSTOM", "/api/settings/test")]
+    [InlineData("All", "/api/settings/test")]
     [InlineData("DELETE", "/api/plugins/test")]
     [InlineData("PUT", "/api/plugins/test/configuration")]
     [InlineData("PUT", "/api/plugins/test/settings/display/status")]
@@ -828,6 +839,8 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("GET", "/api/plugins/test/readme")]
     [InlineData("GET", "/api/plugins/options/settings/notificationChannels")]
     [InlineData("GET", "/api/programs/tags")]
+    [InlineData("HEAD", "/api/programs/tags")]
+    [InlineData("GET", "/API/PROGRAMS/TAGS/")]
     [InlineData("POST", "/api/programs/tags/test/launch")]
     [InlineData("GET", "/api/tasks")]
     [InlineData("POST", "/api/tasks/test/run")]
@@ -838,6 +851,15 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     [InlineData("POST", "/api/plugin-page-sessions/test/messages")]
     [InlineData("DELETE", "/api/plugin-page-sessions/test")]
     [InlineData("PUT", "/api/protected/test")]
+    [InlineData("GET", "/api/notifications/command-bots/commands")]
+    [InlineData("GET", "/api/notifications/command-bots/telegram/status")]
+    [InlineData("GET", "/api/notifications/command-bots/feishu/status")]
+    [InlineData("GET", "/api/notifications/command-bots/onebot/status")]
+    [InlineData("GET", "/api/notifications/command-bots/qqbot/status")]
+    [InlineData("GET", "/api/notifications/command-bots/telegram/events")]
+    [InlineData("GET", "/api/notifications/command-bots/feishu/events")]
+    [InlineData("GET", "/api/notifications/command-bots/onebot/events")]
+    [InlineData("GET", "/api/notifications/command-bots/qqbot/events")]
     public async Task SafeMode_AllowsOtherAuthenticatedOperations(string method, string path)
     {
         app.Services.GetRequiredService<AuthStore>().SetInitialPassword("a secure passphrase");
@@ -852,27 +874,25 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SafeNotificationReadsReturnOnlyChannelSwitchesAndRestoreFullSettings()
+    public async Task SafeNotificationReadsAreBlockedAndRestoreFullSettingsAfterExit()
     {
         var paths = app.Services.GetRequiredService<PortableDataPaths>();
         WinPilotSettings.Update(paths.ConfigurationFile, current => current with
         {
             Notifications = current.Notifications with
             {
-                TelegramEnabled = true, TelegramBotToken = "private-token", TelegramChatId = "private-chat",
-                QQBotEnabled = true, QQBotClientSecret = "private-secret"
+                TelegramBotToken = "private-token", TelegramChatId = "private-chat",
+                QQBotClientSecret = "private-secret"
             }
         });
         var safeMode = app.Services.GetRequiredService<SafeModeService>();
         safeMode.SetEnabled(true);
         using var response = await client.GetAsync("/api/settings/notifications");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "feishuEnabled", "oneBotEnabled", "qqBotEnabled", "telegramEnabled", "webhookEnabled", "windowsEnabled", "workWeixinEnabled" },
-            json.RootElement.EnumerateObject().Select(property => property.Name).Order().ToArray());
-        Assert.True(json.RootElement.GetProperty("telegramEnabled").GetBoolean());
-        Assert.True(json.RootElement.GetProperty("qqBotEnabled").GetBoolean());
+        Assert.Equal("safe_mode_restricted", json.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("private-token", json.RootElement.GetRawText());
+        Assert.DoesNotContain("private-secret", json.RootElement.GetRawText());
         safeMode.SetEnabled(false);
         using var restored = await client.GetAsync("/api/settings/notifications");
         Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
@@ -1407,5 +1427,5 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
 
 public sealed class TestNotificationService : INotificationService
 {
-    public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false) => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
+    public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
 }

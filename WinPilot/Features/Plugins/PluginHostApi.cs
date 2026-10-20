@@ -39,11 +39,9 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
                 case PluginHostActionType.Shell:
                     await terminals.ExecuteTaskCommandAsync(action.Shell ?? "", action.Command ?? "", cancellationToken); break;
                 case PluginHostActionType.SendNotification:
-                    var channel = action.NotificationChannel;
                     PluginNotificationImageValidator.ValidateImageSize(image);
-                    await NotificationDelivery.SendAsync(notifications, new NotificationMessage("", action.NotificationContent ?? ""), cancellationToken,
-                        channel: string.IsNullOrWhiteSpace(channel) ? null : channel.Trim(),
-                        ignoreChannelEnabled: !string.IsNullOrWhiteSpace(channel),
+                    await NotificationDelivery.SendAsync(notifications, new NotificationMessage("", action.NotificationContent ?? ""),
+                        action.NotificationChannel?.Trim(), cancellationToken,
                         imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger); break;
                 default: throw new InvalidOperationException("Host Action 类型不支持");
             }

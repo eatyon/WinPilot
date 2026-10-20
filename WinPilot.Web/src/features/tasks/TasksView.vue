@@ -86,7 +86,7 @@ function actionKey(action: Action) {
   }
   return key;
 }
-const channelOptions = ref<{ value: string; label: string }[]>([{ value: '', label: '已启用渠道' }]);
+const channelOptions = ref<{ value: string; label: string }[]>([]);
 const actionResources = reactive({
   StartTag: { loading: false, loaded: false, error: '' },
   SendNotification: { loading: false, loaded: false, error: '' },
@@ -133,7 +133,7 @@ watch(() => editor.value?.actions.map(action => action.type), types => {
 const actionErrors = shallowReactive(new Map<Action, { message: string; snapshot: string; field?: string }>());
 const actionValidationFields: Partial<Record<Action['type'], string>> = {
   StartProgram: 'programPath', StartTag: 'tagName', CloseProcess: 'processName', Delay: 'delaySeconds',
-  Keyboard: 'keys', Shell: 'command', SendNotification: 'notificationContent',
+  Keyboard: 'keys', Shell: 'command',
 };
 const editorForm = ref<HTMLElement>();
 const triggerErrorField = ref('');
@@ -159,6 +159,7 @@ function invalidActionField(action: Action) {
   if (!error) return undefined;
   const field = error.field ?? actionValidationFields[action.type];
   if (field !== undefined) return field;
+  if (action.type === 'SendNotification') return action.notificationContent.trim() ? 'notificationChannel' : 'notificationContent';
   if (action.type === 'TaskState') return action.taskName.trim() ? 'state' : 'taskName';
   if (!action.pluginId) return 'pluginId';
   if (!action.actionId) return 'actionId';

@@ -446,7 +446,7 @@ public sealed class NotificationDiagnosticsTest
 
     private sealed class EmptyNotifications : INotificationService
     {
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
     }
     private sealed class FailingHttpHandler(Exception exception) : HttpMessageHandler

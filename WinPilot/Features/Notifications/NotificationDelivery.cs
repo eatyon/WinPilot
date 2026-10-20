@@ -7,7 +7,7 @@ internal static class NotificationDelivery
     internal const int MaxImageSizeBytes = 10 * 1024 * 1024;
 
     internal static async Task SendAsync(INotificationService notifications, NotificationMessage message,
-        CancellationToken token, string? channel = null, bool ignoreChannelEnabled = false,
+        string? channel, CancellationToken token,
         byte[]? imageContent = null, string? imageContentType = null, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(message.Content) && string.IsNullOrWhiteSpace(message.ImagePath) && imageContent is null)
@@ -16,7 +16,7 @@ internal static class NotificationDelivery
         try
         {
             var deliveryMessage = temporaryImagePath is null ? message : message with { ImagePath = temporaryImagePath };
-            ValidateResults(await notifications.SendAsync(deliveryMessage, token, channel, ignoreChannelEnabled));
+            ValidateResults(await notifications.SendAsync(deliveryMessage, channel, token));
             if (temporaryImagePath is not null)
                 await Task.Delay(TimeSpan.FromSeconds(2), token);
         }

@@ -81,7 +81,9 @@ export function validateTask(value: Task, registeredTriggers: readonly Registere
     if (action.type === 'Keyboard' && !action.keys.length) result[`action-${index}`] = '请选择至少一个按键';
     if (action.type === 'Shell' && !action.command.trim()) result[`action-${index}`] = '请输入 Shell 命令';
     if (action.type === 'SendNotification' && !action.notificationContent.trim())
-      result[`action-${index}`] = '请填写通知内容';
+      result[`action-${index}`] = '请输入通知内容';
+    else if (action.type === 'SendNotification' && !action.notificationChannel.trim())
+      result[`action-${index}`] = '请选择发送渠道';
     if (action.type === 'TaskState') {
       if (!action.taskName.trim()) result[`action-${index}`] = '请选择任务';
       else if (!taskStateOptions.some(option => option.value !== '' && option.value === action.state))

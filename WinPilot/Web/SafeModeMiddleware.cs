@@ -4,7 +4,7 @@ namespace WinPilot.Web;
 
 public sealed class SafeModeMiddleware(RequestDelegate next)
 {
-    private static readonly PathString[] BlockedPathPrefixes = ["/api/files", "/api/terminal"];
+    private static readonly PathString[] BlockedPathPrefixes = ["/api/files", "/api/terminal", "/api/settings/notifications"];
     private static readonly PathString[] BlockedWritePathPrefixes = ["/api/settings"];
     private static readonly Dictionary<string, string[]> BlockedRoutesByMethod = new(StringComparer.OrdinalIgnoreCase)
     {

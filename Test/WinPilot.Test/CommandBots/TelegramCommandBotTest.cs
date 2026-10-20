@@ -80,8 +80,8 @@ public sealed class TelegramCommandBotTest
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
-        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
+        Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/telegram/reconnect", null)).StatusCode);
         var reception = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         await fixture.Updates.Writer.WriteAsync(new[] { Update(10, 123, "/帮助") });
@@ -99,8 +99,7 @@ public sealed class TelegramCommandBotTest
         await fixture.Updates.Writer.WriteAsync(new[] { Update(10, 999, "忽略其他会话"), Update(11, 123, "/帮助") });
         var received = await test.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(received > 0);
-        Assert.True(received > 0);
-        Assert.False(WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications!.TelegramEnabled);
+        Assert.Equal("123", WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications!.TelegramChatId);
         Assert.True(fixture.Bot.Status.Enabled);
         var duplicate = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         await fixture.Updates.Writer.WriteAsync(new[] { Update(11, 123, "重复消息"), Update(12, 123, "/帮助") });

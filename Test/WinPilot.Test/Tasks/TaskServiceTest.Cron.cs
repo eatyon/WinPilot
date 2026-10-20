@@ -85,7 +85,7 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Tasks.Create(new("generated", false, new(TaskTriggerType.Cron, Cron: expression),
-            [new(TaskActionType.SendNotification, NotificationContent: "content")]));
+            [new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "content")]));
         Assert.Equal(expression, Assert.Single(fixture.Tasks.GetAll()).Trigger.Cron);
     }
 

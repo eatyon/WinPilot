@@ -215,12 +215,10 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         private int calls;
         internal int Calls => Volatile.Read(ref calls);
         internal bool Disposed { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default,
-            string? channel = null, bool ignoreChannelEnabled = false)
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
         {
             Assert.False(Disposed);
             Assert.Equal("telegram", channel);
-            Assert.True(ignoreChannelEnabled);
             Interlocked.Increment(ref calls);
             return send(cancellationToken);
         }

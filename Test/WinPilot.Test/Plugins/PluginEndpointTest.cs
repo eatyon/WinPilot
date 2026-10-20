@@ -334,7 +334,7 @@ public sealed class PluginEndpointTest
             using var client = app.GetTestClient();
             var safeMode = app.Services.GetRequiredService<WinPilot.Features.Security.SafeModeService>();
             var route = $"/api/plugins/{id}";
-            Assert.Contains("all-enabled", await client.GetStringAsync("/api/plugins/options/settings/notificationChannels"));
+            Assert.DoesNotContain("all-enabled", await client.GetStringAsync("/api/plugins/options/settings/notificationChannels"));
             Assert.Contains("private-value", await client.GetStringAsync(route + "/configuration"));
             safeMode.SetEnabled(true);
             foreach (var path in new[] { "configuration", "configuration/schema" })

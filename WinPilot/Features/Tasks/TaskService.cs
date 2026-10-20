@@ -889,7 +889,7 @@ public sealed class TaskService : BackgroundService
         TaskActionType.Delay => $"延迟 {action.DelaySeconds} 秒",
         TaskActionType.Keyboard => $"发送按键「{string.Join(" + ", action.Keys ?? [])}」",
         TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
-        TaskActionType.SendNotification => $"发送「{(string.IsNullOrWhiteSpace(action.NotificationChannel) ? NotificationChannelCatalog.EnabledDisplayName : NotificationChannelCatalog.GetDisplayName(action.NotificationChannel))}」通知",
+        TaskActionType.SendNotification => string.IsNullOrWhiteSpace(action.NotificationChannel) ? "发送通知（未选择渠道）" : $"发送「{NotificationChannelCatalog.GetDisplayName(action.NotificationChannel)}」通知",
         TaskActionType.Extension when action.PluginId is not null && action.ActionId is not null
             && extensions.Actions.TryGet(action.PluginId, action.ActionId, out var definition) => $"插件扩展「{definition.PluginDisplayName}」",
         TaskActionType.Extension => $"插件扩展「{action.PluginId}」",
@@ -1043,6 +1043,7 @@ public sealed class TaskService : BackgroundService
     private async Task SendConfiguredNotification(TaskAction action, PluginTaskRunContext context, PluginImageContent? pluginImage = null)
     {
         var channel = action.NotificationChannel;
+        NotificationChannelCatalog.RequireChannel(channel);
         var (contentTemplate, directImagePath) = ExtractDirectImagePath(action.NotificationContent);
         var contentNames = VariableResolver.ExtractNames(contentTemplate);
         var contentImageNames = ValidateImageVariables(contentTemplate, variableCatalog);
@@ -1074,7 +1075,7 @@ public sealed class TaskService : BackgroundService
         if (pluginImage is not null)
             PluginNotificationImageValidator.ValidateImageSize(pluginImage);
         await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, imagePath),
-            context.CancellationToken, channel: channel, ignoreChannelEnabled: !string.IsNullOrWhiteSpace(channel),
+            channel, context.CancellationToken,
             imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger);
     }
 
@@ -1374,7 +1375,14 @@ public sealed class TaskService : BackgroundService
                 case TaskActionType.Shell when string.IsNullOrWhiteSpace(action.Command):
                     throw new TaskValidationException($"actions[{index}].command", "请输入 Shell 命令");
                 case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
-                    throw new TaskValidationException($"actions[{index}].notificationContent", "请输入通知内容或图片变量");
+                    throw new TaskValidationException($"actions[{index}].notificationContent", "请输入通知内容");
+                case TaskActionType.SendNotification:
+                    try { NotificationChannelCatalog.RequireChannel(action.NotificationChannel); }
+                    catch (InvalidOperationException exception)
+                    {
+                        throw new TaskValidationException($"actions[{index}].notificationChannel", exception.Message, exception);
+                    }
+                    break;
                 case TaskActionType.TaskState when string.IsNullOrWhiteSpace(action.TaskName):
                     throw new TaskValidationException($"actions[{index}].taskName", "请选择任务");
                 case TaskActionType.TaskState when action.State is null:

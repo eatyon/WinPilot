@@ -10,8 +10,7 @@ public static class PluginSettingOptionSources
 
     private static readonly IReadOnlyList<PluginSettingOption> ChannelOptions =
         NotificationChannelCatalog.All
-            .Select(channel => new PluginSettingOption(channel.Id.ToLowerInvariant(), channel.DisplayName))
-            .Prepend(new(NotificationChannelCatalog.AllEnabled, NotificationChannelCatalog.EnabledDisplayName)).ToArray();
+            .Select(channel => new PluginSettingOption(channel.Id.ToLowerInvariant(), channel.DisplayName)).ToArray();
 
     public static IReadOnlyList<PluginSettingOption> GetOptions(string source) => source switch
     {

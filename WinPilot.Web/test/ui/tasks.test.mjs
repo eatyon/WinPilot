@@ -284,7 +284,7 @@ test('every built-in action clears only its own error on edits and invalid value
     ['Delay', 'delaySeconds', 1, 0, '请输入有效的延迟秒数'],
     ['Shell', 'command', 'echo test', '', '请输入 Shell 命令'],
     ['Keyboard', 'keys', ['F11'], [], '请选择至少一个按键'],
-    ['SendNotification', 'notificationContent', 'content', '', '请填写通知内容'],
+    ['SendNotification', 'notificationContent', 'content', '', '请输入通知内容'],
   ];
   for (const [type, key, valid, invalid, message] of cases) {
     const f = fixture();
@@ -485,6 +485,7 @@ test('each built-in action focuses its invalid control rather than its type sele
     ['StartTag', {}, 'tagName'], ['CloseProcess', {}, 'processName'],
     ['Delay', { delaySeconds: '' }, 'delaySeconds'], ['Keyboard', {}, 'keys'],
     ['Shell', {}, 'command'], ['SendNotification', {}, 'notificationContent'],
+    ['SendNotification', { notificationContent: 'content' }, 'notificationChannel'],
     ['TaskState', {}, 'taskName'], ['TaskState', { taskName: 'Other' }, 'state'],
   ]) {
     const f = fixture();
@@ -901,7 +902,7 @@ test('unmount during a save error body read cannot add fields or display a toast
   } finally { f.dispose(); }
 });
 
-test('notification action defaults to enabled channels and preserves explicit channel selection', () => {
+test('notification action requires an explicit sending channel and preserves the selection', () => {
   const f = fixture();
   try {
     const action = f.subject.createAction();
@@ -909,7 +910,10 @@ test('notification action defaults to enabled channels and preserves explicit ch
     action.notificationContent = '测试通知';
     assert.equal(action.notificationChannel, '');
     const task = { name: 'Task', trigger: { type: 'WinPilotStartup' }, actions: [action] };
-    for (const channel of ['', 'QQBot']) {
+    assert.equal(f.subject.validate(task)['action-0'], '请选择发送渠道');
+    f.subject.actionErrors.set(action, { message: '请选择发送渠道', snapshot: '' });
+    assert.equal(f.subject.invalidActionField(action), 'notificationChannel');
+    for (const channel of ['Windows', 'QQBot']) {
       action.notificationChannel = channel;
       assert.equal(Object.keys(f.subject.validate(task)).length, 0);
       assert.equal(f.subject.actionPayload(action).notificationChannel, channel);
@@ -927,7 +931,7 @@ test('task list loading does not request editor resources or extension definitio
       request.resolve({ ok: true, json: async () => [] });
     await loading;
     assert.equal(f.subject.tasksLoaded.value, true);
-    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), []);
   } finally { f.dispose(); }
 });
 
@@ -1000,9 +1004,9 @@ test('editor resources load only for selected action types and share pending and
     assert.equal(await f.subject.loadActionResource('StartTag'), true);
     f.subject.selectActionType(0, 'SendNotification');
     const channels = f.subject.loadActionResource('SendNotification');
-    f.requests[1].resolve(Response.json([{ value: '', label: '已启用渠道' }, { value: 'QQBot', label: 'QQBot' }]));
+    f.requests[1].resolve(Response.json([{ value: 'QQBot', label: 'QQBot' }]));
     assert.equal(await channels, true);
-    assert.equal(f.subject.channelOptions.value[1].value, 'QQBot');
+    assert.equal(f.subject.channelOptions.value[0].value, 'QQBot');
     assert.equal(f.requests.length, 2);
   } finally { f.dispose(); }
 });
@@ -1051,7 +1055,7 @@ test('resource response bodies remain owned by the page and cannot update data a
   finishBody([{ value: 'Late', label: 'Late' }]);
   assert.equal(await pending, false);
   assert.equal(f.subject.actionResources.SendNotification.loaded, false);
-  assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), []);
   assert.equal(f.subject.requestControllers.size, 0);
   assert.deepEqual(f.toasts, []);
 });
@@ -1313,7 +1317,7 @@ test('an older page loadTasks cannot overwrite a newer result', async () => {
     for (const request of oldRequests) request.resolve({ ok: true, json: async () => [{ name: 'old' }] });
     await old;
     assert.equal(f.subject.tasks.value[0].name, 'new');
-    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), [{ value: '', label: '已启用渠道' }]);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.subject.channelOptions.value)), []);
   } finally { f.dispose(); }
 });
 

@@ -75,7 +75,7 @@ public sealed class FeishuCommandBotTest
         var saved = WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile);
         Assert.True(saved.CommandBots!.FeishuEnabled);
         Assert.True(saved.CommandBots.TelegramEnabled);
-        Assert.False(saved.Notifications!.FeishuEnabled);
+        Assert.Equal("", saved.Notifications!.FeishuWebhookUrl);
         fixture.Receive!(new("chat", "user", "/测试"));
         Assert.Equal(0, fixture.Logger.Count);
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
@@ -172,8 +172,8 @@ public sealed class FeishuCommandBotTest
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
-        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
+        Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/feishu/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
     }

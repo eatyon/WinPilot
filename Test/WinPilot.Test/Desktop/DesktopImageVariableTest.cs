@@ -43,7 +43,7 @@ public sealed class DesktopImageVariableTest
             try
             {
                 service.Create(new("desktop-image", true, new(TaskTriggerType.WinPilotStartup),
-                    [new(TaskActionType.SendNotification, NotificationContent: "&screenshot")]));
+                    [new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&screenshot")]));
 
                 service.RunNow("desktop-image");
                 var sent = await notificationService.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -97,7 +97,7 @@ public sealed class DesktopImageVariableTest
     {
         public TaskCompletionSource<(NotificationMessage Message, byte[] ImageBytes)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default, string? channel = null, bool ignoreChannelEnabled = false)
+        public async Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
         {
             var imageBytes = message.ImagePath is null ? [] : await File.ReadAllBytesAsync(message.ImagePath, cancellationToken);
             Sent.TrySetResult((message, imageBytes));

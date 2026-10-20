@@ -366,11 +366,6 @@ code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--r
  .notification-channel-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
  .notification-channel-copy strong { font-size: 17px; font-weight: 500; }
  .notification-channel-copy small { overflow: hidden; color: var(--text-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
- .notification-switch input { position: relative; width: 52px; height: 30px; margin: 0; appearance: none; border: 2px solid var(--border-strong); border-radius: 999px; background: transparent; cursor: pointer; transition: .15s; }
- .notification-switch input::after { position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-muted); content: ''; transition: .15s; }
- .notification-switch input:checked { border-color: var(--accent-solid); background: var(--accent-solid); }
- .notification-switch input:checked::after { background: white; transform: translateX(22px); }
- .notification-switch input:disabled { opacity: .55; cursor: default; }
  .notification-chevron { width: 10px; height: 10px; margin: 0 5px 5px 12px; flex: 0 0 10px; border-right: 1.7px solid var(--text); border-bottom: 1.7px solid var(--text); transform: rotate(45deg); transition: transform .15s ease, margin .15s ease; }
  .notification-chevron.open { margin-bottom: -5px; transform: rotate(225deg); }
  .notification-channel-body { display: grid; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }

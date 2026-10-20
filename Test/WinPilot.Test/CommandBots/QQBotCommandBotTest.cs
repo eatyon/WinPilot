@@ -371,7 +371,7 @@ public sealed class QQBotCommandBotTest
     }
 
     [Fact]
-    public async Task SafeModeBlocksSettingsAndTestButKeepsReceptionRunning()
+    public async Task SafeModeBlocksConfigurationButKeepsExistingReception()
     {
         await using var fixture = new Fixture();
         await fixture.Enable();
@@ -392,8 +392,8 @@ public sealed class QQBotCommandBotTest
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
-        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
+        Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/qqbot/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
     }

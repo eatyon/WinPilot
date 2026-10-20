@@ -9,8 +9,6 @@ public static class NotificationChannelCatalog
     public const string Feishu = "Feishu";
     public const string OneBot = "OneBot";
     public const string QQBot = "QQBot";
-    public const string AllEnabled = "all-enabled";
-    public const string EnabledDisplayName = "已启用渠道";
 
     public static IReadOnlyList<NotificationChannelDefinition> All { get; } = Array.AsReadOnly<NotificationChannelDefinition>(
     [
@@ -23,8 +21,20 @@ public static class NotificationChannelCatalog
         new(QQBot, "QQBot")
     ]);
 
+    internal static string RequireChannel(string? channel)
+    {
+        var id = channel?.Trim();
+        if (string.IsNullOrEmpty(id))
+            throw new InvalidOperationException("请选择发送渠道");
+        return Find(id)?.Id
+            ?? throw new InvalidOperationException("通知渠道无效");
+    }
+
+    internal static NotificationChannelDefinition? Find(string id) =>
+        All.FirstOrDefault(channel => channel.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
     public static string GetDisplayName(string id) =>
-        All.FirstOrDefault(channel => channel.Id.Equals(id, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? id;
+        Find(id)?.DisplayName ?? id;
 }
 
 public sealed record NotificationChannelDefinition(string Id, string DisplayName);

@@ -33,11 +33,11 @@ public static class CommandBotEndpointRouteBuilderExtensions
         MapBotEndpoints<FeishuCommandBotService>(endpoints, "feishu");
         MapBotEndpoints<QQBotCommandBotService>(endpoints, "qqbot");
         MapBotEndpoints<OneBotCommandBotService>(endpoints, "onebot");
-        endpoints.MapGet("/api/settings/notifications/command-bots/onebot", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
+        endpoints.MapGet("/api/settings/notifications/command-bots/onebot", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = bot.GetOptions();
-            return safeMode.Enabled ? Results.Ok(new { settings.Enabled }) : Results.Ok(settings);
+            return Results.Ok(settings);
         });
         endpoints.MapPut("/api/settings/notifications/command-bots/onebot", (OneBotCommandBotOptions options, HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
@@ -52,11 +52,11 @@ public static class CommandBotEndpointRouteBuilderExtensions
         endpoints.MapGet(route + "/status", ([Microsoft.AspNetCore.Mvc.FromServices] T bot) => Results.Ok(bot.Status));
         if (typeof(T) != typeof(OneBotCommandBotService))
         {
-            endpoints.MapGet(configurationRoute, (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
+            endpoints.MapGet(configurationRoute, (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot) =>
             {
                 context.Response.Headers.CacheControl = "no-store";
                 var settings = bot.GetSettings();
-                return safeMode.Enabled ? Results.Ok(new { settings.Enabled }) : Results.Ok(settings);
+                return Results.Ok(settings);
             });
             endpoints.MapPut(configurationRoute, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
                 ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)

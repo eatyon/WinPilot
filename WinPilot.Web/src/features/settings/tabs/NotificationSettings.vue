@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 import { createSettingsRequests } from '../SettingsRequests';
 import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../../api/client';
 import { showToast } from '../../../ui/toast';
@@ -12,40 +12,30 @@ type NotificationSettings = Record<string, any>;
 type QQBotOpenIdTarget = 'user' | 'group';
 type QQBotOpenIdStatus = { text: string; tone: 'info' | 'success' | 'error' } | null;
 const requests = createSettingsRequests();
-const defaultSettings: NotificationSettings = {
-  windowsEnabled: false,
-  webhookEnabled: false,
+const form = reactive<NotificationSettings>({
   webhookUrl: '',
   webhookSendTo: '',
-  telegramEnabled: false,
   telegramBotToken: '',
   telegramChatId: '',
   telegramApiBaseUrl: '',
   telegramProxyUrl: 'http://127.0.0.1:7890',
   telegramProxyEnabled: false,
-  workWeixinEnabled: false,
   workWeixinWebhookUrl: '',
-  feishuEnabled: false,
   feishuWebhookUrl: '',
   feishuAppId: '',
   feishuAppSecret: '',
-  oneBotEnabled: false,
   oneBotEndpoint: '',
   oneBotUserId: '',
   oneBotGroupId: '',
   oneBotToken: '',
   oneBotSendTarget: 'auto',
-  qqBotEnabled: false,
   qqBotAppId: '',
   qqBotClientSecret: '',
   qqBotOpenId: '',
   qqBotGroupOpenId: '',
   qqBotSendTarget: 'auto',
   qqBotMessageFormat: 'text',
-};
-const form = reactive<NotificationSettings>({ ...defaultSettings });
-let readRequests = createSettingsRequests();
-let configurationGeneration = 0;
+});
 const expanded = reactive<Record<string, boolean>>({
   windows: false,
   webhook: false,
@@ -61,7 +51,7 @@ const passwordVisible = reactive<Record<string, boolean>>({
   oneBotToken: false,
   qqBotClientSecret: false,
 });
-const loading = ref(true),
+const loading = ref(false),
   saving = ref(false),
   testing = ref(false),
   error = ref(''),
@@ -92,58 +82,52 @@ const connectionDirty = computed(() => botDialog.value
   ? botFields[botDialog.value].some((key) => form[key] !== savedSettings[key]) : false);
 const settingsLoaded = ref(false);
 const channels = [
-  { key: 'windows', title: 'Windows 通知', desc: '使用系统原生通知显示消息', enabled: 'windowsEnabled' },
-  { key: 'webhook', title: 'Webhook', desc: 'Webhook 相关设置', enabled: 'webhookEnabled' },
-  { key: 'telegram', title: 'Telegram', desc: 'Telegram 机器人相关设置', enabled: 'telegramEnabled' },
-  { key: 'workweixin', title: '企业微信', desc: '企业微信通知相关设置', enabled: 'workWeixinEnabled' },
-  { key: 'feishu', title: '飞书', desc: '飞书通知相关设置', enabled: 'feishuEnabled' },
-  { key: 'onebot', title: 'OneBot', desc: 'OneBot 通知相关设置', enabled: 'oneBotEnabled' },
-  { key: 'qqbot', title: 'QQBot', desc: 'QQ 官方 Bot 通知设置', enabled: 'qqBotEnabled' },
+  { key: 'windows', title: 'Windows 通知', desc: '使用系统通知中心接收消息', prefix: 'windows' },
+  { key: 'webhook', title: 'Webhook', desc: 'Webhook 相关设置', prefix: 'webhook' },
+  { key: 'telegram', title: 'Telegram', desc: 'Telegram 机器人相关设置', prefix: 'telegram' },
+  { key: 'workweixin', title: '企业微信', desc: '企业微信通知相关设置', prefix: 'workWeixin' },
+  { key: 'feishu', title: '飞书', desc: '飞书通知相关设置', prefix: 'feishu' },
+  { key: 'onebot', title: 'OneBot', desc: 'OneBot 通知相关设置', prefix: 'oneBot' },
+  { key: 'qqbot', title: 'QQBot', desc: 'QQ 官方 Bot 通知设置', prefix: 'qqBot' },
 ] as const;
 async function loadSettings() {
-  const generation = ++configurationGeneration;
-  readRequests.dispose();
-  readRequests = createSettingsRequests();
-  const reads = readRequests;
+  if (safeModeEnabled.value) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   settingsLoaded.value = botsLoaded.value = false;
   error.value = '';
   try {
-    const response = await reads.fetch('/api/settings/notifications');
-    if (!response.ok) throw new Error(await readApiError(response, '无法读取通知设置', reads.json));
-    Object.assign(form, await reads.json(response));
+    const response = await requests.fetch('/api/settings/notifications');
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取通知设置', requests.json));
+    Object.assign(form, await requests.json(response));
     Object.assign(savedSettings, form);
     settingsLoaded.value = true;
-    const botsResponse = await reads.fetch('/api/settings/notifications/command-bots');
-    if (!botsResponse.ok) throw new Error(await readApiError(botsResponse, '无法读取命令机器人开关', reads.json));
-    Object.assign(botEnabled, await reads.json(botsResponse));
+    const botsResponse = await requests.fetch('/api/settings/notifications/command-bots');
+    if (!botsResponse.ok) throw new Error(await readApiError(botsResponse, '无法读取命令机器人开关', requests.json));
+    Object.assign(botEnabled, await requests.json(botsResponse));
     botsLoaded.value = true;
   } catch (cause) {
-    if (!reads.active || isAbortError(cause)) return;
+    if (!requests.active || isAbortError(cause)) return;
     error.value = userErrorMessage(cause, '无法读取通知设置');
   } finally {
-    if (generation === configurationGeneration) loading.value = false;
+    loading.value = false;
   }
 }
-onMounted(loadSettings);
-watch(safeModeEnabled, (enabled) => {
-  for (const key of Object.keys(form))
-    if (!channels.some(channel => channel.enabled === key)) form[key] = defaultSettings[key];
-  Object.keys(savedSettings).forEach(key => delete savedSettings[key]);
-  Object.keys(passwordVisible).forEach(key => passwordVisible[key] = false);
-  qqbotOpenIdController?.abort();
-  qqbotOpenIdStatus.user = qqbotOpenIdStatus.group = null;
-  binding.value = '';
-  if (enabled) {
-    botDialog.value = undefined;
-    Object.keys(expanded).forEach(key => expanded[key] = false);
+async function toggleChannel(channel: string) {
+  if (!requests.active || safeModeEnabled.value || loading.value) return;
+  if (expanded[channel]) {
+    expanded[channel] = false;
+    return;
   }
-  void loadSettings();
-}, { flush: 'sync' });
-async function save(channel: string, notify = true) {
+  if (!settingsLoaded.value || !botsLoaded.value) await loadSettings();
+  if (requests.active && !safeModeEnabled.value && settingsLoaded.value && botsLoaded.value)
+    expanded[channel] = true;
+}
+async function save(channel: string) {
   if (!settingsLoaded.value || saving.value || safeModeEnabled.value || !requests.active) return;
   saving.value = true;
-  const generation = configurationGeneration;
   const submitted = { ...form };
   try {
     const response = await requests.fetch(`/api/settings/notifications/${channel}`, {
@@ -153,8 +137,7 @@ async function save(channel: string, notify = true) {
     });
     if (!response.ok) throw new Error(await readApiError(response, '无法保存通知设置', requests.json));
     const result = await requests.json<NotificationSettings>(response);
-    if (generation !== configurationGeneration) return;
-    const prefix = channels.find(item => item.key === channel)?.enabled.replace(/Enabled$/, '');
+    const prefix = channels.find(item => item.key === channel)?.prefix;
     if (!prefix) throw new Error('通知渠道无效');
     for (const key of Object.keys(form)) {
       if (!key.startsWith(prefix)) continue;
@@ -162,16 +145,11 @@ async function save(channel: string, notify = true) {
       savedSettings[key] = result[key];
     }
     error.value = '';
-    if (notify) showToast('通知设置已保存', 'success');
+    showToast('通知设置已保存', 'success');
   } catch (cause) {
-    if (generation !== configurationGeneration) return;
     if (!requests.active || isAbortError(cause)) return;
-    if (!notify) {
-      const field = channels.find(item => item.key === channel)?.enabled;
-      if (field) form[field] = savedSettings[field];
-    }
     error.value = userErrorMessage(cause, '无法保存通知设置');
-    if (notify) showToast(error.value);
+    showToast(error.value);
   } finally {
     saving.value = false;
   }
@@ -262,7 +240,7 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
     }
   }
 }
-onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdController?.abort(); });
+onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
 </script>
 <template>
   <div class="settings-tab-content notification-settings-content">
@@ -277,22 +255,13 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
         class="notification-channel-header"
         role="button"
         tabindex="0"
-        @click="expanded[channel.key] = !expanded[channel.key]"
-        @keydown.enter="expanded[channel.key] = !expanded[channel.key]"
+        @click="toggleChannel(channel.key)"
+        @keydown.enter="toggleChannel(channel.key)"
       >
         <span class="notification-channel-copy">
           <strong>{{ channel.title }}</strong>
           <small>{{ channel.desc }}</small>
         </span>
-        <label class="notification-switch" :class="{ 'settings-data-pending': !settingsLoaded }" @click.stop>
-          <input
-            v-model="form[channel.enabled]"
-            type="checkbox"
-            :disabled="loading || !settingsLoaded || saving"
-            @change="save(channel.key, false)"
-          />
-          <span />
-        </label>
         <span class="notification-chevron" :class="{ open: expanded[channel.key] }" aria-hidden="true" />
       </div>
       <div v-if="expanded[channel.key]" class="notification-channel-body" :class="{ 'settings-data-pending': !settingsLoaded }">
@@ -355,7 +324,7 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
           </label>
           <label class="field-control">
             <span>飞书 AppId</span>
-            <input v-model="form.feishuAppId" placeholder="若填写 AppId、AppSecret 则发送图片" />
+            <input v-model="form.feishuAppId" placeholder="发送图片需填写 AppId 和 AppSecret" />
           </label>
           <label class="field-control">
             <span>飞书 AppSecret</span>
@@ -363,7 +332,7 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
               <input
                 v-model="form.feishuAppSecret"
                 :type="passwordVisible.feishuAppSecret ? 'text' : 'password'"
-                placeholder="若填写 AppId、AppSecret 则发送图片"
+                placeholder="发送图片需填写 AppId 和 AppSecret"
               />
               <button
                 type="button"
@@ -517,7 +486,7 @@ onBeforeUnmount(() => { requests.dispose(); readRequests.dispose(); qqbotOpenIdC
           >
             测试发送
           </button>
-          <button class="button button-primary" :disabled="loading || !settingsLoaded || saving" @click="save(channel.key)">
+          <button v-if="channel.key !== 'windows'" class="button button-primary" :disabled="loading || !settingsLoaded || saving" @click="save(channel.key)">
             保存
           </button>
         </div>

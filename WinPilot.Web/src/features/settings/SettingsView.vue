@@ -171,6 +171,7 @@ async function saveStartupMode(mode: string) {
       >
         <component
           :is="activeTab.component"
+          :key="activeKey === 'notification' ? `notification-${safeModeEnabled}` : activeKey"
           v-model:port="port"
           :lan-access-enabled="lanAccessEnabled"
           @update:lan-access-enabled="saveLanAccess"

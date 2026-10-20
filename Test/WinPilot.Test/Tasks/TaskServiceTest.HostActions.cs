@@ -218,7 +218,6 @@ public sealed partial class TaskServiceTest
         Assert.True(DateTimeOffset.TryParseExact(lines[1], "[yyyy-MM-dd HH:mm:ss]", null,
             System.Globalization.DateTimeStyles.AssumeLocal, out _));
         Assert.Equal(" QQBot ", sent.Channel);
-        Assert.True(sent.IgnoreEnabled);
         Assert.Null(sent.Message.ImagePath);
     }
 
@@ -236,7 +235,7 @@ public sealed partial class TaskServiceTest
         };
 
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification,
-            new Dictionary<string, object?> { ["content"] = "测试通知", ["image"] = image }));
+            new Dictionary<string, object?> { ["channel"] = "QQBot", ["content"] = "测试通知", ["image"] = image }));
 
         Assert.IsType<InvalidOperationException>(error);
         Assert.Equal(expectedError, error.Message);

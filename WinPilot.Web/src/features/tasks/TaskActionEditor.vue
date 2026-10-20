@@ -289,6 +289,7 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
       </span>
       <AppSelect
         v-model="action.notificationChannel"
+        placeholder="请选择发送渠道"
         :before-open="loadResource"
         :disabled="resourceState?.loading"
         :invalid="invalidField === 'notificationChannel'"

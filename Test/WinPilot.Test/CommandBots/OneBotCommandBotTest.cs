@@ -385,11 +385,14 @@ public sealed class OneBotCommandBotTest
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "enabled" }, safeJson.RootElement.EnumerateObject().Select(property => property.Name));
-        Assert.True(safeJson.RootElement.GetProperty("enabled").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
+        Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, options)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/onebot/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
+        app.Services.GetRequiredService<SafeModeService>().SetEnabled(false);
+        using var restored = await client.GetAsync(route);
+        Assert.Equal(options, await restored.Content.ReadFromJsonAsync<OneBotCommandBotOptions>());
     }
 
     [Fact]

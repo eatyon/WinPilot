@@ -14,6 +14,7 @@ function evaluate(path, require, members = '', extra = {}) {
 }
 
 function fixture(page, members, props = {}, extra = {}) {
+  if (page === 'tabs/NotificationSettings.vue') members = ['toggleChannel', members].filter(Boolean).join(',');
   const calls = [], toasts = [], events = [], emitted = [], renders = [], timers = new Map();
   const safeModeEnabled = vue.ref(false);
   let mounted, unmount, timerId = 0;
@@ -46,12 +47,12 @@ function fixture(page, members, props = {}, extra = {}) {
     EventSource: class { constructor(url) { events.push(this); this.url = url; this.closed = false; } close() { this.closed = true; } },
     ...extra,
   }); });
-  return { subject, calls, toasts, events, emitted, renders, timers, safeModeEnabled, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted(), dispose() { unmount(); scope.stop(); } };
+  return { subject, calls, toasts, events, emitted, renders, timers, safeModeEnabled, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted?.(), dispose() { unmount(); scope.stop(); } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
 async function loadNotifications(f) {
-  const loading = f.mount();
-  f.calls[0].resolve(response({ windowsEnabled: false, telegramChatId: 'saved' }));
+  const loading = f.subject.toggleChannel('telegram');
+  f.calls[0].resolve(response({ telegramChatId: 'saved' }));
   await loading;
 }
 
@@ -67,7 +68,7 @@ test('Telegram proxy defaults to port 7890 when no saved address is returned', a
 test('Telegram proxy preserves a saved custom address when loaded and saved', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'form,save');
   try {
-    const loading = f.mount();
+    const loading = f.subject.toggleChannel('telegram');
     f.calls[0].resolve(response({ telegramProxyUrl: 'http://localhost:10809' }));
     await loading;
     assert.equal(f.subject.form.telegramProxyUrl, 'http://localhost:10809');
@@ -79,7 +80,64 @@ test('Telegram proxy preserves a saved custom address when loaded and saved', as
   } finally { f.dispose(); }
 });
 
-test('notification page reads enabled flags without opening status streams', async () => {
+test('safe notification page keeps channel headings without loading configuration or opening streams', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'channels,form,loading,settingsLoaded,botsLoaded');
+  try {
+    f.safeModeEnabled.value = true;
+    await f.mount();
+    await f.subject.toggleChannel('telegram');
+    assert.equal(f.subject.channels.length, 7);
+    assert.equal(f.subject.loading.value, false);
+    assert.equal(f.subject.settingsLoaded.value, false);
+    assert.equal(f.subject.botsLoaded.value, false);
+    assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.events.length, 0);
+    assert.deepEqual(f.toasts, []);
+  } finally { f.dispose(); }
+});
+
+test('notification configuration loads on first expansion and is reused by other channels', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'expanded');
+  try {
+    await f.mount();
+    assert.equal(f.calls.length, 0);
+    const opening = f.subject.toggleChannel('telegram');
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.subject.expanded.telegram, false);
+    await f.subject.toggleChannel('telegram');
+    assert.equal(f.calls.length, 1);
+    f.calls[0].resolve(response({ telegramChatId: 'saved' }));
+    await opening;
+    assert.equal(f.subject.expanded.telegram, true);
+    await f.subject.toggleChannel('telegram');
+    assert.equal(f.subject.expanded.telegram, false);
+    await f.subject.toggleChannel('webhook');
+    await f.subject.toggleChannel('telegram');
+    assert.equal(f.subject.expanded.webhook, true);
+    assert.equal(f.subject.expanded.telegram, true);
+    assert.equal(f.calls.length, 1);
+  } finally { f.dispose(); }
+});
+
+test('failed notification loading stays collapsed and can be retried on the next click', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'expanded,loading,error');
+  try {
+    const opening = f.subject.toggleChannel('telegram');
+    f.calls[0].resolve(response({ message: '无法读取' }, false));
+    await opening;
+    assert.equal(f.subject.expanded.telegram, false);
+    assert.equal(f.subject.loading.value, false);
+    assert.equal(f.subject.error.value, '无法读取');
+    const retry = f.subject.toggleChannel('telegram');
+    f.calls[1].resolve(response({ telegramChatId: 'saved' }));
+    await retry;
+    assert.equal(f.subject.expanded.telegram, true);
+    assert.equal(f.subject.error.value, '');
+  } finally { f.dispose(); }
+});
+
+test('notification page reads command bot enablement without opening status streams', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'botEnabled,botsLoaded');
   try {
     await loadNotifications(f);
@@ -89,76 +147,48 @@ test('notification page reads enabled flags without opening status streams', asy
   } finally { f.dispose(); }
 });
 
-test('notification mode changes clear private settings and restore full settings without opening streams', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'form,savedSettings,expanded,botDialog,passwordVisible,loading');
+test('unmounting notifications aborts pending reads and ignores private late responses', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form');
   try {
-    await loadNotifications(f);
-    f.subject.form.telegramBotToken = 'private-token';
-    f.subject.savedSettings.telegramBotToken = 'private-token';
-    f.subject.expanded.telegram = true;
-    f.subject.botDialog.value = 'telegram';
-    f.subject.passwordVisible.telegramBotToken = true;
-    f.safeModeEnabled.value = true;
-    assert.equal(f.subject.form.telegramBotToken, '');
-    assert.equal(f.subject.savedSettings.telegramBotToken, undefined);
-    assert.equal(f.subject.expanded.telegram, false);
-    assert.equal(f.subject.botDialog.value, undefined);
-    assert.equal(f.subject.passwordVisible.telegramBotToken, false);
-    f.calls[1].resolve(response({ telegramEnabled: true }));
-    await setImmediate();
-    assert.equal(f.subject.form.telegramEnabled, true);
-    assert.equal(f.subject.form.telegramChatId, '');
-    f.safeModeEnabled.value = false;
-    f.calls[2].resolve(response({ telegramEnabled: true, telegramBotToken: 'restored', telegramChatId: 'saved' }));
-    await setImmediate();
-    assert.equal(f.subject.form.telegramBotToken, 'restored');
-    assert.equal(f.subject.form.telegramChatId, 'saved');
-    assert.equal(f.events.length, 0);
-  } finally { f.dispose(); }
-});
-
-test('notification mode changes reject late reads and late save responses containing private settings', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'form,save,loading');
-  try {
-    const first = f.mount();
-    f.safeModeEnabled.value = true;
+    const loading = f.subject.toggleChannel('telegram');
+    f.dispose();
     assert.equal(f.calls[0].init.signal.aborted, true);
     f.calls[0].resolve(response({ telegramBotToken: 'late-read' }));
-    await first;
+    await loading;
     assert.equal(f.subject.form.telegramBotToken, '');
-    assert.equal(f.subject.loading.value, true);
-    f.calls[1].resolve(response({ telegramEnabled: true }));
-    await setImmediate();
-    f.safeModeEnabled.value = false;
-    f.calls[2].resolve(response({ telegramEnabled: true, telegramBotToken: 'original' }));
-    await setImmediate();
-    const saving = f.subject.save('telegram');
-    f.safeModeEnabled.value = true;
-    f.calls[3].resolve(response({ telegramBotToken: 'late-save' }));
-    await saving;
-    assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.events.length, 0);
     assert.equal(f.toasts.length, 0);
-    f.calls[4].resolve(response({ telegramEnabled: true }));
-    await setImmediate();
-    assert.equal(f.subject.loading.value, false);
   } finally { f.dispose(); }
 });
 
-test('safe mode cancels OpenID acquisition and ignores its late failure', async () => {
+test('unmounting notifications aborts saves without applying late configuration', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'form,save');
+  try {
+    await loadNotifications(f);
+    f.subject.form.telegramBotToken = 'draft';
+    const saving = f.subject.save('telegram');
+    f.dispose();
+    assert.equal(f.calls[1].init.signal.aborted, true);
+    f.calls[1].resolve(response({ telegramBotToken: 'late-save' }));
+    await saving;
+    assert.equal(f.subject.form.telegramBotToken, 'draft');
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('unmounting notifications cancels OpenID acquisition and ignores its late failure', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'bindQQBot,binding,qqbotOpenIdStatus');
   try {
     await loadNotifications(f);
     const binding = f.subject.bindQQBot('user');
     assert.equal(f.calls[1].url, '/api/notifications/qqbot/bind-user');
-    f.safeModeEnabled.value = true;
+    const status = f.subject.qqbotOpenIdStatus.user;
+    f.dispose();
     assert.equal(f.calls[1].init.signal.aborted, true);
-    assert.equal(f.subject.binding.value, '');
-    assert.equal(f.subject.qqbotOpenIdStatus.user, null);
     f.calls[1].reject(new Error('late connection failure'));
     await binding;
-    assert.equal(f.subject.qqbotOpenIdStatus.user, null);
-    f.calls[2].resolve(response({ telegramEnabled: true }));
-    await setImmediate();
+    assert.equal(f.subject.binding.value, '');
+    assert.equal(f.subject.qqbotOpenIdStatus.user, status);
     assert.equal(f.toasts.length, 0);
   } finally { f.dispose(); }
 });
@@ -227,11 +257,11 @@ test('saving one notification channel preserves other drafts and edits made duri
   try {
     await loadNotifications(f);
     f.subject.form.telegramChatId = 'draft';
-    const saving = f.subject.save('windows');
-    f.calls[1].resolve(response({ windowsEnabled: true, telegramChatId: 'saved' }));
+    const saving = f.subject.save('webhook');
+    f.calls[1].resolve(response({ webhookUrl: 'saved-url', telegramChatId: 'saved' }));
     await saving;
     assert.equal(f.subject.form.telegramChatId, 'draft');
-    assert.equal(f.subject.form.windowsEnabled, true);
+    assert.equal(f.subject.form.webhookUrl, 'saved-url');
     const telegram = f.subject.save('telegram');
     f.subject.form.telegramChatId = 'newer draft';
     f.calls[2].resolve(response({ telegramChatId: 'draft' }));
@@ -243,27 +273,28 @@ test('saving one notification channel preserves other drafts and edits made duri
 test('notification body arriving after unmount cannot create SSE connections', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'form');
   let finish;
-  const loading = f.mount();
+  const loading = f.subject.toggleChannel('telegram');
   f.calls[0].resolve({ ok: true, json: () => new Promise(resolve => { finish = resolve; }) });
   await setImmediate();
   f.dispose();
-  finish({ windowsEnabled: true });
+  finish({ webhookUrl: 'late-url' });
   await loading;
   assert.equal(f.events.length, 0);
-  assert.equal(f.subject.form.windowsEnabled, false);
+  assert.equal(f.subject.form.webhookUrl, '');
 });
 
-test('notification toggle rolls back on failure and duplicate saves are blocked', async () => {
+test('notification save failure preserves the draft and duplicate saves are blocked', async () => {
   const f = fixture('tabs/NotificationSettings.vue', 'form,save');
   try {
     await loadNotifications(f);
-    f.subject.form.windowsEnabled = true;
-    const saving = f.subject.save('windows', false);
-    await f.subject.save('windows', false);
+    f.subject.form.webhookUrl = 'draft-url';
+    const saving = f.subject.save('webhook');
+    await f.subject.save('webhook');
     assert.equal(f.calls.length, 2);
     f.calls[1].resolve(response({ message: 'failed' }, false));
     await saving;
-    assert.equal(f.subject.form.windowsEnabled, false);
+    assert.equal(f.subject.form.webhookUrl, 'draft-url');
+    assert.equal(f.toasts.length, 1);
   } finally { f.dispose(); }
 });
 
@@ -276,14 +307,14 @@ test('security notifications use one channel selector and keep event selection u
       channel: '', events: ['LoginFailed'],
     }));
     f.calls.find(call => call.url === '/api/notifications/channels').resolve(response([
-      { value: '', label: '已启用渠道' }, { value: 'QQBot', label: 'QQBot' },
+      { value: 'QQBot', label: 'QQBot' },
     ]));
     await loading;
     assert.equal(JSON.stringify(f.subject.channelOptions.value), JSON.stringify([
-      { value: '', label: '禁用' }, { value: 'all-enabled', label: '已启用渠道' }, { value: 'qqbot', label: 'QQBot' },
+      { value: '', label: '禁用' }, { value: 'qqbot', label: 'QQBot' },
     ]));
     assert.equal(f.subject.notifications.channel, '');
-    for (const channel of ['qqbot', 'all-enabled', '']) {
+    for (const channel of ['qqbot', '']) {
       f.subject.notifications.channel = channel;
       const saving = f.subject.saveNotifications();
       const call = f.calls.at(-1);

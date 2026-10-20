@@ -1,4 +1,5 @@
 using WinPilot.Core.Tasks;
+using WinPilot.Features.Notifications;
 using WinPilot.PluginContract;
 
 namespace WinPilot.Features.Plugins;
@@ -26,13 +27,13 @@ internal static class PluginHostActionConverter
 
     private static (TaskAction Action, PluginImageContent? Image) ConvertNotification(IReadOnlyDictionary<string, object?> values, bool includeTitle)
     {
-        var channel = includeTitle ? GetString(values, "channel") : null;
+        var channel = GetString(values, "channel");
+        NotificationChannelCatalog.RequireChannel(channel);
         values.TryGetValue("image", out var imageValue);
         if (imageValue is not null && imageValue is not PluginImageContent)
             throw new InvalidOperationException("image 必须是 PluginImageContent");
         var title = includeTitle ? GetString(values, "title") ?? "" : "";
         var content = GetString(values, "content") ?? "";
-        if (!includeTitle) channel = GetString(values, "channel");
         return (new TaskAction(TaskActionType.SendNotification, NotificationTitle: title, NotificationContent: content,
             NotificationChannel: channel), imageValue as PluginImageContent);
     }

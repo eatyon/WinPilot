@@ -68,7 +68,7 @@ onMounted(async () => {
     configured.value = Boolean(password.configured);
     Object.assign(notifications, settings);
     channelOptions.value = [{ value: '', label: '禁用' }, ...channels.map(option => ({
-      value: option.value ? option.value.toLowerCase() : 'all-enabled', label: option.label,
+      value: option.value.toLowerCase(), label: option.label,
     }))];
     settingsLoaded.value = true;
   } catch (cause) {
