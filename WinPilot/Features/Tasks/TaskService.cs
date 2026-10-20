@@ -3,6 +3,7 @@ using System.Security.Principal;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Cronos;
 using Microsoft.Win32;
 using WinPilot.Core;
@@ -1068,91 +1069,62 @@ public sealed class TaskService : BackgroundService
             variables["&screenshot"] = new PluginImageContent(screenshot.Content, screenshot.ContentType);
         }
 
-        var textTemplate = contentImageNames.Length == 0 ? contentTemplate : RemoveVariableLine(contentTemplate, contentImageNames[0]);
+        var textTemplate = contentImageNames.Length == 0 ? contentTemplate : VariableResolver.Remove(contentTemplate, contentImageNames[0]);
         var content = ResolveNotificationContent(textTemplate, resolvedContext);
-        var imageTemplate = directImagePath ?? (contentImageNames.Length == 1 ? contentImageNames[0] : null);
-        var (imagePath, image) = pluginImage is null ? ResolveNotificationImageSource(imageTemplate, resolvedContext) : (null, pluginImage);
+        if (directImagePath is not null)
+            ValidateImagePath(directImagePath);
+        var image = pluginImage ?? ResolveNotificationImage(contentImageNames.FirstOrDefault(), resolvedContext);
         if (pluginImage is not null)
             PluginNotificationImageValidator.ValidateImageSize(pluginImage);
-        await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, imagePath),
+        await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, directImagePath),
             channel, context.CancellationToken,
             imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger);
     }
 
-    private static (string? ImagePath, PluginImageContent? Image) ResolveNotificationImageSource(string? template, PluginTaskRunContext context)
+    private static PluginImageContent? ResolveNotificationImage(string? name, PluginTaskRunContext context)
     {
-        if (string.IsNullOrWhiteSpace(template))
-            return (null, null);
-        var names = VariableResolver.ExtractNames(template);
-        if (names.Count == 1 && template.Trim().Equals(names[0], StringComparison.OrdinalIgnoreCase) && context.Variables.TryGetValue(names[0], out var value) && value is PluginImageContent image)
-            return image.Content.Length == 0 ? (null, null) : (null, image);
-
-        if (names.Count == 1 && template.Trim().Equals(names[0], StringComparison.OrdinalIgnoreCase) && IsImageVariableReference(names[0]))
-            throw new InvalidOperationException($"图片变量 {names[0]} 不可用");
-        if (names.Any(name => context.Variables.TryGetValue(name, out var value) && value is PluginImageContent))
-            throw new InvalidOperationException("图片变量必须单独填写，不能与其他文字组合");
-        var pathValue = VariableResolver.Resolve(template, context).Trim();
-        if (string.IsNullOrWhiteSpace(pathValue))
-            return (null, null);
-        ValidateImagePath(pathValue);
-        return (pathValue, null);
+        if (name is null)
+            return null;
+        if (context.Variables.TryGetValue(name, out var value) && value is PluginImageContent image)
+            return image.Content.Length == 0 ? null : image;
+        throw new InvalidOperationException($"图片变量 {name} 不可用");
     }
 
     internal static (string? Content, string? ImagePath) ExtractDirectImagePath(string? template)
     {
         if (string.IsNullOrEmpty(template))
             return (template, null);
-        if (CountOccurrences(template, "&image=") > 1)
-            throw new InvalidOperationException("图片仅允许一个");
         string? imagePath = null;
-        var content = new List<string>();
-        foreach (var line in template.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        var content = Regex.Replace(template, "&image=\"(?<path>[^\"\\r\\n]*)\"", image =>
         {
-            var trimmed = line.Trim();
-            if (!trimmed.StartsWith("&image=", StringComparison.OrdinalIgnoreCase))
-            {
-                content.Add(line);
-                continue;
-            }
-
             if (imagePath is not null)
                 throw new InvalidOperationException("图片仅允许一个");
-            var value = trimmed["&image=".Length..].Trim();
-            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-                value = value[1..^1];
-            else if (value.Contains('"'))
-                throw new InvalidOperationException("图片路径引号不完整");
+            var value = image.Groups["path"].Value;
             if (string.IsNullOrWhiteSpace(value))
                 throw new InvalidOperationException("图片路径不能为空");
             imagePath = value;
-        }
+            return string.Empty;
+        }, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-        return (string.Join(Environment.NewLine, content), imagePath);
+        return (content, imagePath);
     }
-
-    private static bool IsImageVariableReference(string name) => name.StartsWith('&') && !name.Equals("&image", StringComparison.OrdinalIgnoreCase);
-
-    private static int CountOccurrences(string value, string target)
-    {
-        var count = 0;
-        for (var index = 0; (index = value.IndexOf(target, index, StringComparison.OrdinalIgnoreCase)) >= 0; index += target.Length)
-            count++;
-        return count;
-    }
-
-    private static string RemoveVariableLine(string? template, string name) => string.Join(Environment.NewLine, (template ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Where(line => !line.Trim().Equals(name, StringComparison.OrdinalIgnoreCase)));
 
     private static void ValidateImagePath(string path)
     {
-        if (!Path.IsPathFullyQualified(path))
-            throw new InvalidOperationException("图片路径必须是绝对路径");
+        ValidateImagePathFormat(path);
         if (!File.Exists(path))
             throw new FileNotFoundException("通知图片不存在", path);
+        if (new FileInfo(path).Length > NotificationDelivery.MaxImageSizeBytes)
+            throw new InvalidOperationException("通知图片不能超过 10 MB");
+    }
+
+    private static void ValidateImagePathFormat(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+            throw new InvalidOperationException("图片路径必须是绝对路径");
         var extension = Path.GetExtension(path);
         if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("通知图片仅支持 PNG 或 JPEG");
-        if (new FileInfo(path).Length > NotificationDelivery.MaxImageSizeBytes)
-            throw new InvalidOperationException("通知图片不能超过 10 MB");
     }
 
     internal static string ResolveNotificationContent(string? template, PluginTaskRunContext context)
@@ -1221,6 +1193,8 @@ public sealed class TaskService : BackgroundService
         var images = ValidateImageVariables(text, variableCatalog);
         if (imagePath is not null && images.Length > 0)
             throw new InvalidOperationException("图片仅允许一个");
+        if (imagePath is not null)
+            ValidateImagePathFormat(imagePath);
     }
 
     internal static string[] ValidateImageVariables(string? content, TaskVariableCatalog variableCatalog)
@@ -1228,8 +1202,6 @@ public sealed class TaskService : BackgroundService
         var images = VariableResolver.ExtractOccurrences(content).Select(variableCatalog.MatchRegisteredImage).Where(name => name is not null).Cast<string>().ToArray();
         if (images.Length > 1)
             throw new InvalidOperationException("图片仅允许一个");
-        if (images.Length == 1 && (content ?? string.Empty).Split(['\r', '\n'], StringSplitOptions.None).All(line => !line.Trim().Equals(images[0], StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("图片变量必须单独占一行");
         return images;
     }
 

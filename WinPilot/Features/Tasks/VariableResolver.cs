@@ -17,6 +17,9 @@ public static partial class VariableResolver
         ? []
         : VariablePattern().Matches(template).Select(match => match.Value).ToArray();
 
+    internal static string? Remove(string? template, string name) => template is null ? null
+        : VariablePattern().Replace(template, match => match.Value.Equals(name, StringComparison.OrdinalIgnoreCase) ? string.Empty : match.Value);
+
     public static string Resolve(string? template, PluginTaskRunContext? context)
     {
         if (string.IsNullOrEmpty(template)) return string.Empty;

@@ -21,11 +21,16 @@ public sealed class TaskVariableCatalogTest
 
         Assert.Contains(variables, variable => variable.Name == "$time" && variable.PluginId == "winpilot");
         Assert.Contains(variables, variable => variable.Name == "&screenshot" && variable.Type == PluginVariableType.Image);
-        Assert.Contains(variables, variable => variable.Name == "&image=" && variable.PluginId == "winpilot");
+        Assert.Contains(variables, variable => variable.Name == "&image=\"\"" && variable.PluginId == "winpilot");
         Assert.Contains(variables, variable => variable.Name == "$test.summary" && variable.PluginId == "test-plugin");
         Assert.True(catalog.IsRegisteredImage("&screenshot"));
         Assert.True(catalog.IsRegisteredImage("&test.image"));
         Assert.False(catalog.IsRegisteredImage("&image="));
+        Assert.False(catalog.IsRegisteredImage("&image=\"\""));
+        Assert.Null(catalog.MatchRegisteredImage("&image=\"\""));
+        Assert.Null(catalog.MatchRegisteredImage("&image=\"C:\\image.png\""));
+        Assert.Null(catalog.MatchRegisteredImage("&test.image123"));
+        Assert.Equal("&test.image", catalog.MatchRegisteredImage("&test.image"));
         Assert.False(catalog.IsRegisteredImage("&unknown.image"));
     }
 }
