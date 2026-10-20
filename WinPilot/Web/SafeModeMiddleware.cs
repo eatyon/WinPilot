@@ -4,42 +4,29 @@ namespace WinPilot.Web;
 
 public sealed class SafeModeMiddleware(RequestDelegate next)
 {
-    private static readonly PathString[] BlockedPathPrefixes = ["/api/files", "/api/terminal", "/api/settings/notifications"];
-    private static readonly PathString[] BlockedWritePathPrefixes = ["/api/settings"];
-    private static readonly Dictionary<string, string[]> BlockedRoutesByMethod = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, (string[] Blacklist, string[] Exceptions)> Rules = new(StringComparer.OrdinalIgnoreCase)
     {
-        [HttpMethods.Get] =
-        [
-            "/api/programs",
-            "/api/programs/users"
-        ],
-        [HttpMethods.Post] =
-        [
-            "/api/desktop/keyboard",
-            "/api/programs/usage",
-            "/api/programs/close",
-            "/api/programs/launch",
-            "/api/programs/tags",
-            "/api/tasks",
-            "/api/notifications/test",
-            "/api/notifications/qqbot/bind-user",
-            "/api/notifications/qqbot/bind-group"
-        ],
-        [HttpMethods.Put] =
-        [
-            "/api/programs/tags/{name}",
-            "/api/tasks/{name}",
-            "/api/plugins/{id}/configuration",
-            "/api/plugins/{id}/settings/display/status",
-            "/api/plugins/{id}/settings/display/features",
-            "/api/plugins/{id}/settings/display/configuration"
-        ],
-        [HttpMethods.Delete] =
-        [
-            "/api/programs/tags/{name}",
-            "/api/tasks/{name}",
-            "/api/plugins/{id}"
-        ]
+        ["All"] = (
+            Blacklist: ["/api/files/*", "/api/terminal/*", "/api/settings/notifications/*"],
+            Exceptions: []),
+        [HttpMethods.Get] = (
+            Blacklist: ["/api/programs/*"],
+            Exceptions: ["/api/programs/tags"]),
+        [HttpMethods.Post] = (
+            Blacklist: ["/api/settings/*", "/api/desktop/keyboard", "/api/programs/*", "/api/tasks"],
+            Exceptions: ["/api/programs/tags/{name}/launch"]),
+        [HttpMethods.Put] = (
+            Blacklist: ["/api/settings/*", "/api/programs/*", "/api/tasks/*", "/api/plugins/*"],
+            Exceptions: []),
+        [HttpMethods.Patch] = (
+            Blacklist: ["/api/settings/*"],
+            Exceptions: []),
+        [HttpMethods.Delete] = (
+            Blacklist: ["/api/settings/*", "/api/programs/*", "/api/tasks/*", "/api/plugins/*"],
+            Exceptions: []),
+        ["Other"] = (
+            Blacklist: ["/api/settings/*"],
+            Exceptions: [])
     };
 
     public async Task InvokeAsync(HttpContext context, SafeModeService safeMode)
@@ -60,17 +47,33 @@ public sealed class SafeModeMiddleware(RequestDelegate next)
 
     private static bool IsBlocked(HttpRequest request)
     {
-        var path = request.Path;
-        foreach (var prefix in BlockedPathPrefixes)
-            if (path.StartsWithSegments(prefix)) return true;
-
         var method = HttpMethods.IsHead(request.Method) ? HttpMethods.Get : request.Method;
-        if (!HttpMethods.IsGet(method))
-            foreach (var prefix in BlockedWritePathPrefixes)
-                if (path.StartsWithSegments(prefix)) return true;
-
         var route = (request.HttpContext.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
-        return route is not null && BlockedRoutesByMethod.TryGetValue(method, out var routes)
-            && routes.Contains(route, StringComparer.OrdinalIgnoreCase);
+        var common = Rules["All"];
+        var rules = method.Equals("All", StringComparison.OrdinalIgnoreCase)
+            ? Rules["Other"]
+            : Rules.GetValueOrDefault(method, Rules["Other"]);
+        var blocked = MatchesAny(common.Blacklist, request.Path, route) || MatchesAny(rules.Blacklist, request.Path, route);
+        return blocked && !MatchesAny(common.Exceptions, request.Path, route) && !MatchesAny(rules.Exceptions, request.Path, route);
+    }
+
+    internal static bool MatchesAny(string[] patterns, PathString path, string? route)
+    {
+        var value = (path.Value ?? "").TrimEnd('/');
+        foreach (var pattern in patterns)
+        {
+            var candidate = pattern.Contains('{') ? route?.TrimEnd('/') : value;
+            if (candidate is null) continue;
+            if (pattern.EndsWith("/*", StringComparison.Ordinal))
+            {
+                var prefix = pattern[..^2];
+                if (candidate.Equals(prefix, StringComparison.OrdinalIgnoreCase)
+                    || (candidate.Length > prefix.Length
+                        && candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                        && candidate[prefix.Length] == '/')) return true;
+            }
+            else if (string.Equals(pattern.TrimEnd('/'), candidate, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 }

@@ -131,6 +131,31 @@ public sealed class NotificationChannelTest
     }
 
     [Fact]
+    public async Task SafeModeAllowsTestSendingWithoutExposingConfiguration()
+    {
+        using var data = new TestData();
+        var notifications = new EndpointNotifications { Results = [new("Windows", true)] };
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(data.Paths);
+        builder.Services.AddSingleton<CommandBotConfiguration>();
+        builder.Services.AddSingleton<TerminalSessionManager>();
+        builder.Services.AddSingleton<SafeModeService>();
+        await using var app = builder.Build();
+        app.UseMiddleware<SafeModeMiddleware>();
+        app.MapNotificationEndpoints(data.Paths.ConfigurationFile, notifications);
+        await app.StartAsync();
+        app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/notifications/test",
+            new { channel = "Windows", title = "test", content = "content" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, notifications.Calls);
+        using var configuration = await client.GetAsync("/api/settings/notifications");
+        Assert.Equal(HttpStatusCode.Forbidden, configuration.StatusCode);
+    }
+
+    [Fact]
     public async Task TestEndpointDistinguishesValidChannelWithNoAvailableDelivery()
     {
         var builder = WebApplication.CreateBuilder();
@@ -196,9 +221,11 @@ public sealed class NotificationChannelTest
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task QQBotBindingStreamDisablesCachingAndPreservesEvents(bool group)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task QQBotBindingStreamDisablesCachingAndPreservesEvents(bool group, bool safeMode)
     {
         var root = Path.Combine(Path.GetTempPath(), "WinPilot.Notification.Endpoint.Test", Guid.NewGuid().ToString("N"));
         try
@@ -221,9 +248,14 @@ public sealed class NotificationChannelTest
             builder.WebHost.UseTestServer();
             builder.Services.AddSingleton(configuration);
             builder.Services.AddSingleton(bot);
+            builder.Services.AddSingleton(paths);
+            builder.Services.AddSingleton<TerminalSessionManager>();
+            builder.Services.AddSingleton<SafeModeService>();
             await using var app = builder.Build();
+            app.UseMiddleware<SafeModeMiddleware>();
             app.MapNotificationEndpoints(paths.ConfigurationFile, new EndpointNotifications());
             await app.StartAsync();
+            app.Services.GetRequiredService<SafeModeService>().SetEnabled(safeMode);
             using var client = app.GetTestClient();
             using var response = await client.PostAsync($"/api/notifications/qqbot/bind-{(group ? "group" : "user")}", null);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
