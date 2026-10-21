@@ -131,6 +131,24 @@ public sealed class TelegramCommandBotTest
     }
 
     [Fact]
+    public async Task InvalidStartupConfigurationLogsOneWarningWithoutStartingReceiver()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current => current with
+        {
+            Notifications = current.Notifications with { TelegramBotToken = "" },
+            CommandBots = current.CommandBots with { TelegramEnabled = true }
+        });
+        await fixture.Bot.StartAsync(CancellationToken.None);
+        Assert.Equal("failed", fixture.Bot.Status.State);
+        Assert.True(fixture.Bot.Status.Enabled);
+        Assert.Empty(fixture.Methods);
+        var warning = Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        Assert.Contains("配置无效", warning.Message);
+        Assert.Contains(fixture.Bot.Status.Error!, warning.Message);
+    }
+
+    [Fact]
     public async Task InvalidCredentialsStopAndCanDisableWithoutValidation()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -191,7 +209,7 @@ public sealed class TelegramCommandBotTest
     }
 
     [Fact]
-    public async Task PermanentTelegramFailureHasOneDiagnosticAndExistingStateSummary()
+    public async Task PermanentTelegramFailureHasOneWarningWithoutDuplicateStateSummary()
     {
         await using var fixture = await Fixture.CreateAsync();
         fixture.ErrorCode = 401;
@@ -200,8 +218,8 @@ public sealed class TelegramCommandBotTest
         var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
         Assert.Contains("TelegramApiException", diagnostic);
         Assert.DoesNotContain("123:mock", diagnostic);
-        Assert.Contains(fixture.Logger.Entries, entry => entry.Message.Contains("连接无法恢复", StringComparison.Ordinal));
-        Assert.Contains(fixture.Logger.Entries, entry => entry.Message.Contains("连接失败，已停止接收", StringComparison.Ordinal));
+        var warning = Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        Assert.Contains("连接无法恢复", warning.Message);
     }
 
     [Fact]

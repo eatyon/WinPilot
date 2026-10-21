@@ -18,6 +18,7 @@ public sealed class QQBotCommandBotService : CommandBotService
     private readonly object bindingGate = new();
     private BindingWaiter? binding;
     private CancellationTokenSource? temporaryBinding;
+    private string[] temporaryBindingSecrets = [];
     private bool bindingInProgress;
     private bool connectionActive;
 
@@ -55,11 +56,16 @@ public sealed class QQBotCommandBotService : CommandBotService
         Action<JsonElement> receive, CancellationToken token)
     {
         Task? cancellation;
-        lock (bindingGate) cancellation = temporaryBinding?.CancelAsync();
+        string[] diagnosticSecrets;
+        lock (bindingGate)
+        {
+            diagnosticSecrets = [.. NotificationFailureDiagnostics.Secrets(settings), .. temporaryBindingSecrets];
+            cancellation = temporaryBinding?.CancelAsync();
+        }
         if (cancellation is not null)
         {
             try { await cancellation; }
-            catch (AggregateException) { logger.LogWarning("停止 QQBot 临时连接时发生异常，正在等待连接释放"); }
+            catch (AggregateException exception) { logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "停止 QQBot 临时连接时发生异常，正在等待连接释放"); }
         }
         await gateway.WaitAsync(token);
         try
@@ -122,6 +128,7 @@ public sealed class QQBotCommandBotService : CommandBotService
                 {
                     if (Status.Enabled) throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
                     temporaryBinding = temporary;
+                    temporaryBindingSecrets = NotificationFailureDiagnostics.Secrets(settings);
                 }
                 try
                 {
@@ -133,7 +140,14 @@ public sealed class QQBotCommandBotService : CommandBotService
                 {
                     throw new QQBotBindingValidationException("命令机器人已开启，本次获取已取消；连接成功后请重新获取");
                 }
-                finally { lock (bindingGate) temporaryBinding = null; }
+                finally
+                {
+                    lock (bindingGate)
+                    {
+                        temporaryBinding = null;
+                        temporaryBindingSecrets = [];
+                    }
+                }
             }
             finally { gateway.Release(); }
         }

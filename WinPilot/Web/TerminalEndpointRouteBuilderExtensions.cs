@@ -108,7 +108,8 @@ public static class TerminalEndpointRouteBuilderExtensions
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or DirectoryNotFoundException or FileNotFoundException or System.ComponentModel.Win32Exception)
                 {
-                    logger.LogDebug(exception, "终端操作失败，操作：{Operation}，会话 ID：{TerminalSessionId}", command?.Type, command?.SessionId);
+                    logger.Log(exception is System.ComponentModel.Win32Exception ? LogLevel.Warning : LogLevel.Debug,
+                        exception, "终端操作失败，操作：{Operation}，会话 ID：{TerminalSessionId}", command?.Type, command?.SessionId);
                     await Publish(new TerminalEvent("error", command?.SessionId, null, exception.Message));
                 }
             }

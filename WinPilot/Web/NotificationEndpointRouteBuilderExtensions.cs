@@ -34,7 +34,7 @@ public static class NotificationEndpointRouteBuilderExtensions
                     _ => throw new InvalidOperationException("通知渠道无效")
                 }, context.RequestAborted);
                 var channelName = NotificationChannelCatalog.GetDisplayName(channel);
-                logger.LogInformation("通知渠道 {Channel} 设置已保存", channelName);
+                logger.LogDebug("通知渠道 {Channel} 设置已保存", channelName);
                 return Results.Ok(merged);
             }
             catch (OperationCanceledException) { throw; }

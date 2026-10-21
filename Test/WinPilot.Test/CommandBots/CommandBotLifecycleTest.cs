@@ -35,7 +35,7 @@ public sealed class CommandBotLifecycleTest
     }
 
     [Fact]
-    public async Task ConnectionFailureIsLoggedOncePerFailedStateAndRecoveryIsLogged()
+    public async Task FailedStatusDoesNotDuplicateDiagnosticsAndRecoveryIsLoggedOnce()
     {
         await using var fixture = new Fixture();
         fixture.Bot.PublishStatus(new(true, "failed", "配置无效"));
@@ -45,9 +45,8 @@ public sealed class CommandBotLifecycleTest
         fixture.Bot.PublishStatus(new(true, "failed", "重连次数已达上限"));
 
         var warnings = fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
-        Assert.Equal(2, warnings.Length);
-        Assert.Contains("配置无效", warnings[0].Message);
-        Assert.Contains("重连次数已达上限", warnings[1].Message);
+        Assert.Empty(warnings);
+        Assert.Equal(new(true, "failed", "重连次数已达上限"), fixture.Bot.Status);
         Assert.Single(fixture.Logger.Entries.Where(entry => entry.Message.EndsWith("连接成功", StringComparison.Ordinal)));
     }
 
@@ -80,6 +79,7 @@ public sealed class CommandBotLifecycleTest
         Assert.Equal(received, fixture.Logger.Count);
         Assert.Equal(fixture.Bot.Created, fixture.Bot.Cleaned);
         Assert.Equal("disabled", fixture.Bot.Status.State);
+        Assert.Empty(fixture.Logger.Entries.Where(entry => entry.Level >= Microsoft.Extensions.Logging.LogLevel.Warning));
     }
 
     [Fact]
@@ -182,7 +182,13 @@ public sealed class CommandBotLifecycleTest
     public async Task FaultedReceiverDoesNotPreventReconnectOrDisable()
     {
         await using var fixture = new Fixture();
+        const string secret = "receiver-private-token";
+        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current => current with
+        {
+            Notifications = current.Notifications with { TelegramBotToken = secret }
+        });
         fixture.Bot.FailNextReceiver = true;
+        fixture.Bot.ReceiverFailure = new InvalidOperationException($"receive {secret}", new IOException("inner-receiver"));
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
         await fixture.Bot.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
         await WaitUntil(() => fixture.Bot.Cleaned == fixture.Bot.Created);
@@ -192,6 +198,11 @@ public sealed class CommandBotLifecycleTest
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
         Assert.Equal(fixture.Bot.Created, fixture.Bot.Cleaned);
         Assert.Equal("disabled", fixture.Bot.Status.State);
+        Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Contains(nameof(InvalidOperationException), diagnostic);
+        Assert.Contains("inner-receiver", diagnostic);
+        Assert.DoesNotContain(secret, diagnostic);
     }
 
     [Fact]
@@ -228,12 +239,27 @@ public sealed class CommandBotLifecycleTest
     public async Task CancellationCallbackFailureStillWaitsAndReleasesReceiver()
     {
         await using var fixture = new Fixture();
-        fixture.Bot.ThrowOnCancellation = true;
+        const string secret = "old-connection-secret";
+        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current => current with
+        {
+            Notifications = current.Notifications with { TelegramBotToken = secret }
+        });
+        fixture.Bot.CancellationFailure = new InvalidOperationException($"cancel {secret}", new IOException("inner-cancel"));
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
         await fixture.Bot.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current => current with
+        {
+            Notifications = current.Notifications with { TelegramBotToken = "replacement-secret" }
+        });
         await fixture.Bot.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(fixture.Bot.Created, fixture.Bot.Cleaned);
         Assert.Equal("disabled", fixture.Bot.Status.State);
+        Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Contains(nameof(AggregateException), diagnostic);
+        Assert.Contains(nameof(InvalidOperationException), diagnostic);
+        Assert.Contains("inner-cancel", diagnostic);
+        Assert.DoesNotContain(secret, diagnostic);
     }
 
     private static async Task WaitUntil(Func<bool> condition)
@@ -271,7 +297,8 @@ public sealed class CommandBotLifecycleTest
         public TaskCompletionSource AllowCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool FailNextReceiver;
         public bool HoldCleanup;
-        public bool ThrowOnCancellation;
+        public Exception? CancellationFailure;
+        public Exception? ReceiverFailure;
         public int Created;
         public int Cleaned;
         public void Emit(CommandBotMessage message) => Receive(message);
@@ -315,7 +342,7 @@ public sealed class CommandBotLifecycleTest
         {
             using var registration = token.Register(() =>
             {
-                if (owner.ThrowOnCancellation) throw new InvalidOperationException("模拟取消回调异常");
+                if (owner.CancellationFailure is { } failure) throw failure;
             });
             SetStatus(Status with { State = "connected" });
             owner.Started.TrySetResult();
@@ -324,7 +351,7 @@ public sealed class CommandBotLifecycleTest
                 if (owner.FailNextReceiver)
                 {
                     owner.FailNextReceiver = false;
-                    throw new InvalidOperationException("模拟未捕获接收异常");
+                    throw owner.ReceiverFailure ?? new InvalidOperationException("模拟未捕获接收异常");
                 }
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             }

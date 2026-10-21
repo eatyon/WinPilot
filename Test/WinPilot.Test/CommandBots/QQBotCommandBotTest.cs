@@ -304,10 +304,37 @@ public sealed class QQBotCommandBotTest
     }
 
     [Fact]
+    public async Task TemporaryBindingCancellationLogsOriginalDiagnosticWithoutEitherConnectionsCredentials()
+    {
+        await using var fixture = new Fixture();
+        fixture.HoldTemporaryCleanup = true;
+        const string temporarySecret = "temporary-binding-private-value";
+        var settings = WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications with { QQBotClientSecret = temporarySecret };
+        fixture.TemporaryCancellationFailure = new InvalidOperationException($"cancel {temporarySecret} secret", new IOException("inner-binding"));
+        var pending = fixture.Bot.BindAsync(settings, false, (_, _) => Task.CompletedTask, CancellationToken.None);
+        try
+        {
+            await fixture.TemporaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
+            await WaitUntil(() => !fixture.Logger.Diagnostics.IsEmpty);
+            var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+            Assert.Contains(nameof(AggregateException), diagnostic);
+            Assert.Contains("inner-binding", diagnostic);
+            Assert.DoesNotContain(temporarySecret, diagnostic);
+            Assert.DoesNotContain("secret", diagnostic);
+            Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        }
+        finally { fixture.ReleaseTemporaryCleanup.TrySetResult(); }
+        await Assert.ThrowsAsync<QQBotBindingValidationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(3)));
+        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        Assert.Equal(1, fixture.TemporaryCleanups);
+    }
+
+    [Fact]
     public async Task InvalidCredentialsStayEnabledButReleaseReceiverUntilManualReconnect()
     {
         await using var fixture = new Fixture();
-        fixture.Failure = new HttpRequestException("secret must not appear", null, HttpStatusCode.Unauthorized);
+        fixture.Failure = new HttpRequestException("secret must not appear", new IOException("inner-known-receiver"), HttpStatusCode.Unauthorized);
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
         await WaitUntil(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
@@ -316,6 +343,10 @@ public sealed class QQBotCommandBotTest
         fixture.Failure = null;
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
         await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
+        Assert.Contains("inner-known-receiver", diagnostic);
+        Assert.DoesNotContain("secret", diagnostic);
     }
 
     [Fact]
@@ -441,6 +472,7 @@ public sealed class QQBotCommandBotTest
         public volatile int TemporaryAttempts;
         public volatile int TemporaryCleanups;
         public bool HoldTemporaryCleanup;
+        public Exception? TemporaryCancellationFailure;
         public TaskCompletionSource TemporaryStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource TemporaryStopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseTemporaryCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -464,6 +496,10 @@ public sealed class QQBotCommandBotTest
                 finally { Interlocked.Increment(ref Cleanups); }
             }, async (settings, group, reportCode, token) =>
             {
+                using var registration = token.Register(() =>
+                {
+                    if (TemporaryCancellationFailure is { } failure) throw failure;
+                });
                 Interlocked.Increment(ref TemporaryAttempts);
                 try
                 {

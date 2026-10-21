@@ -70,7 +70,7 @@ public sealed class UpdateService : IDisposable, IAsyncDisposable
             Volatile.Write(ref settings, next);
             lastResult = null;
             lastRelease = null;
-            logger.LogInformation("更新设置已保存，更新源：{Source}，版本通道：{Channel}", SourceName(next.Source), ChannelName(next.Channel));
+            logger.LogDebug("更新设置已保存，更新源：{Source}，版本通道：{Channel}", SourceName(next.Source), ChannelName(next.Channel));
             return next;
         }
         finally { gate.Release(); }

@@ -69,6 +69,7 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
     private readonly HashSet<Channel<CommandBotStatus>> subscribers = [];
     private CommandBotStatus status = new(false, "disabled");
     private CancellationTokenSource? connectionCancellation;
+    private string[] connectionDiagnosticSecrets = [];
     private Task? connection;
     private Channel<(CommandBotMessage Message, string Prefix)>? commands;
     private bool stopping;
@@ -138,7 +139,7 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
                 if (!SameBotConnection(previous, settings)) await RestartCoreAsync();
                 if (IsEnabled(previous) != IsEnabled(settings))
                     logger.LogInformation("{Channel} 命令机器人已{State}", name, IsEnabled(settings) ? "开启" : "关闭");
-                else logger.LogInformation("{Channel} 命令机器人设置已保存", name);
+                else logger.LogDebug("{Channel} 命令机器人设置已保存", name);
             }
             finally { lifecycle.Release(); }
         }
@@ -170,10 +171,16 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
         var current = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile);
         if (!IsEnabled(current.CommandBots)) { SetStatus(new(false, "disabled")); return; }
         try { ValidateConfiguration(current); ValidatePrefix(GetPrefix(current.CommandBots)); }
-        catch (InvalidOperationException exception) { SetStatus(new(true, "failed", exception.Message)); return; }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogWarning("{Channel} 命令机器人配置无效，已停止接收：{Reason}", name, exception.Message);
+            SetStatus(new(true, "failed", exception.Message));
+            return;
+        }
         SetStatus(new(true, "connecting"));
         Volatile.Write(ref activePrefix, GetPrefix(current.CommandBots));
         connectionCancellation = new();
+        connectionDiagnosticSecrets = NotificationFailureDiagnostics.Secrets(current.Notifications, current.CommandBots);
         var token = connectionCancellation.Token;
         var activeReceiver = CreateReceiver();
         var queue = Channel.CreateBounded<(CommandBotMessage, string)>(new BoundedChannelOptions(16)
@@ -219,18 +226,19 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
         try
         {
             try { cancellation.Cancel(); }
-            catch (AggregateException) { logger.LogWarning("{Channel} 命令机器人停止接收消息时发生异常，正在等待接收任务结束", name); }
+            catch (AggregateException exception) { logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, connectionDiagnosticSecrets), "{Channel} 命令机器人停止接收消息时发生异常，正在等待接收任务结束", name); }
             if (connection is not null) await connection.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception)
+        catch (Exception exception)
         {
-            logger.LogWarning("{Channel} 命令机器人的消息接收任务异常结束，将清理连接状态", name);
+            logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, connectionDiagnosticSecrets), "{Channel} 命令机器人的消息接收任务异常结束，将清理连接状态", name);
         }
         finally
         {
             cancellation.Dispose();
             connectionCancellation = null;
+            connectionDiagnosticSecrets = [];
             connection = null;
         }
     }
@@ -271,17 +279,14 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
     protected void SetStatus(CommandBotStatus value)
     {
         bool connected;
-        bool failed;
         lock (gate)
         {
             if (status == value) return;
             connected = value.State == "connected" && status.State != "connected";
-            failed = value.State == "failed" && status.State != "failed";
             status = value;
             foreach (var subscriber in subscribers) subscriber.Writer.TryWrite(value);
         }
         if (connected) logger.LogInformation("{Channel} 命令机器人连接成功", name);
-        if (failed) logger.LogWarning("{Channel} 命令机器人连接失败，已停止接收：{Reason}", name, value.Error ?? "未知原因");
     }
 
     public async IAsyncEnumerable<CommandBotStatus> WatchAsync([EnumeratorCancellation] CancellationToken token)

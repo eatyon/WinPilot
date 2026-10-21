@@ -102,7 +102,8 @@ internal sealed class TerminalSession : IAsyncDisposable
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception exception)
         {
-            logger.LogDebug(exception, "终端进程监控失败，会话 ID：{TerminalSessionId}", Id);
+            logger.Log(Volatile.Read(ref closed) != 0 || cancellation.IsCancellationRequested ? LogLevel.Debug : LogLevel.Warning,
+                exception, "终端进程监控失败，会话 ID：{TerminalSessionId}", Id);
         }
         finally
         {

@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
 using WinPilot.Features.Security;
@@ -15,6 +16,39 @@ namespace WinPilot.Test;
 
 public sealed class UpdateSettingsEndpointTest
 {
+    [Fact]
+    public async Task SaveFailureLogsOnceAndPreservesConfiguration()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "winpilot-update-save-log", Guid.NewGuid().ToString("N"));
+        var paths = PortableDataPaths.Create(directory);
+        try
+        {
+            var logger = new SaveLogger();
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+            builder.Services.AddSingleton<ILogger<UpdateService>>(logger);
+            builder.Services.AddSingleton(new UpdateService(logger, new HttpClient(new Handler()), paths.ConfigurationFile, "1.0.0"));
+            await using var app = builder.Build();
+            app.MapUpdateEndpoints();
+            await app.StartAsync();
+            using var client = app.GetTestClient();
+            using var invalid = await client.PutAsJsonAsync("/api/settings/updates", new { source = 99, channel = "Stable" });
+            Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+            Assert.Empty(logger.Entries);
+            var original = File.ReadAllText(paths.ConfigurationFile);
+            using var locked = new FileStream(paths.ConfigurationFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var failed = await client.PutAsJsonAsync("/api/settings/updates", new { source = "Cnb", channel = "Preview" });
+            Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+            var entry = Assert.Single(logger.Entries);
+            Assert.Equal(LogLevel.Error, entry.Level);
+            Assert.True(entry.Error is IOException or UnauthorizedAccessException);
+            Assert.Equal("保存更新设置失败", entry.Message);
+            Assert.Equal(original, File.ReadAllText(paths.ConfigurationFile));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public async Task SettingsEndpointsPersistAndSafeModeBlocksOnlyChanges()
     {
@@ -63,5 +97,14 @@ public sealed class UpdateSettingsEndpointTest
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+    }
+
+    private sealed class SaveLogger : ILogger<UpdateService>
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(LogLevel Level, string Message, Exception? Error)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel level) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Enqueue((level, formatter(state, exception), exception));
     }
 }

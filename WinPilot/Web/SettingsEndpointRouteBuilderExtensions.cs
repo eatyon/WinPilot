@@ -43,7 +43,7 @@ public static class SettingsEndpointRouteBuilderExtensions
                     return current with { LanAccessEnabled = request.Enabled };
                 });
                 if (changed) securityEvents.Record(SecurityEventType.LanAccessChanged, enabled: request.Enabled);
-                loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!).LogInformation("局域网访问开关已更新");
+                loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!).LogDebug("局域网访问开关已更新");
                 return Results.Ok(ToResponse(settings));
             }
             catch (Exception exception)

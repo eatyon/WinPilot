@@ -1404,6 +1404,19 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         Assert.Equal("body { color: green; }", await changed.Content.ReadAsStringAsync());
     }
 
+    [Fact]
+    public async Task LanAccessChangeIsAuditedOnlyWhenValueChanges()
+    {
+        client.DefaultRequestHeaders.Add("X-Test-Remote-IP", "127.0.0.1");
+        using var changed = await client.PatchAsJsonAsync("/api/settings/general/lan-access", new { enabled = true });
+        using var unchanged = await client.PatchAsJsonAsync("/api/settings/general/lan-access", new { enabled = true });
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, unchanged.StatusCode);
+        logProvider!.Dispose();
+        var log = ReadActiveLog(PortableDataPaths.Create(root).LogsDirectory);
+        Assert.Equal(1, log.Split("安全事件：局域网访问设置已变更", StringSplitOptions.None).Length - 1);
+    }
+
     private static string ReadActiveLog(string logsDirectory)
     {
         using var stream = new FileStream(Directory.GetFiles(logsDirectory, "winpilot*.log").Single(),

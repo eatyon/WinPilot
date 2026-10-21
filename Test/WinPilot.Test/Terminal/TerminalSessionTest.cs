@@ -7,6 +7,46 @@ namespace WinPilot.Test;
 public sealed partial class TerminalSessionTest
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MonitorFailuresWarnUnlessTheSessionIsAlreadyClosing(bool duringClose)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var failure = new IOException("monitor-failure");
+        var checks = 0;
+        var process = new ProcessDouble(new());
+        process.MonitorCheck = () =>
+        {
+            var check = Interlocked.Increment(ref checks);
+            if (check == 1) return false;
+            if (check != 2) return true;
+            entered.TrySetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+            throw failure;
+        };
+        var logger = new CloseLogger();
+        var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process, _ => Task.CompletedTask,
+            _ => { removed.TrySetResult(); return Task.CompletedTask; }, logger);
+        try
+        {
+            session.Start();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var closing = duringClose ? session.CloseAsync() : null;
+            release.Set();
+            await removed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await (closing ?? session.CloseAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            var entry = Assert.Single(logger.Entries);
+            Assert.Equal(duringClose ? LogLevel.Debug : LogLevel.Warning, entry.Level);
+            Assert.Same(failure, entry.Error);
+            Assert.Contains(session.Id.ToString(), entry.Message);
+            Assert.Equal(1, process.DisposeCount);
+        }
+        finally { release.Set(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Theory]
     [InlineData("none")]
     [InlineData("cancel")]
     [InlineData("input")]
@@ -295,6 +335,7 @@ public sealed partial class TerminalSessionTest
         public bool OutputClosed { get; private set; }
         public Func<Task>? Wait { get; set; }
         public bool Exited { get; set; }
+        public Func<bool>? MonitorCheck { get; set; }
         public int DisposeCount { get; private set; }
         public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource DisposeEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -304,7 +345,7 @@ public sealed partial class TerminalSessionTest
         public bool HasExited()
         {
             if (Interlocked.Increment(ref monitorPolls) >= 2) SecondMonitorPoll.TrySetResult();
-            return Exited;
+            return MonitorCheck?.Invoke() ?? Exited;
         }
         public void Kill() => Stage("kill");
         public Task WaitForExitAsync(CancellationToken cancellationToken)

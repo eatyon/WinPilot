@@ -8,13 +8,14 @@ public static class UpdateEndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapUpdateEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/api/settings/updates", (UpdateService updates) => Results.Ok(updates.GetSettings()));
-        endpoints.MapPut("/api/settings/updates", async (UpdateSettings settings, UpdateService updates, HttpContext context) =>
+        endpoints.MapPut("/api/settings/updates", async (UpdateSettings settings, UpdateService updates, HttpContext context, ILogger<UpdateService> logger) =>
         {
             try { return Results.Ok(await updates.SaveSettingsAsync(settings, context.RequestAborted)); }
             catch (ArgumentException) { return Results.BadRequest(new { message = "更新设置无效" }); }
             catch (InvalidOperationException exception) { return Results.Conflict(new { message = exception.Message }); }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                logger.LogError(exception, "保存更新设置失败");
                 return Results.Problem(statusCode: 500, title: "保存更新设置失败", detail: "无法写入配置文件，请检查文件权限");
             }
         });
