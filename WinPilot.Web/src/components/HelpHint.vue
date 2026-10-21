@@ -17,8 +17,9 @@ const tooltipId = useId();
 function position() {
   const bounds = root.value?.getBoundingClientRect();
   if (!bounds) return;
-  const width = Math.min(320, window.innerWidth - 56);
-  left.value = Math.max(16, Math.min(bounds.left, window.innerWidth - width - 16)) - bounds.left;
+  const viewportWidth = document.documentElement.clientWidth;
+  const width = Math.min(320, viewportWidth - 56);
+  left.value = Math.max(16, Math.min(bounds.left, viewportWidth - width - 16)) - bounds.left;
 }
 
 function close() {
@@ -83,9 +84,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .help-hint-wrap { position: relative; display: inline-flex; }
 .help-hint { cursor: pointer; }
-.help-hint-popover { position: absolute; z-index: 30; top: calc(100% + 7px); visibility: hidden; width: min(320px, calc(100vw - 56px)); padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; opacity: 0; background: var(--surface); box-shadow: 0 8px 20px rgb(22 33 45 / 14%); color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.55; white-space: normal; pointer-events: none; transition: opacity 120ms ease, visibility 120ms ease; }
-.help-hint-wrap:focus-within .help-hint-popover, .help-hint-wrap.open .help-hint-popover { visibility: visible; opacity: 1; }
+.help-hint-popover { position: absolute; z-index: 30; top: calc(100% + 7px); display: none; width: min(320px, calc(100vw - 56px)); padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 20px rgb(22 33 45 / 14%); color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.55; white-space: normal; pointer-events: none; }
+.help-hint-wrap:focus-within .help-hint-popover, .help-hint-wrap.open .help-hint-popover { display: block; }
 @media (hover: hover) {
-  .help-hint-wrap:hover .help-hint-popover { visibility: visible; opacity: 1; }
+  .help-hint-wrap:hover .help-hint-popover { display: block; }
 }
 </style>

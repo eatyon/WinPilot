@@ -410,11 +410,11 @@ watch(safeModeEnabled, (enabled) => { if (enabled) disconnect(); }, { flush: 'sy
           :disabled="!connected || activeTab.status !== 'running'"
           rows="1"
           autocomplete="off"
-          placeholder="输入命令后按 Enter 执行"
+          placeholder="输入命令后按 Enter 发送"
           @keydown.enter.exact.prevent="submitCommand"
         />
         <button class="button button-primary" type="submit" :disabled="!connected || activeTab.status !== 'running'">
-          执行
+          发送
         </button>
       </form>
     </div>

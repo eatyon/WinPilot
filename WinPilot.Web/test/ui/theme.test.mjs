@@ -12,6 +12,14 @@ const properties = {
   bg: '--accent-bg', border: '--accent-border', focusRing: '--accent-focus-ring',
 };
 
+test('toast messages center independently inside the viewport-centered stack', () => {
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const stack = css.match(/\.toast-stack\s*\{([^}]+)\}/)?.[1];
+  assert.match(stack, /left:\s*50%/);
+  assert.match(stack, /transform:\s*translateX\(-50%\)/);
+  assert.match(stack, /justify-items:\s*center/);
+});
+
 test('invalid form controls retain danger borders without replacing the normal focus ring', () => {
   const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
   const picker = readFileSync(new URL('../../src/components/AppPicker.css', import.meta.url), 'utf8');
