@@ -53,18 +53,24 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
                 fixture.Tasks.RunNow("busy");
                 Assert.Equal(debugEnabled ? round : 0, logger.Entries.Count);
                 for (var second = 1; second <= 5; second++)
+                {
                     fixture.Tasks.ProcessDueCronTasks(now.AddSeconds(round * 10 + second), CancellationToken.None);
+                }
                 Assert.Equal(debugEnabled ? round + 1 : 0, logger.Entries.Count);
                 if (debugEnabled)
                 {
                     var entry = logger.Entries.Last();
                     Assert.Contains("仍在运行", entry.Message);
                     Assert.Equal("busy", entry.Values.Single(pair => pair.Key == "Name").Value);
-                    Assert.Equal(now.AddSeconds(round == 0 ? 1 : 6),
+                    Assert.Equal(
+                        now.AddSeconds(round == 0 ? 1 : 6),
                         Assert.IsType<DateTimeOffset>(entry.Values.Single(pair => pair.Key == "ScheduledAt").Value));
                 }
             }
-            finally { release.Set(); }
+            finally
+            {
+                release.Set();
+            }
             await execution.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(round + 1, fixture.Programs.Launches);
         }
@@ -142,12 +148,15 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         await using var loaded = new TaskServiceFixture(initialize: paths =>
         {
             Directory.CreateDirectory(paths.TasksDirectory);
-            File.Copy(Path.Combine(source.Paths.TasksDirectory, "loaded.json"), Path.Combine(paths.TasksDirectory, "loaded.json"));
+            File.Copy(
+                Path.Combine(source.Paths.TasksDirectory, "loaded.json"),
+                Path.Combine(paths.TasksDirectory, "loaded.json"));
         });
         var task = Assert.Single(loaded.Tasks.GetAll());
         var cached = Assert.Single(Expressions(loaded.Tasks));
         Assert.Same(task, cached.Value.Task);
-        Assert.Equal(TaskCronExpression.Parse(task.Trigger.Cron!).GetNextOccurrence(DateTimeOffset.UnixEpoch, TimeZoneInfo.Local),
+        Assert.Equal(
+            TaskCronExpression.Parse(task.Trigger.Cron!).GetNextOccurrence(DateTimeOffset.UnixEpoch, TimeZoneInfo.Local),
             cached.Value.Expression.GetNextOccurrence(DateTimeOffset.UnixEpoch, TimeZoneInfo.Local));
     }
 
@@ -175,7 +184,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
                 originalDeadline = deadlines[task.Name];
                 Assert.NotNull(originalDeadline);
                 SetCron(fixture.Tasks, task, "invalid");
-                if (!keepCachedDeadline) deadlines.Remove(task.Name);
+                if (!keepCachedDeadline)
+                {
+                    deadlines.Remove(task.Name);
+                }
             }
             var timersBeforeFailure = clock.TimerCreations;
             clock.Advance(TimeSpan.FromMilliseconds(500));
@@ -186,8 +198,14 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.Equal(1, clock.ActiveTimers);
             lock (gate)
             {
-                if (keepCachedDeadline) Assert.Equal(originalDeadline, deadlines[task.Name]);
-                else Assert.False(deadlines.ContainsKey(task.Name));
+                if (keepCachedDeadline)
+                {
+                    Assert.Equal(originalDeadline, deadlines[task.Name]);
+                }
+                else
+                {
+                    Assert.False(deadlines.ContainsKey(task.Name));
+                }
             }
             Assert.All(probe.Exceptions, exception => Assert.IsAssignableFrom<FormatException>(exception));
             Assert.Equal(failureTime, clock.GetUtcNow());
@@ -202,8 +220,14 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             SetCron(fixture.Tasks, task, "* * * * * *");
             clock.Advance(TimeSpan.FromSeconds(1));
             Assert.Equal(TimeSpan.FromSeconds(1), await clock.NextTimer());
-            if (keepCachedDeadline) await Until(() => fixture.Programs.Launches == 1);
-            else Assert.Equal(0, fixture.Programs.Launches);
+            if (keepCachedDeadline)
+            {
+                await Until(() => fixture.Programs.Launches == 1);
+            }
+            else
+            {
+                Assert.Equal(0, fixture.Programs.Launches);
+            }
             Assert.Equal(0, RetryCount(fixture.Tasks));
             Assert.Equal(2, probe.Exceptions.Count);
             Assert.Equal(originalFile, File.ReadAllText(file));
@@ -243,7 +267,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.Equal(TimeSpan.FromMilliseconds(900), await clock.NextTimer());
             Assert.Equal(2, probe.Exceptions.Count);
         }
-        finally { probe.Release(); }
+        finally
+        {
+            probe.Release();
+        }
     }
 
     [Theory]
@@ -270,11 +297,22 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             var run = Run(fixture.Tasks)!;
             switch (operation)
             {
-                case "edit": fixture.Tasks.Update("one", Cron("one", "* * * * * *")); break;
-                case "rename": fixture.Tasks.Update("one", Cron("renamed", "* * * * * *")); break;
-                case "disable": fixture.Tasks.SetEnabled("one", false); break;
-                case "delete": fixture.Tasks.Delete("one"); break;
-                case "recreate": fixture.Tasks.Delete("one"); fixture.Tasks.Create(Cron("one", "* * * * * *")); break;
+                case "edit":
+                    fixture.Tasks.Update("one", Cron("one", "* * * * * *"));
+                    break;
+                case "rename":
+                    fixture.Tasks.Update("one", Cron("renamed", "* * * * * *"));
+                    break;
+                case "disable":
+                    fixture.Tasks.SetEnabled("one", false);
+                    break;
+                case "delete":
+                    fixture.Tasks.Delete("one");
+                    break;
+                case "recreate":
+                    fixture.Tasks.Delete("one");
+                    fixture.Tasks.Create(Cron("one", "* * * * * *"));
+                    break;
             }
             Assert.Equal(0, RetryCount(fixture.Tasks));
             if (operation is "disable" or "delete")
@@ -291,7 +329,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             }
             Assert.Single(probe.Exceptions);
         }
-        finally { probe.Release(); }
+        finally
+        {
+            probe.Release();
+        }
     }
 
     [Fact]
@@ -317,7 +358,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.Throws<OperationCanceledException>(() => fixture.Tasks.ProcessDueCronTasks(clock.GetUtcNow(), cancelled.Token));
             Assert.Single(probe.Exceptions);
         }
-        finally { probe.Release(); }
+        finally
+        {
+            probe.Release();
+        }
     }
 
     [Fact]
@@ -342,7 +386,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.Equal(TimeSpan.FromSeconds(1), await clock.NextTimer());
             Assert.Equal(2, probe.Exceptions.Count);
         }
-        finally { probe.Release(); }
+        finally
+        {
+            probe.Release();
+        }
     }
 
     [Fact]
@@ -361,7 +408,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             SetCron(fixture.Tasks, task, "invalid");
             probe.BeforeError = () =>
             {
-                if (probe.Exceptions.Count != 1) return;
+                if (probe.Exceptions.Count != 1)
+                {
+                    return;
+                }
                 entered.TrySetResult();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             };
@@ -377,7 +427,11 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.Single(probe.Exceptions);
             Assert.Equal(0, RetryCount(fixture.Tasks));
         }
-        finally { release.Set(); probe.Release(); }
+        finally
+        {
+            release.Set();
+            probe.Release();
+        }
     }
 
     [Fact]
@@ -427,7 +481,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         await Completion(run).WaitAsync(TimeSpan.FromSeconds(5));
         fixture.Tasks.Create(Cron("impossible", "0 0 0 31 2 *"));
         var unreachable = Run(fixture.Tasks);
-        if (unreachable is not null) await Completion(unreachable).WaitAsync(TimeSpan.FromSeconds(5));
+        if (unreachable is not null)
+        {
+            await Completion(unreachable).WaitAsync(TimeSpan.FromSeconds(5));
+        }
         Assert.Null(Run(fixture.Tasks));
         Assert.Equal(0, clock.ActiveTimers);
         Assert.Single(fixture.Logger.Messages.Where(message => message.Contains("没有后续执行时间")));
@@ -465,7 +522,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         File.WriteAllText(blockedProgram, "test program");
         fixture.Programs.BeforeLaunch = request =>
         {
-            if (request.ProgramPath != blockedProgram) return;
+            if (request.ProgramPath != blockedProgram)
+            {
+                return;
+            }
             entered.TrySetResult();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
         };
@@ -485,7 +545,10 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Assert.DoesNotContain(fixture.Programs.Requests, request => request.ProgramPath == blockedProgram);
             fixture.Tasks.SetEnabled("blocked", false);
         }
-        finally { release.Set(); }
+        finally
+        {
+            release.Set();
+        }
         await Until(() => fixture.Programs.Launches == 3);
     }
 
@@ -640,14 +703,23 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             await disposing.Task.WaitAsync(TimeSpan.FromSeconds(5));
             fixture.Tasks.SetEnabled("one", true);
         }
-        finally { clock.BeforeDispose = null; release.Set(); }
+        finally
+        {
+            clock.BeforeDispose = null;
+            release.Set();
+        }
         Assert.Equal(TimeSpan.FromMilliseconds(500), await clock.NextTimer());
         clock.Advance(TimeSpan.FromMilliseconds(500));
         await Until(() => fixture.Programs.Launches == 1);
     }
 
     private static WinPilotTask Cron(string name, string expression, string? path = null) =>
-        new(name, true, new(TaskTriggerType.Cron, Cron: expression), [new(TaskActionType.StartProgram, ProgramPath: path ?? Environment.ProcessPath!)]);
+        new(
+            name,
+            true,
+            new(TaskTriggerType.Cron, Cron: expression),
+            [new(TaskActionType.StartProgram, ProgramPath: path ?? Environment.ProcessPath!)]);
+
     private static async Task Start(TaskServiceFixture fixture, Clock clock)
     {
         fixture.Tasks.NotifyPluginsLoaded();
@@ -655,13 +727,20 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         Assert.Equal(TimeSpan.FromMilliseconds(500), await clock.NextTimer());
         clock.Advance(TimeSpan.FromMilliseconds(500));
     }
-    private static object? Run(TaskService service) => typeof(TaskService).GetField("cronSchedulerRun", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service);
+
+    private static object? Run(TaskService service) =>
+        typeof(TaskService).GetField("cronSchedulerRun", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service);
+
     private static int RetryCount(TaskService service)
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         var gate = typeof(TaskService).GetField("gate", flags)!.GetValue(service)!;
-        lock (gate) return ((Dictionary<string, long>)typeof(TaskService).GetField("cronRetryStartedAt", flags)!.GetValue(service)!).Count;
+        lock (gate)
+        {
+            return ((Dictionary<string, long>)typeof(TaskService).GetField("cronRetryStartedAt", flags)!.GetValue(service)!).Count;
+        }
     }
+
     private static void SetCron(TaskService service, WinPilotTask task, string expression)
     {
         var gate = typeof(TaskService).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;
@@ -671,15 +750,24 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
             Expressions(service).Remove(task.Name);
         }
     }
+
     private static Dictionary<string, (WinPilotTask Task, Cronos.CronExpression Expression)> Expressions(TaskService service) =>
         (Dictionary<string, (WinPilotTask Task, Cronos.CronExpression Expression)>)typeof(TaskService)
             .GetField("cronExpressions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;
-    private static bool Ready(TaskService service) => (bool)typeof(TaskService).GetField("cronReady", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;
+
+    private static bool Ready(TaskService service) =>
+        (bool)typeof(TaskService).GetField("cronReady", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;
+
     private static Task Completion(object run) => (Task)run.GetType().GetProperty("Execution")!.GetValue(run)!;
+
     private static async Task Until(Func<bool> condition)
     {
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!condition()) { budget.Token.ThrowIfCancellationRequested(); await Task.Yield(); }
+        while (!condition())
+        {
+            budget.Token.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
     }
 
     private sealed class Clock : TimeProvider
@@ -692,14 +780,57 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
         private long timestamp;
         private TimeZoneInfo timeZone = TimeZoneInfo.Local;
         internal Action? BeforeDispose;
+
         internal int TimerCreations { get; private set; }
-        public override DateTimeOffset GetUtcNow() { lock (gate) return now; }
-        public override long GetTimestamp() { lock (gate) return timestamp; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (gate)
+            {
+                return now;
+            }
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (gate)
+            {
+                return timestamp;
+            }
+        }
+
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-        public override TimeZoneInfo LocalTimeZone { get { lock (gate) return timeZone; } }
-        internal int ActiveTimers { get { lock (gate) return timers.Count; } }
-        internal async Task<TimeSpan> NextTimer() => await created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+
+        public override TimeZoneInfo LocalTimeZone
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return timeZone;
+                }
+            }
+        }
+
+        internal int ActiveTimers
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return timers.Count;
+                }
+            }
+        }
+
+        internal async Task<TimeSpan> NextTimer() =>
+            await created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
         {
             lock (gate)
             {
@@ -710,8 +841,23 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
                 return timer;
             }
         }
-        internal void SetUtc(DateTimeOffset value) { lock (gate) now = value; }
-        internal void SetTimeZone(TimeZoneInfo value) { lock (gate) timeZone = value; }
+
+        internal void SetUtc(DateTimeOffset value)
+        {
+            lock (gate)
+            {
+                now = value;
+            }
+        }
+
+        internal void SetTimeZone(TimeZoneInfo value)
+        {
+            lock (gate)
+            {
+                timeZone = value;
+            }
+        }
+
         internal void Advance(TimeSpan amount)
         {
             Timer[] due;
@@ -720,51 +866,115 @@ public sealed class TaskCronSchedulerTest(ITestOutputHelper output)
                 now += amount;
                 timestamp += amount.Ticks;
                 due = timers.Where(timer => timer.Due <= now).ToArray();
-                foreach (var timer in due) timers.Remove(timer);
+                foreach (var timer in due)
+                {
+                    timers.Remove(timer);
+                }
             }
-            foreach (var timer in due) timer.Callback(timer.State);
+            foreach (var timer in due)
+            {
+                timer.Callback(timer.State);
+            }
         }
-        private sealed class Timer(Clock clock, TimerCallback callback, object? state, DateTimeOffset due) : ITimer
+
+        private sealed class Timer(
+            Clock clock,
+            TimerCallback callback,
+            object? state,
+            DateTimeOffset due) : ITimer
         {
             internal DateTimeOffset Due = due;
             internal TimerCallback Callback = callback;
             internal object? State = state;
-            public bool Change(TimeSpan dueTime, TimeSpan period) { lock (clock.gate) { Due = clock.now + dueTime; return true; } }
-            public void Dispose() { clock.BeforeDispose?.Invoke(); lock (clock.gate) clock.timers.Remove(this); }
-            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (clock.gate)
+                {
+                    Due = clock.now + dueTime;
+                    return true;
+                }
+            }
+
+            public void Dispose()
+            {
+                clock.BeforeDispose?.Invoke();
+                lock (clock.gate)
+                {
+                    clock.timers.Remove(this);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
         }
     }
 
     private sealed class CronSkipLogger(bool debugEnabled) : ILogger<TaskService>
     {
         internal System.Collections.Concurrent.ConcurrentQueue<(string Message, KeyValuePair<string, object?>[] Values)> Entries { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => level != LogLevel.Debug || debugEnabled;
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             if (level == LogLevel.Debug && debugEnabled)
+            {
                 Entries.Enqueue((formatter(state, exception), ((IEnumerable<KeyValuePair<string, object?>>)state!).ToArray()));
+            }
         }
     }
 
     private sealed class CalculationFailureLogger : ILogger<TaskService>, IDisposable
     {
         private readonly ManualResetEventSlim release = new(false);
+
         internal System.Collections.Concurrent.ConcurrentQueue<Exception> Exceptions { get; } = new();
+
         internal Action? BeforeError;
+
         internal TaskCompletionSource ThirdFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
-            if (level != LogLevel.Error || exception is null || !formatter(state, exception).Contains("Cron 调度失败")) return;
+            if (level != LogLevel.Error || exception is null || !formatter(state, exception).Contains("Cron 调度失败"))
+            {
+                return;
+            }
             Exceptions.Enqueue(exception);
             BeforeError?.Invoke();
-            if (Exceptions.Count != 3) return;
+            if (Exceptions.Count != 3)
+            {
+                return;
+            }
             ThirdFailure.TrySetResult();
-            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("未释放 Cron 故障复现握手");
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("未释放 Cron 故障复现握手");
+            }
         }
+
         internal void Release() => release.Set();
+
         public void Dispose() => release.Dispose();
     }
 }

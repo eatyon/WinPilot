@@ -11,8 +11,12 @@ namespace WinPilot.Test;
 
 public sealed partial class TaskServiceTest
 {
-    private static WinPilotTask KeyboardTask(string name = "keyboard") => new(name, true,
-        new(TaskTriggerType.Keyboard, Keys: ["Ctrl", "A", "B"]), [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
+    private static WinPilotTask KeyboardTask(string name = "keyboard") =>
+        new(
+            name,
+            true,
+            new(TaskTriggerType.Keyboard, Keys: ["Ctrl", "A", "B"]),
+            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]);
 
     [Fact]
     public async Task KeyboardFailureIsReadOnlyAndOnlyReportedForEnabledKeyboardTasks()
@@ -31,7 +35,13 @@ public sealed partial class TaskServiceTest
         await fixture.Logger.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(SpinWait.SpinUntil(() => listener.Availability == true, TimeSpan.FromSeconds(5)));
         using (var healthy = JsonDocument.Parse(await client.GetStringAsync("/api/tasks")))
-            Assert.True(healthy.RootElement.EnumerateArray().Single(item => item.GetProperty("name").GetString() == task.Name).GetProperty("keyboardAvailable").GetBoolean());
+        {
+            Assert.True(healthy.RootElement
+                .EnumerateArray()
+                .Single(item => item.GetProperty("name").GetString() == task.Name)
+                .GetProperty("keyboardAvailable")
+                .GetBoolean());
+        }
         var before = Environment.TickCount64;
         Assert.True(SpinWait.SpinUntil(() => Environment.TickCount64 > before, TimeSpan.FromSeconds(5)));
         listener.ReceiveInput(0x41, 0x1e, 0, unchecked((uint)Environment.TickCount64));
@@ -39,9 +49,15 @@ public sealed partial class TaskServiceTest
         using var failed = JsonDocument.Parse(await client.GetStringAsync("/api/tasks"));
         foreach (var item in failed.RootElement.EnumerateArray())
         {
-            if (item.GetProperty("enabled").GetBoolean() && item.GetProperty("trigger").GetProperty("type").GetString() == "Keyboard")
+            if (item.GetProperty("enabled").GetBoolean()
+                && item.GetProperty("trigger").GetProperty("type").GetString() == "Keyboard")
+            {
                 Assert.False(item.GetProperty("keyboardAvailable").GetBoolean());
-            else Assert.False(item.TryGetProperty("keyboardAvailable", out _));
+            }
+            else
+            {
+                Assert.False(item.TryGetProperty("keyboardAvailable", out _));
+            }
         }
         var stored = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, task.Name + ".json"));
         Assert.DoesNotContain("keyboardAvailable", stored);
@@ -63,10 +79,18 @@ public sealed partial class TaskServiceTest
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var trigger = json.RootElement.GetProperty("trigger");
         Assert.Equal(new[] { "type", "keys" }, trigger.EnumerateObject().Select(property => property.Name));
-        Assert.Equal(new[] { "Ctrl", "A", "B" }, trigger.GetProperty("keys").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(new[] {
+            "Ctrl",
+            "A",
+            "B"
+}, trigger.GetProperty("keys").EnumerateArray().Select(value => value.GetString()));
         var content = File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "keyboard.json"));
         using var stored = JsonDocument.Parse(content);
-        Assert.Equal(new[] { "Ctrl", "A", "B" }, stored.RootElement.GetProperty("trigger").GetProperty("keys").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(new[] {
+            "Ctrl",
+            "A",
+            "B"
+}, stored.RootElement.GetProperty("trigger").GetProperty("keys").EnumerateArray().Select(value => value.GetString()));
         using var invalid = await client.PostAsJsonAsync("/api/tasks", KeyboardTask("invalid") with { Trigger = new(TaskTriggerType.Keyboard, Keys: ["NotAKey"]) });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         using var problem = JsonDocument.Parse(await invalid.Content.ReadAsStringAsync());
@@ -120,7 +144,11 @@ public sealed partial class TaskServiceTest
             file = Path.Combine(paths.TasksDirectory, "keyboard.json");
             File.WriteAllText(file, content);
         });
-        Assert.Equal(new[] { "Ctrl", "B", "A" }, Assert.Single(fixture.Tasks.GetAll()).Trigger.Keys);
+        Assert.Equal(new[] {
+            "Ctrl",
+            "B",
+            "A"
+}, Assert.Single(fixture.Tasks.GetAll()).Trigger.Keys);
         Assert.Equal(content, File.ReadAllText(file));
     }
 
@@ -133,8 +161,16 @@ public sealed partial class TaskServiceTest
             Trigger = new(TaskTriggerType.Keyboard, Keys: ["Shift", "Ctrl", "Win"]),
             Actions = [new(TaskActionType.Keyboard, Keys: ["Shift", "Alt", "Ctrl"])]
         });
-        Assert.Equal(new[] { "Win", "Ctrl", "Shift" }, saved.Trigger.Keys);
-        Assert.Equal(new[] { "Ctrl", "Alt", "Shift" }, Assert.Single(saved.Actions).Keys);
+        Assert.Equal(new[] {
+            "Win",
+            "Ctrl",
+            "Shift"
+}, saved.Trigger.Keys);
+        Assert.Equal(new[] {
+            "Ctrl",
+            "Alt",
+            "Shift"
+}, Assert.Single(saved.Actions).Keys);
     }
 
     [Theory]
@@ -151,20 +187,39 @@ public sealed partial class TaskServiceTest
         await fixture.Logger.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pending = Task.Run(async () => { captured.SetResult(); await release.Task; await fixture.Tasks.TriggerKeyboardTask(task); });
+        var pending = Task.Run(async () =>
+        {
+            captured.SetResult();
+            await release.Task;
+            await fixture.Tasks.TriggerKeyboardTask(task);
+        });
         try
         {
             await captured.Task.WaitAsync(TimeSpan.FromSeconds(5));
             switch (operation)
             {
-                case "edit": fixture.Tasks.Update(task.Name, task); break;
-                case "disable": fixture.Tasks.SetEnabled(task.Name, false); break;
-                case "delete": fixture.Tasks.Delete(task.Name); break;
-                case "rename": fixture.Tasks.Update(task.Name, task with { Name = "renamed" }); break;
-                case "stop": await fixture.Tasks.StopAsync(CancellationToken.None); break;
+                case "edit":
+                    fixture.Tasks.Update(task.Name, task);
+                    break;
+                case "disable":
+                    fixture.Tasks.SetEnabled(task.Name, false);
+                    break;
+                case "delete":
+                    fixture.Tasks.Delete(task.Name);
+                    break;
+                case "rename":
+                    fixture.Tasks.Update(task.Name, task with { Name = "renamed" });
+                    break;
+                case "stop":
+                    await fixture.Tasks.StopAsync(CancellationToken.None);
+                    break;
             }
         }
-        finally { release.TrySetResult(); await pending.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        }
         Assert.Equal(0, fixture.Programs.Launches);
     }
 
@@ -175,7 +230,11 @@ public sealed partial class TaskServiceTest
         var task = fixture.Tasks.Create(KeyboardTask());
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
-        fixture.Programs.BeforeLaunch = _ => { entered.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(10))); };
+        fixture.Programs.BeforeLaunch = _ =>
+        {
+            entered.TrySetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+        };
         await fixture.Tasks.StartAsync(CancellationToken.None);
         await fixture.Logger.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var first = fixture.Tasks.TriggerKeyboardTask(task);
@@ -185,7 +244,11 @@ public sealed partial class TaskServiceTest
             await fixture.Tasks.TriggerKeyboardTask(task).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(first.IsCompleted);
         }
-        finally { release.Set(); await first.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
         Assert.Equal(1, fixture.Programs.Launches);
         await fixture.Tasks.TriggerKeyboardTask(task).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, fixture.Programs.Launches);

@@ -20,12 +20,22 @@ public sealed partial class TaskServiceTest
         fixture.Create("target");
         await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
-        foreach (var missing in new[] { "taskName", "state", "" })
+        foreach (var missing in new[] {
+            "taskName",
+            "state",
+            ""
+})
         {
             var request = new
             {
-                name = "controller", enabled = false, trigger = new { type = "WinPilotStartup" },
-                actions = new[] { new { type = "TaskState", taskName = missing == "taskName" ? null : "target", state = missing == "state" ? null : state } }
+                name = "controller",
+                enabled = false,
+                trigger = new { type = "WinPilotStartup" },
+                actions = new[] { new {
+                    type = "TaskState",
+                    taskName = missing == "taskName" ? null : "target",
+                    state = missing == "state" ? null : state
+} }
             };
             using var response = await client.PostAsJsonAsync("/api/tasks", request);
             using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -77,8 +87,12 @@ public sealed partial class TaskServiceTest
     public async Task TaskStateActionRequiresTaskAndState(string? name, TaskStateOperation? state, string field)
     {
         await using var fixture = new TaskServiceFixture();
-        var error = Assert.Throws<TaskValidationException>(() => fixture.Tasks.Create(new("invalid", true,
-            new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.TaskState, TaskName: name, State: state)])));
+        var error = Assert.Throws<TaskValidationException>(() =>
+            fixture.Tasks.Create(new(
+                "invalid",
+                true,
+                new(TaskTriggerType.WinPilotStartup),
+                [new(TaskActionType.TaskState, TaskName: name, State: state)])));
         Assert.Equal("actions[0]." + field, error.Field);
         Assert.Empty(fixture.Tasks.GetAll());
     }
@@ -100,21 +114,35 @@ public sealed partial class TaskServiceTest
             await release.Task;
             return PluginTaskActionResult.Success();
         });
-        var task = fixture.Tasks.Create(new("running", true, new(TaskTriggerType.Cron, Cron: "* * * * * *"),
-            [new(TaskActionType.Extension, PluginId: "test", ActionId: "wait"),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        var task = fixture.Tasks.Create(new(
+            "running",
+            true,
+            new(TaskTriggerType.Cron, Cron: "* * * * * *"),
+            [
+                new(TaskActionType.Extension, PluginId: "test", ActionId: "wait"),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         fixture.Tasks.RunNow(task.Name);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            if (update) fixture.Tasks.Update(task.Name, task with { Enabled = false });
-            else fixture.Tasks.SetEnabled(task.Name, false);
+            if (update)
+            {
+                fixture.Tasks.Update(task.Name, task with { Enabled = false });
+            }
+            else
+            {
+                fixture.Tasks.SetEnabled(task.Name, false);
+            }
             Assert.False(executionToken.IsCancellationRequested);
             Assert.False(Assert.Single(fixture.Tasks.GetAll()).Enabled);
             fixture.Tasks.ProcessDueCronTasks(DateTimeOffset.Now, CancellationToken.None);
             Assert.Equal(0, fixture.Programs.Launches);
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, fixture.Programs.Launches);
     }
@@ -125,9 +153,14 @@ public sealed partial class TaskServiceTest
     public async Task TaskCanDisableItselfAndCompleteRemainingActions(TaskStateOperation state)
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("self", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.TaskState, TaskName: "self", State: state),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "self",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.TaskState, TaskName: "self", State: state),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         fixture.Tasks.RunNow("self");
         Assert.False(Assert.Single(fixture.Tasks.GetAll()).Enabled);
         Assert.Equal(1, fixture.Programs.Launches);
@@ -139,9 +172,14 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Create("target");
-        fixture.Tasks.Create(new("controller", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "controller",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         fixture.Tasks.Delete("target");
         fixture.Tasks.RunNow("controller");
         Assert.IsType<FileNotFoundException>(Assert.Single(fixture.Logger.Exceptions));
@@ -153,13 +191,20 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Create("target");
-        fixture.Tasks.Create(new("controller", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "controller",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Disable),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "target.json");
         var original = File.ReadAllText(file);
         using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
             fixture.Tasks.RunNow("controller");
+        }
         Assert.True(fixture.Tasks.GetAll().Single(task => task.Name == "target").Enabled);
         Assert.Equal(original, File.ReadAllText(file));
         Assert.True(Assert.Single(fixture.Logger.Exceptions) is IOException or UnauthorizedAccessException);
@@ -172,8 +217,13 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         fixture.Create("target", false);
         for (var index = 0; index < 20; index++)
-            fixture.Tasks.Create(new("toggle-" + index, true, new(TaskTriggerType.WinPilotStartup),
+        {
+            fixture.Tasks.Create(new(
+                "toggle-" + index,
+                true,
+                new(TaskTriggerType.WinPilotStartup),
                 [new(TaskActionType.TaskState, TaskName: "target", State: TaskStateOperation.Toggle)]));
+        }
         Parallel.For(0, 20, index => fixture.Tasks.RunNow("toggle-" + index));
         Assert.False(fixture.Tasks.GetAll().Single(task => task.Name == "target").Enabled);
         Assert.Empty(fixture.Logger.Exceptions);

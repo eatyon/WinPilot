@@ -36,16 +36,30 @@ public sealed partial class TaskServiceTest
         object? explicitValue = input switch { "false" => false, "zero" => 0, "array" => Array.Empty<string>(), "empty" => "", _ => null };
         var type = input switch
         {
-            "false" => PluginActionParameterType.Checkbox, "zero" => PluginActionParameterType.Number,
-            "array" => PluginActionParameterType.MultiCheckbox, _ => PluginActionParameterType.Text
+            "false" => PluginActionParameterType.Checkbox,
+            "zero" => PluginActionParameterType.Number,
+            "array" => PluginActionParameterType.MultiCheckbox,
+            _ => PluginActionParameterType.Text
         };
         object fallback = input switch { "false" => true, "zero" => 7, "array" => new[] { "one" }, _ => "default" };
         var parameters = new Dictionary<string, object?>();
-        if (input != "missing") parameters.Add("value", explicitValue);
+        if (input != "missing")
+        {
+            parameters.Add("value", explicitValue);
+        }
         var called = false;
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ((IPluginTaskActionApi)scope).Register([new("run", "Run", [
-            new("value", "Value", type, required, fallback, type == PluginActionParameterType.MultiCheckbox ? [new("one", "One")] : null)])],
+        ((IPluginTaskActionApi)scope).Register([new(
+            "run",
+            "Run",
+            [
+            new(
+                "value",
+                "Value",
+                type,
+                required,
+                fallback,
+                type == PluginActionParameterType.MultiCheckbox ? [new("one", "One")] : null)])],
             (values, _, _) =>
             {
                 Assert.True(values.ContainsKey("value"));
@@ -58,17 +72,33 @@ public sealed partial class TaskServiceTest
             completed.TrySetResult();
             return Task.FromResult(PluginTaskActionResult.Success());
         });
-        fixture.Tasks.Create(new("Defaults", true, new(TaskTriggerType.WinPilotStartup), [
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", Parameters: parameters, ContinueOnFailure: true),
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")]));
+        fixture.Tasks.Create(new(
+            "Defaults",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(
+                    TaskActionType.Extension,
+                    PluginId: "defaults",
+                    ActionId: "run",
+                    Parameters: parameters,
+                    ContinueOnFailure: true),
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")
+]));
         var path = Path.Combine(fixture.Paths.TasksDirectory, "Defaults.json");
         var original = File.ReadAllText(path);
         fixture.Tasks.RunNow("Defaults");
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var valid = !required || input is not ("null" or "empty");
         Assert.Equal(valid, called);
-        if (valid) Assert.Empty(fixture.Logger.Exceptions);
-        else Assert.Equal("缺少动作参数：value", Assert.Single(fixture.Logger.Exceptions).Message);
+        if (valid)
+        {
+            Assert.Empty(fixture.Logger.Exceptions);
+        }
+        else
+        {
+            Assert.Equal("缺少动作参数：value", Assert.Single(fixture.Logger.Exceptions).Message);
+        }
         Assert.Equal(input != "missing", parameters.ContainsKey("value"));
         Assert.Equal(original, File.ReadAllText(path));
     }
@@ -83,8 +113,16 @@ public sealed partial class TaskServiceTest
         var resolutions = 0;
         var calls = 0;
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ((IPluginTaskActionApi)scope).Register([new("run", "Run", [
-            new("choice", "Choice", PluginActionParameterType.Select, DefaultValue: "old", Options: [new("old", "Old")])])],
+        ((IPluginTaskActionApi)scope).Register([new(
+            "run",
+            "Run",
+            [
+            new(
+                "choice",
+                "Choice",
+                PluginActionParameterType.Select,
+                DefaultValue: "old",
+                Options: [new("old", "Old")])])],
             (values, _, _) =>
             {
                 Assert.Equal(1, resolutions);
@@ -101,15 +139,26 @@ public sealed partial class TaskServiceTest
             completed.TrySetResult();
             return Task.FromResult(PluginTaskActionResult.Success());
         });
-        fixture.Tasks.Create(new("Defaults", true, new(TaskTriggerType.WinPilotStartup), [
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")]));
+        fixture.Tasks.Create(new(
+            "Defaults",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")
+]));
         fixture.Tasks.RunNow("Defaults");
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, resolutions);
         Assert.Equal(valid ? 1 : 0, calls);
-        if (valid) Assert.Empty(fixture.Logger.Exceptions);
-        else Assert.Equal("动作参数选项无效：choice", Assert.Single(fixture.Logger.Exceptions).Message);
+        if (valid)
+        {
+            Assert.Empty(fixture.Logger.Exceptions);
+        }
+        else
+        {
+            Assert.Equal("动作参数选项无效：choice", Assert.Single(fixture.Logger.Exceptions).Message);
+        }
     }
 
     [Theory]
@@ -122,8 +171,16 @@ public sealed partial class TaskServiceTest
         IList<string> fallback = list ? new List<string> { "one" } : new[] { "one" };
         var called = 0;
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ((IPluginTaskActionApi)scope).Register([new("run", "Run", [
-            new("choices", "Choices", PluginActionParameterType.MultiCheckbox, DefaultValue: fallback, Options: [new("one", "One")])])],
+        ((IPluginTaskActionApi)scope).Register([new(
+            "run",
+            "Run",
+            [
+            new(
+                "choices",
+                "Choices",
+                PluginActionParameterType.MultiCheckbox,
+                DefaultValue: fallback,
+                Options: [new("one", "One")])])],
             (values, _, _) =>
             {
                 var choices = Assert.IsAssignableFrom<IList<string>>(values["choices"]);
@@ -138,10 +195,15 @@ public sealed partial class TaskServiceTest
             completed.TrySetResult();
             return Task.FromResult(PluginTaskActionResult.Success());
         });
-        fixture.Tasks.Create(new("Defaults", true, new(TaskTriggerType.WinPilotStartup), [
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
-            new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")]));
+        fixture.Tasks.Create(new(
+            "Defaults",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "run", ContinueOnFailure: true),
+                new(TaskActionType.Extension, PluginId: "defaults", ActionId: "done")
+]));
         fixture.Tasks.RunNow("Defaults");
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, called);

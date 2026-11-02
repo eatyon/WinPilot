@@ -7,40 +7,89 @@ namespace WinPilot.Test;
 public sealed class KeyboardTriggerMatcherTest
 {
     private static KeyboardInputIdentity Id(KeyboardKey key) => KeyboardInputIdentity.FromScanCode((int)key + 1, 0, false);
-    private static IReadOnlyList<KeyboardTriggerBinding> Input(KeyboardTriggerMatcher matcher, KeyboardKey key, bool down = true) => matcher.Input(Id(key), key, down);
+
+    private static IReadOnlyList<KeyboardTriggerBinding> Input(
+        KeyboardTriggerMatcher matcher,
+        KeyboardKey key,
+        bool down = true) =>
+        matcher.Input(Id(key), key, down);
 
     [Theory]
-    [InlineData(1)] [InlineData(2)] [InlineData(3)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
     public void ConfiguredOrderTriggersOnceUntilEverythingIsReleased(int count)
     {
-        var keys = new[] { KeyboardKey.Ctrl, KeyboardKey.A, KeyboardKey.B }.Take(count).ToArray();
+        var keys = new[] {
+            KeyboardKey.Ctrl,
+            KeyboardKey.A,
+            KeyboardKey.B
+}.Take(count).ToArray();
         var binding = new KeyboardTriggerBinding(new(), keys);
         var matcher = new KeyboardTriggerMatcher();
         matcher.Update([binding]);
-        for (int i = 0; i < count; i++) Assert.Equal(i == count - 1 ? 1 : 0, Input(matcher, keys[i]).Count);
-        foreach (var key in keys) Assert.Empty(Input(matcher, key));
+        for (int i = 0; i < count; i++)
+        {
+            Assert.Equal(i == count - 1 ? 1 : 0, Input(matcher, keys[i]).Count);
+        }
+        foreach (var key in keys)
+        {
+            Assert.Empty(Input(matcher, key));
+        }
         Assert.Empty(Input(matcher, keys[^1], false));
-        if (count > 1) Assert.Empty(Input(matcher, keys[^1]));
-        foreach (var key in keys) Input(matcher, key, false);
-        for (int i = 0; i < count; i++) Assert.Equal(i == count - 1 ? 1 : 0, Input(matcher, keys[i]).Count);
+        if (count > 1)
+        {
+            Assert.Empty(Input(matcher, keys[^1]));
+        }
+        foreach (var key in keys)
+        {
+            Input(matcher, key, false);
+        }
+        for (int i = 0; i < count; i++)
+        {
+            Assert.Equal(i == count - 1 ? 1 : 0, Input(matcher, keys[i]).Count);
+        }
     }
 
     [Theory]
-    [InlineData("order")] [InlineData("release")] [InlineData("extra")] [InlineData("unknown")]
+    [InlineData("order")]
+    [InlineData("release")]
+    [InlineData("extra")]
+    [InlineData("unknown")]
     public void InvalidRoundRequiresFullRelease(string reason)
     {
         var matcher = new KeyboardTriggerMatcher();
         matcher.Update([new(new(), [KeyboardKey.A, KeyboardKey.B])]);
-        if (reason == "order") { Assert.Empty(Input(matcher, KeyboardKey.B)); Assert.Empty(Input(matcher, KeyboardKey.A)); }
+        if (reason == "order")
+        {
+            Assert.Empty(Input(matcher, KeyboardKey.B));
+            Assert.Empty(Input(matcher, KeyboardKey.A));
+        }
         else
         {
             Input(matcher, KeyboardKey.A);
-            if (reason == "release") Input(matcher, KeyboardKey.A, false);
-            if (reason == "extra") Input(matcher, KeyboardKey.C);
-            if (reason == "unknown") matcher.Input(new(999, 999, false), null, true);
+            if (reason == "release")
+            {
+                Input(matcher, KeyboardKey.A, false);
+            }
+            if (reason == "extra")
+            {
+                Input(matcher, KeyboardKey.C);
+            }
+            if (reason == "unknown")
+            {
+                matcher.Input(new(999, 999, false), null, true);
+            }
             Assert.Empty(Input(matcher, KeyboardKey.B));
         }
-        foreach (var key in new[] { KeyboardKey.A, KeyboardKey.B, KeyboardKey.C }) Input(matcher, key, false);
+        foreach (var key in new[] {
+            KeyboardKey.A,
+            KeyboardKey.B,
+            KeyboardKey.C
+})
+        {
+            Input(matcher, key, false);
+        }
         matcher.Input(new(999, 999, false), null, false);
         Assert.Empty(Input(matcher, KeyboardKey.A));
         Assert.Single(Input(matcher, KeyboardKey.B));
@@ -57,7 +106,8 @@ public sealed class KeyboardTriggerMatcherTest
         Input(matcher, KeyboardKey.A);
         Assert.Empty(Input(matcher, KeyboardKey.B));
         Assert.Empty(Input(matcher, KeyboardKey.C, false));
-        Input(matcher, KeyboardKey.A, false); Input(matcher, KeyboardKey.B, false);
+        Input(matcher, KeyboardKey.A, false);
+        Input(matcher, KeyboardKey.B, false);
         Input(matcher, KeyboardKey.B);
         Assert.Same(ba, Assert.Single(Input(matcher, KeyboardKey.A)));
     }
@@ -85,10 +135,12 @@ public sealed class KeyboardTriggerMatcherTest
         var matcher = new KeyboardTriggerMatcher();
         var old = new KeyboardTriggerBinding(new(), [KeyboardKey.A, KeyboardKey.B]);
         var next = new KeyboardTriggerBinding(new(), [KeyboardKey.A, KeyboardKey.B]);
-        matcher.Update([old]); Input(matcher, KeyboardKey.A);
+        matcher.Update([old]);
+        Input(matcher, KeyboardKey.A);
         matcher.Update([next]);
         Assert.Empty(Input(matcher, KeyboardKey.B));
-        Input(matcher, KeyboardKey.A, false); Input(matcher, KeyboardKey.B, false);
+        Input(matcher, KeyboardKey.A, false);
+        Input(matcher, KeyboardKey.B, false);
         Input(matcher, KeyboardKey.A);
         Assert.Same(next, Assert.Single(Input(matcher, KeyboardKey.B)));
         matcher.Update([]);
@@ -128,7 +180,11 @@ public sealed class KeyboardTriggerMatcherTest
     [InlineData(0x2e, 0x53, false, KeyboardKey.NumpadDecimal)]
     [InlineData(0x2e, 0x53, true, KeyboardKey.Delete)]
     [InlineData(0x0c, 0x4c, false, KeyboardKey.Numpad5)]
-    public void NumpadKeysRetainTheirIdentityWhenNumLockIsOff(int key, int scan, bool extended, KeyboardKey expected) =>
+    public void NumpadKeysRetainTheirIdentityWhenNumLockIsOff(
+        int key,
+        int scan,
+        bool extended,
+        KeyboardKey expected) =>
         Assert.Equal(expected, WindowsKeyboardEventListener.MapKey(key, scan, extended));
 
     [Fact]
@@ -150,9 +206,11 @@ public sealed class KeyboardTriggerMatcherTest
         var right = new KeyboardInputIdentity(999, 999, true);
         Assert.Empty(matcher.Input(right, KeyboardKey.Ctrl, true));
         Assert.Single(Input(matcher, KeyboardKey.A));
-        Input(matcher, KeyboardKey.A, false); Input(matcher, KeyboardKey.Ctrl, false);
+        Input(matcher, KeyboardKey.A, false);
+        Input(matcher, KeyboardKey.Ctrl, false);
         Assert.Empty(Input(matcher, KeyboardKey.A));
-        Input(matcher, KeyboardKey.A, false); matcher.Input(right, KeyboardKey.Ctrl, false);
+        Input(matcher, KeyboardKey.A, false);
+        matcher.Input(right, KeyboardKey.Ctrl, false);
         Input(matcher, KeyboardKey.Ctrl);
         Assert.Single(Input(matcher, KeyboardKey.A));
     }

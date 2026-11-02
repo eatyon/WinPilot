@@ -16,12 +16,23 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         var values = new Dictionary<string, object?> { ["programPath"] = "app.exe" };
         if (explicitNull)
-            foreach (var key in new[] { "arguments", "workingDirectory", "runElevated", "silent" }) values[key] = null;
-
+        {
+            foreach (var key in new[] {
+                "arguments",
+                "workingDirectory",
+                "runElevated",
+                "silent"
+})
+            {
+                values[key] = null;
+            }
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.StartProgram, values));
 
         Assert.Null(error);
-        Assert.Equal(new ProgramLaunchRequest("app.exe", "", "", false, false), Assert.Single(fixture.Programs.Requests));
+        Assert.Equal(
+            new ProgramLaunchRequest("app.exe", "", "", false, false),
+            Assert.Single(fixture.Programs.Requests));
     }
 
     [Fact]
@@ -55,7 +66,9 @@ public sealed partial class TaskServiceTest
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.StartProgram, values));
 
         Assert.Null(error);
-        Assert.Equal(new ProgramLaunchRequest("123", "456", "789", true, false), Assert.Single(fixture.Programs.Requests));
+        Assert.Equal(
+            new ProgramLaunchRequest("123", "456", "789", true, false),
+            Assert.Single(fixture.Programs.Requests));
     }
 
     [Theory]
@@ -90,11 +103,17 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var values = new Dictionary<string, object?>();
-        if (valueType != "missing") values["delaySeconds"] = valueType switch
+        if (valueType != "missing")
         {
-            "null" => null, "negative" => -1, "text" => "0", "rounded" => 0.4, _ => false
-        };
-
+            values["delaySeconds"] = valueType switch
+            {
+                "null" => null,
+                "negative" => -1,
+                "text" => "0",
+                "rounded" => 0.4,
+                _ => false
+            };
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.Delay, values));
 
         Assert.Null(error);
@@ -130,15 +149,17 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var values = new Dictionary<string, object?>();
-        if (valueType != "missing") values["keys"] = valueType switch
+        if (valueType != "missing")
         {
-            "strings" => new[] { "F11" }.Select(key => key),
-            "objects" => new object[] { "F11" },
-            "json" => HostPlanJsonValue("[\"F11\"]"),
-            "text" => "F11",
-            _ => null
-        };
-
+            values["keys"] = valueType switch
+            {
+                "strings" => new[] { "F11" }.Select(key => key),
+                "objects" => new object[] { "F11" },
+                "json" => HostPlanJsonValue("[\"F11\"]"),
+                "text" => "F11",
+                _ => null
+            };
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.Keyboard, values));
 
         if (succeeds)
@@ -161,8 +182,10 @@ public sealed partial class TaskServiceTest
     {
         await using var fixture = new TaskServiceFixture();
         var values = new Dictionary<string, object?> { ["command"] = "echo test" };
-        if (explicitNull) values["shell"] = null;
-
+        if (explicitNull)
+        {
+            values["shell"] = null;
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.Shell, values));
 
         Assert.IsType<InvalidOperationException>(error);
@@ -179,11 +202,16 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         await fixture.Terminals.DisposeAsync();
         var values = new Dictionary<string, object?> { ["shell"] = "CMD" };
-        if (valueType != "missing") values["command"] = valueType == "null" ? null : 123;
-
+        if (valueType != "missing")
+        {
+            values["command"] = valueType == "null" ? null : 123;
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.Shell, values));
 
-        if (valueType == "number") Assert.IsType<ObjectDisposedException>(error);
+        if (valueType == "number")
+        {
+            Assert.IsType<ObjectDisposedException>(error);
+        }
         else
         {
             Assert.IsType<InvalidOperationException>(error);
@@ -202,12 +230,15 @@ public sealed partial class TaskServiceTest
             Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["$vars.result"] = "已完成" }));
         var parameters = new Dictionary<string, object?>
         {
-            ["content"] = "$vars.result\n$time", ["channel"] = " QQBot "
+            ["content"] = "$vars.result\n$time",
+            ["channel"] = " QQBot "
         };
 
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
-            ["content"] = "$param.content", ["channel"] = "$param.channel", ["image"] = null
+            ["content"] = "$param.content",
+            ["channel"] = "$param.channel",
+            ["image"] = null
         }), parameters);
 
         Assert.Null(error);
@@ -224,17 +255,26 @@ public sealed partial class TaskServiceTest
     [InlineData("path", "image 必须是 PluginImageContent")]
     [InlineData("bytes", "image 必须是 PluginImageContent")]
     [InlineData("empty", "通知图片大小必须在 1 字节到 10 MB 之间")]
-    public async Task HostPlanNotificationKeepsExplicitImageTypeAndEmptyImageErrors(string valueType, string expectedError)
+    public async Task HostPlanNotificationKeepsExplicitImageTypeAndEmptyImageErrors(
+        string valueType,
+        string expectedError)
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         object image = valueType switch
         {
-            "path" => "C:\\image.png", "bytes" => new byte[] { 1 }, _ => new PluginImageContent([], "image/png")
+            "path" => "C:\\image.png",
+            "bytes" => new byte[] { 1 },
+            _ => new PluginImageContent([], "image/png")
         };
 
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification,
-            new Dictionary<string, object?> { ["channel"] = "QQBot", ["content"] = "测试通知", ["image"] = image }));
+            new Dictionary<string, object?>
+            {
+                ["channel"] = "QQBot",
+                ["content"] = "测试通知",
+                ["image"] = image
+            }));
 
         Assert.IsType<InvalidOperationException>(error);
         Assert.Equal(expectedError, error.Message);
@@ -249,12 +289,18 @@ public sealed partial class TaskServiceTest
     [InlineData("prefix $param.target", "target", "resolved", "prefix $param.target")]
     [InlineData("$param.target", "target", null, "")]
     [InlineData("$param.target", "target", 123, "123")]
-    public async Task HostPlanParameterReferencesKeepExactLookupAndWholeValueResolution(string reference, string? key, object? value, string expectedArguments)
+    public async Task HostPlanParameterReferencesKeepExactLookupAndWholeValueResolution(
+        string reference,
+        string? key,
+        object? value,
+        string expectedArguments)
     {
         await using var fixture = new TaskServiceFixture();
         var parameters = new Dictionary<string, object?>();
-        if (key is not null) parameters[key] = value;
-
+        if (key is not null)
+        {
+            parameters[key] = value;
+        }
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.StartProgram,
             new Dictionary<string, object?> { ["programPath"] = "app.exe", ["arguments"] = reference }), parameters);
 
@@ -266,12 +312,22 @@ public sealed partial class TaskServiceTest
     [InlineData(PluginHostActionType.Delay, "delaySeconds", "0", PluginActionParameterType.Number)]
     [InlineData(PluginHostActionType.StartProgram, "runElevated", "true", PluginActionParameterType.Checkbox)]
     [InlineData(PluginHostActionType.Keyboard, "keys", "[\"F11\"]", PluginActionParameterType.MultiCheckbox)]
-    public async Task HostPlanJsonParameterReferencesKeepCurrentUnsupportedTypes(PluginHostActionType type, string key, string json, PluginActionParameterType parameterType)
+    public async Task HostPlanJsonParameterReferencesKeepCurrentUnsupportedTypes(
+        PluginHostActionType type,
+        string key,
+        string json,
+        PluginActionParameterType parameterType)
     {
         await using var fixture = new TaskServiceFixture();
         var values = new Dictionary<string, object?> { [key] = "$param.value" };
-        if (type == PluginHostActionType.StartProgram) values["programPath"] = "app.exe";
-        var definition = new PluginActionParameterDefinition("value", "Value", parameterType,
+        if (type == PluginHostActionType.StartProgram)
+        {
+            values["programPath"] = "app.exe";
+        }
+        var definition = new PluginActionParameterDefinition(
+            "value",
+            "Value",
+            parameterType,
             Options: parameterType == PluginActionParameterType.MultiCheckbox ? [new("F11", "F11")] : null);
 
         var error = await RunHostPlanAsync(fixture, new(type, values),
@@ -282,7 +338,10 @@ public sealed partial class TaskServiceTest
             Assert.IsType<KeyboardInputException>(error);
             Assert.Equal("每次只能发送 1 到 3 个按键", error.Message);
         }
-        else Assert.IsType<InvalidCastException>(error);
+        else
+        {
+            Assert.IsType<InvalidCastException>(error);
+        }
         Assert.Empty(fixture.Programs.Requests);
         Assert.Null(fixture.SentKeys);
     }
@@ -318,7 +377,10 @@ public sealed partial class TaskServiceTest
             return PluginTaskActionResult.Success(new PluginHostActionPlan([
                 new(PluginHostActionType.Delay, new Dictionary<string, object?> { ["delaySeconds"] = 86401 })]));
         });
-        fixture.Tasks.Create(new("HostPlan", true, new(TaskTriggerType.WinPilotStartup),
+        fixture.Tasks.Create(new(
+            "HostPlan",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.Extension, PluginId: "host", ActionId: "plan")]));
         fixture.Tasks.RunNow("HostPlan");
         try
@@ -333,26 +395,47 @@ public sealed partial class TaskServiceTest
             Assert.Contains("任务「HostPlan」已取消", fixture.Logger.Messages);
             Assert.Empty(fixture.Logger.Exceptions);
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
-    private static async Task<Exception?> RunHostPlanAsync(TaskServiceFixture fixture, PluginHostActionStep step,
-        IReadOnlyDictionary<string, object?>? parameters = null, IReadOnlyList<PluginActionParameterDefinition>? schema = null, bool returnedPlan = false)
+    private static async Task<Exception?> RunHostPlanAsync(
+        TaskServiceFixture fixture,
+        PluginHostActionStep step,
+        IReadOnlyDictionary<string, object?>? parameters = null,
+        IReadOnlyList<PluginActionParameterDefinition>? schema = null,
+        bool returnedPlan = false)
     {
         using var scope = fixture.Extensions.CreateScope("host", "Host");
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var plan = new PluginHostActionPlan([step]);
         schema ??= parameters?.Keys.Select(key => new PluginActionParameterDefinition(key, key, PluginActionParameterType.Text)).ToArray();
-        ((IPluginTaskActionApi)scope).Register([new("plan", "Plan", schema, returnedPlan ? null : plan)], (_, _, _) =>
-            returnedPlan ? Task.FromResult(PluginTaskActionResult.Success(plan)) : throw new InvalidOperationException("声明计划不应触发回调"));
+        ((IPluginTaskActionApi)scope).Register(
+            [new("plan", "Plan", schema, returnedPlan ? null : plan)],
+            (_, _, _) =>
+                returnedPlan
+                    ? Task.FromResult(PluginTaskActionResult.Success(plan))
+                    : throw new InvalidOperationException("声明计划不应触发回调"));
         ((IPluginTaskActionApi)scope).Register([new("complete", "Complete")], (_, _, _) =>
         {
             completed.TrySetResult();
             return Task.FromResult(PluginTaskActionResult.Success());
         });
-        fixture.Tasks.Create(new("HostPlan", true, new(TaskTriggerType.WinPilotStartup), [
-            new(TaskActionType.Extension, PluginId: "host", ActionId: "plan", Parameters: parameters, ContinueOnFailure: true),
-            new(TaskActionType.Extension, PluginId: "host", ActionId: "complete")]));
+        fixture.Tasks.Create(new(
+            "HostPlan",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(
+                    TaskActionType.Extension,
+                    PluginId: "host",
+                    ActionId: "plan",
+                    Parameters: parameters,
+                    ContinueOnFailure: true),
+                new(TaskActionType.Extension, PluginId: "host", ActionId: "complete")
+]));
         fixture.Tasks.RunNow("HostPlan");
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var errors = fixture.Logger.Exceptions.ToArray();

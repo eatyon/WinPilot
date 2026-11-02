@@ -3,6 +3,9 @@ using WinPilot.Core.Tasks;
 
 namespace WinPilot.Features.Tasks;
 
+/// <summary>
+/// 任务文件的序列化模型，与运行时定义分开，控制字段输出和类型解析。
+/// </summary>
 public sealed class TaskPersistenceFile
 {
     public string Name { get; init; } = "";
@@ -10,17 +13,22 @@ public sealed class TaskPersistenceFile
     public TaskTriggerPersistence Trigger { get; init; } = new();
     public IReadOnlyList<TaskActionPersistence> Actions { get; init; } = [];
 
-    public static TaskPersistenceFile From(WinPilotTask task) => new()
-    {
-        Name = task.Name,
-        Enabled = task.Enabled,
-        Trigger = TaskTriggerPersistence.From(task.Trigger),
-        Actions = task.Actions.Select(TaskActionPersistence.From).ToArray()
-    };
+    public static TaskPersistenceFile From(WinPilotTask task) =>
+        new()
+        {
+            Name = task.Name,
+            Enabled = task.Enabled,
+            Trigger = TaskTriggerPersistence.From(task.Trigger),
+            Actions = task.Actions.Select(TaskActionPersistence.From).ToArray()
+        };
 
-    public WinPilotTask ToTask() => new(Name, Enabled, Trigger.ToTrigger(), Actions.Select(action => action.ToAction()).ToArray());
+    public WinPilotTask ToTask() =>
+        new(Name, Enabled, Trigger.ToTrigger(), Actions.Select(action => action.ToAction()).ToArray());
 }
 
+/// <summary>
+/// 按触发类型保存相关字段，读取时将字符串类型还原为受支持的枚举值。
+/// </summary>
 public sealed class TaskTriggerPersistence
 {
     public string Type { get; init; } = "";
@@ -32,30 +40,49 @@ public sealed class TaskTriggerPersistence
     public string? TriggerId { get; init; }
     public IReadOnlyDictionary<string, object?>? Parameters { get; init; }
 
-    public static TaskTriggerPersistence From(TaskTrigger trigger) => trigger.Type switch
-    {
-        TaskTriggerType.Cron => new() { Type = trigger.Type.ToString(), Cron = trigger.Cron ?? "" },
-        TaskTriggerType.Keyboard => new() { Type = trigger.Type.ToString(), Keys = trigger.Keys?.ToArray() ?? [] },
-        TaskTriggerType.Process => new() { Type = trigger.Type.ToString(), Event = trigger.Event?.ToString(), ProcessPaths = trigger.ProcessPaths?.ToArray() ?? [] },
-        TaskTriggerType.Extension => new() { Type = trigger.Type.ToString(), PluginId = trigger.PluginId, TriggerId = trigger.TriggerId, Parameters = trigger.Parameters },
-        _ => new() { Type = trigger.Type.ToString() }
-    };
+    public static TaskTriggerPersistence From(TaskTrigger trigger) =>
+        trigger.Type switch
+        {
+            TaskTriggerType.Cron => new() { Type = trigger.Type.ToString(), Cron = trigger.Cron ?? "" },
+            TaskTriggerType.Keyboard => new() { Type = trigger.Type.ToString(), Keys = trigger.Keys?.ToArray() ?? [] },
+            TaskTriggerType.Process => new()
+            {
+                Type = trigger.Type.ToString(),
+                Event = trigger.Event?.ToString(),
+                ProcessPaths = trigger.ProcessPaths?.ToArray() ?? []
+            },
+            TaskTriggerType.Extension => new()
+            {
+                Type = trigger.Type.ToString(),
+                PluginId = trigger.PluginId,
+                TriggerId = trigger.TriggerId,
+                Parameters = trigger.Parameters
+            },
+            _ => new() { Type = trigger.Type.ToString() }
+        };
 
     public TaskTrigger ToTrigger()
     {
         var type = ParseEnum<TaskTriggerType>(Type, "触发条件");
         var processEvent = type == TaskTriggerType.Process && Event is not null
-            ? ParseEnum<TaskProcessEventType>(Event, "程序事件") : (TaskProcessEventType?)null;
+            ? ParseEnum<TaskProcessEventType>(Event, "程序事件")
+            : (TaskProcessEventType?)null;
         return new(type, Cron, ProcessPaths, PluginId, TriggerId, Parameters, processEvent, Keys);
     }
 
     internal static T ParseEnum<T>(string value, string fieldName) where T : struct, Enum
     {
-        if (Enum.TryParse<T>(value, true, out var parsed) && Enum.IsDefined(parsed)) return parsed;
+        if (Enum.TryParse<T>(value, true, out var parsed) && Enum.IsDefined(parsed))
+        {
+            return parsed;
+        }
         throw new JsonException($"{fieldName}类型无效：{value}");
     }
 }
 
+/// <summary>
+/// 按动作类型输出相关字段，并按持久化约定省略可选值。
+/// </summary>
 public sealed class TaskActionPersistence
 {
     public string Type { get; init; } = "";
@@ -80,53 +107,104 @@ public sealed class TaskActionPersistence
     public string? TaskName { get; init; }
     public string? State { get; init; }
 
-    public static TaskActionPersistence From(TaskAction action) => action.Type switch
-    {
-        TaskActionType.StartProgram => new()
+    public static TaskActionPersistence From(TaskAction action) =>
+        action.Type switch
         {
-            Type = action.Type.ToString(),
-            ProgramPath = action.ProgramPath ?? "",
-            Arguments = EmptyToNull(action.Arguments),
-            WorkingDirectory = EmptyToNull(action.WorkingDirectory),
-            RunElevated = action.RunElevated,
-            Silent = action.Silent,
-            ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
-        },
-        TaskActionType.StartTag => new() { Type = action.Type.ToString(), TagName = action.TagName ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.EndProcess => new() { Type = action.Type.ToString(), ProcessName = action.ProcessName ?? "", CurrentUserOnly = TrueOrNull(action.CurrentUserOnly), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.Delay => new() { Type = action.Type.ToString(), DelaySeconds = action.DelaySeconds, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.Keyboard => new() { Type = action.Type.ToString(), Keys = action.Keys?.ToArray() ?? [], ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.Shell => new() { Type = action.Type.ToString(), Shell = action.Shell ?? "", Command = action.Command ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.SendNotification => new() { Type = action.Type.ToString(), NotificationContent = action.NotificationContent ?? "", NotificationChannel = EmptyToNull(action.NotificationChannel), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.Extension => new() { Type = action.Type.ToString(), PluginId = action.PluginId, ActionId = action.ActionId, Parameters = action.Parameters, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.TaskState => new() { Type = action.Type.ToString(), TaskName = action.TaskName, State = action.State?.ToString(), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        _ => throw new JsonException($"动作类型无效：{action.Type}")
-    };
+            TaskActionType.StartProgram => new()
+            {
+                Type = action.Type.ToString(),
+                ProgramPath = action.ProgramPath ?? "",
+                Arguments = EmptyToNull(action.Arguments),
+                WorkingDirectory = EmptyToNull(action.WorkingDirectory),
+                RunElevated = action.RunElevated,
+                Silent = action.Silent,
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.StartTag => new()
+            {
+                Type = action.Type.ToString(),
+                TagName = action.TagName ?? "",
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.EndProcess => new()
+            {
+                Type = action.Type.ToString(),
+                ProcessName = action.ProcessName ?? "",
+                CurrentUserOnly = TrueOrNull(action.CurrentUserOnly),
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.Delay => new()
+            {
+                Type = action.Type.ToString(),
+                DelaySeconds = action.DelaySeconds,
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.Keyboard => new()
+            {
+                Type = action.Type.ToString(),
+                Keys = action.Keys?.ToArray() ?? [],
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.Shell => new()
+            {
+                Type = action.Type.ToString(),
+                Shell = action.Shell ?? "",
+                Command = action.Command ?? "",
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.SendNotification => new()
+            {
+                Type = action.Type.ToString(),
+                NotificationContent = action.NotificationContent ?? "",
+                NotificationChannel = EmptyToNull(action.NotificationChannel),
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.Extension => new()
+            {
+                Type = action.Type.ToString(),
+                PluginId = action.PluginId,
+                ActionId = action.ActionId,
+                Parameters = action.Parameters,
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            TaskActionType.TaskState => new()
+            {
+                Type = action.Type.ToString(),
+                TaskName = action.TaskName,
+                State = action.State?.ToString(),
+                ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
+            },
+            _ => throw new JsonException($"动作类型无效：{action.Type}")
+        };
 
-    public TaskAction ToAction() => new(
-        TaskTriggerPersistence.ParseEnum<TaskActionType>(Type, "动作"),
-        ProgramPath,
-        Arguments,
-        WorkingDirectory,
-        RunElevated ?? false,
-        Silent ?? false,
-        TagName,
-        ProcessName,
-        DelaySeconds ?? 0,
-        Keys,
-        Shell,
-        Command,
-        NotificationContent,
-        NotificationChannel,
-        PluginId,
-        ActionId,
-        Parameters,
-        ContinueOnFailure ?? false,
-        CurrentUserOnly ?? false,
-        TaskName,
-        Type.Equals(nameof(TaskActionType.TaskState), StringComparison.OrdinalIgnoreCase) && State is not null
-            ? TaskTriggerPersistence.ParseEnum<TaskStateOperation>(State, "任务状态") : null);
+    public TaskAction ToAction() =>
+        new(
+            TaskTriggerPersistence.ParseEnum<TaskActionType>(Type, "动作"),
+            ProgramPath,
+            Arguments,
+            WorkingDirectory,
+            RunElevated ?? false,
+            Silent ?? false,
+            TagName,
+            ProcessName,
+            DelaySeconds ?? 0,
+            Keys,
+            Shell,
+            Command,
+            NotificationContent,
+            NotificationChannel,
+            PluginId,
+            ActionId,
+            Parameters,
+            ContinueOnFailure ?? false,
+            CurrentUserOnly ?? false,
+            TaskName,
+            Type.Equals(nameof(TaskActionType.TaskState), StringComparison.OrdinalIgnoreCase)
+            && State is not null
+                ? TaskTriggerPersistence.ParseEnum<TaskStateOperation>(State, "任务状态")
+                : null);
 
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
     private static bool? TrueOrNull(bool value) => value ? true : null;
 }

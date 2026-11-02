@@ -30,7 +30,11 @@ public sealed class WindowsKeyboardEventListenerTest
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopping);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listener.StopAsync(budget.Token));
             Assert.Single(logger.Messages.Where(item => item.Level == LogLevel.Warning));
-            await Task.Run(() => { listener.Dispose(); listener.Dispose(); }).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Run(() =>
+            {
+                listener.Dispose();
+                listener.Dispose();
+            }).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(listener.StopAsync(CancellationToken.None).IsCompleted);
         }
         finally
@@ -69,7 +73,10 @@ public sealed class WindowsKeyboardEventListenerTest
             Start(listener, [binding]);
             Assert.True(listener.Availability);
         }
-        finally { await Stop(listener); }
+        finally
+        {
+            await Stop(listener);
+        }
         Assert.Null(listener.Availability);
     }
 
@@ -93,7 +100,10 @@ public sealed class WindowsKeyboardEventListenerTest
                 entered.TrySetResult();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             }
-            else next.TrySetResult();
+            else
+            {
+                next.TrySetResult();
+            }
         };
         try
         {
@@ -105,7 +115,10 @@ public sealed class WindowsKeyboardEventListenerTest
             listener.ReceiveInput(0x41, 0x1e, 0x80, 0);
             await Task.Run(() =>
             {
-                if (disableFirst) listener.Update([]);
+                if (disableFirst)
+                {
+                    listener.Update([]);
+                }
                 listener.Update([new(nextOwner, [KeyboardKey.A])]);
             }).WaitAsync(TimeSpan.FromSeconds(5));
             if (disableFirst)
@@ -124,7 +137,11 @@ public sealed class WindowsKeyboardEventListenerTest
             await next.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(new[] { oldOwner, nextOwner }, observed.ToArray());
         }
-        finally { release.Set(); await Stop(listener); }
+        finally
+        {
+            release.Set();
+            await Stop(listener);
+        }
     }
 
     [Theory]
@@ -148,7 +165,10 @@ public sealed class WindowsKeyboardEventListenerTest
                 entered.TrySetResult();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             }
-            else recovered.TrySetResult();
+            else
+            {
+                recovered.TrySetResult();
+            }
         };
         try
         {
@@ -190,7 +210,11 @@ public sealed class WindowsKeyboardEventListenerTest
             Assert.DoesNotContain(logger.Messages, item => item.Level == LogLevel.Error);
             Assert.DoesNotContain(logger.Messages, item => item.Message == "发送按键监听控制消息失败");
         }
-        finally { release.Set(); await Stop(listener); }
+        finally
+        {
+            release.Set();
+            await Stop(listener);
+        }
     }
 
     [Fact]
@@ -206,7 +230,10 @@ public sealed class WindowsKeyboardEventListenerTest
                 Start(listener, [new(new(), [KeyboardKey.B])]);
                 Assert.True(listener.Availability);
             }
-            finally { await Stop(listener); }
+            finally
+            {
+                await Stop(listener);
+            }
         }
     }
 
@@ -226,7 +253,10 @@ public sealed class WindowsKeyboardEventListenerTest
                 entered.TrySetResult();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             }
-            else recovered.TrySetResult();
+            else
+            {
+                recovered.TrySetResult();
+            }
         };
         try
         {
@@ -235,7 +265,10 @@ public sealed class WindowsKeyboardEventListenerTest
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await Task.Run(() =>
             {
-                for (var index = 0; index < 5000; index++) Input(listener, 0x41, 0x1e, index % 2 == 0 ? 0x80 : 0);
+                for (var index = 0; index < 5000; index++)
+                {
+                    Input(listener, 0x41, 0x1e, index % 2 == 0 ? 0x80 : 0);
+                }
             }).WaitAsync(TimeSpan.FromSeconds(5));
             release.Set();
             Assert.True(logger.Entered.Wait(TimeSpan.FromSeconds(5)));
@@ -245,7 +278,12 @@ public sealed class WindowsKeyboardEventListenerTest
             Assert.Equal(2, count);
             Assert.Single(logger.Messages.Where(item => item.Level == LogLevel.Warning));
         }
-        finally { release.Set(); logger.Release.Set(); await Stop(listener); }
+        finally
+        {
+            release.Set();
+            logger.Release.Set();
+            await Stop(listener);
+        }
     }
 
     [Fact]
@@ -254,7 +292,11 @@ public sealed class WindowsKeyboardEventListenerTest
         using var listener = new WindowsKeyboardEventListener(NullLogger<WindowsKeyboardEventListener>.Instance);
         var fired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var count = 0;
-        listener.Triggered += _ => { Interlocked.Increment(ref count); fired.TrySetResult(); };
+        listener.Triggered += _ =>
+        {
+            Interlocked.Increment(ref count);
+            fired.TrySetResult();
+        };
         try
         {
             Start(listener, [new(new(), [KeyboardKey.NumpadEnter])]);
@@ -264,7 +306,10 @@ public sealed class WindowsKeyboardEventListenerTest
             Input(listener, 0x0d, 0x1c, 0x91);
             await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
-        finally { await Stop(listener); }
+        finally
+        {
+            await Stop(listener);
+        }
         Assert.Equal(1, count);
     }
 
@@ -281,8 +326,15 @@ public sealed class WindowsKeyboardEventListenerTest
         int count = 0;
         listener.Triggered += _ =>
         {
-            if (Interlocked.Increment(ref count) == 1) { entered.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(10))); }
-            else recovered.TrySetResult();
+            if (Interlocked.Increment(ref count) == 1)
+            {
+                entered.TrySetResult();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+            }
+            else
+            {
+                recovered.TrySetResult();
+            }
         };
         try
         {
@@ -298,7 +350,11 @@ public sealed class WindowsKeyboardEventListenerTest
             await recovered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(2, count);
         }
-        finally { release.Set(); await Stop(listener); }
+        finally
+        {
+            release.Set();
+            await Stop(listener);
+        }
     }
 
     [Fact]
@@ -309,7 +365,8 @@ public sealed class WindowsKeyboardEventListenerTest
             using var listener = new WindowsKeyboardEventListener(NullLogger<WindowsKeyboardEventListener>.Instance);
             listener.Update([new(new(), [KeyboardKey.A])]);
             await Stop(listener);
-            listener.Dispose(); listener.Dispose();
+            listener.Dispose();
+            listener.Dispose();
             listener.Update([new(new(), [KeyboardKey.B])]);
             await Stop(listener);
         }
@@ -323,9 +380,16 @@ public sealed class WindowsKeyboardEventListenerTest
         var update = Task.Run(() =>
         {
             Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
-            for (int i = 0; i < 100; i++) listener.Update(i % 2 == 0 ? [new(new(), [KeyboardKey.A])] : []);
+            for (int i = 0; i < 100; i++)
+            {
+                listener.Update(i % 2 == 0 ? [new(new(), [KeyboardKey.A])] : []);
+            }
         });
-        var stop = Task.Run(async () => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); await Stop(listener); });
+        var stop = Task.Run(async () =>
+        {
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+            await Stop(listener);
+        });
         Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
         await Task.WhenAll(update, stop).WaitAsync(TimeSpan.FromSeconds(10));
     }
@@ -335,25 +399,36 @@ public sealed class WindowsKeyboardEventListenerTest
         listener.Update(bindings);
         WaitForStart(listener);
     }
+
     private static void WaitForStart(WindowsKeyboardEventListener listener)
     {
         nint window = 0;
-        Assert.True(SpinWait.SpinUntil(() => listener.Availability == true && (window = FindListenerWindow()) != 0, TimeSpan.FromSeconds(5)));
+        Assert.True(SpinWait.SpinUntil(
+            () => listener.Availability == true && (window = FindListenerWindow()) != 0,
+            TimeSpan.FromSeconds(5)));
         SendControl(window, 0x8001);
         AdvanceClock();
     }
+
     private static void AdvanceClock()
     {
         var before = Environment.TickCount64;
         Assert.True(SpinWait.SpinUntil(() => Environment.TickCount64 > before, TimeSpan.FromSeconds(5)));
     }
-    private static void Input(WindowsKeyboardEventListener listener, int key, int scan, int flags = 0) =>
+
+    private static void Input(
+        WindowsKeyboardEventListener listener,
+        int key,
+        int scan,
+        int flags = 0) =>
         listener.ReceiveInput(key, scan, flags, unchecked((uint)Environment.TickCount64));
+
     private static async Task Stop(WindowsKeyboardEventListener listener)
     {
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await listener.StopAsync(budget.Token);
     }
+
     private static void SendControl(nint window, uint message, int wParam = 0)
     {
         nint data = 0;
@@ -364,24 +439,36 @@ public sealed class WindowsKeyboardEventListenerTest
                 data = Marshal.AllocHGlobal(Marshal.SizeOf<DeviceInterface>());
                 Marshal.StructureToPtr(new DeviceInterface
                 {
-                    Size = Marshal.SizeOf<DeviceInterface>(), Type = 5,
+                    Size = Marshal.SizeOf<DeviceInterface>(),
+                    Type = 5,
                     ClassGuid = new("884b96c3-56ef-11d1-bc8c-00a0c91405dd")
                 }, data, false);
             }
             Assert.NotEqual(0, SendMessageTimeout(window, message, wParam, data, 2, 5000, out _));
         }
-        finally { if (data != 0) Marshal.FreeHGlobal(data); }
+        finally
+        {
+            if (data != 0)
+            {
+                Marshal.FreeHGlobal(data);
+            }
+        }
     }
+
     private static nint FindListenerWindow()
     {
         nint window = 0;
         while ((window = FindWindowEx(-3, window, null, "WinPilot keyboard listener")) != 0)
         {
             GetWindowThreadProcessId(window, out var process);
-            if (process == Environment.ProcessId) return window;
+            if (process == Environment.ProcessId)
+            {
+                return window;
+            }
         }
         return 0;
     }
+
     private static SafeWaitHandle OpenListenerThread()
     {
         var threadId = GetWindowThreadProcessId(FindListenerWindow(), out _);
@@ -389,29 +476,71 @@ public sealed class WindowsKeyboardEventListenerTest
         Assert.False(thread.IsInvalid);
         return thread;
     }
+
     private sealed class ProbeLogger : ILogger<WindowsKeyboardEventListener>, IDisposable
     {
         internal readonly ManualResetEventSlim Entered = new();
         internal readonly ManualResetEventSlim Release = new();
         internal readonly ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> Messages = new();
         internal bool BlockErrors, BlockWarnings;
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? error, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? error,
+            Func<TState, Exception?, string> formatter)
         {
             Messages.Enqueue((level, formatter(state, error), error));
             if (level == LogLevel.Error && BlockErrors || level == LogLevel.Warning && BlockWarnings)
-            { Entered.Set(); Assert.True(Release.Wait(TimeSpan.FromSeconds(15))); }
+            {
+                Entered.Set();
+                Assert.True(Release.Wait(TimeSpan.FromSeconds(15)));
+            }
         }
-        public void Dispose() { Entered.Dispose(); Release.Dispose(); }
+
+        public void Dispose()
+        {
+            Entered.Dispose();
+            Release.Dispose();
+        }
     }
+
     [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
-    private static extern nint FindWindowEx(nint parent, nint after, string? className, string title);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out uint process);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeWaitHandle OpenThread(uint access, bool inherit, uint threadId);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(SafeWaitHandle handle, uint timeout);
+    private static extern nint FindWindowEx(
+        nint parent,
+        nint after,
+        string? className,
+        string title);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint window, out uint process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeWaitHandle OpenThread(uint access, bool inherit, uint threadId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeWaitHandle handle, uint timeout);
+
     [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
-    private static extern nint SendMessageTimeout(nint window, uint message, nint wParam, nint lParam, uint flags, uint timeout, out nuint result);
+    private static extern nint SendMessageTimeout(
+        nint window,
+        uint message,
+        nint wParam,
+        nint lParam,
+        uint flags,
+        uint timeout,
+        out nuint result);
+
     [StructLayout(LayoutKind.Sequential)]
-    private struct DeviceInterface { internal int Size, Type, Reserved; internal Guid ClassGuid; internal ushort Name; }
+    private struct DeviceInterface
+    {
+        internal int Size, Type, Reserved;
+        internal Guid ClassGuid;
+        internal ushort Name;
+    }
 }

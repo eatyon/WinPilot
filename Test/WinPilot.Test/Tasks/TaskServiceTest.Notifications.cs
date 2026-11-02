@@ -4,8 +4,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.TestHost;
 using WinPilot.Core.Notifications;
 using WinPilot.Core.Tasks;
-using WinPilot.Features.Plugins;
 using WinPilot.Features.Notifications;
+using WinPilot.Features.Plugins;
 using WinPilot.Features.Tasks;
 using WinPilot.PluginContract;
 
@@ -37,7 +37,9 @@ public sealed partial class TaskServiceTest
             var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification,
                 new Dictionary<string, object?>
                 {
-                    ["channel"] = "$param.channel", ["content"] = "content", ["image"] = new PluginImageContent([], "invalid")
+                    ["channel"] = "$param.channel",
+                    ["content"] = "content",
+                    ["image"] = new PluginImageContent([], "invalid")
                 }), new Dictionary<string, object?> { ["channel"] = channel }, returnedPlan: returnedPlan);
             Assert.Equal(message, Assert.IsType<InvalidOperationException>(error).Message);
             Assert.False(notifications.Sent.Task.IsCompleted);
@@ -59,8 +61,12 @@ public sealed partial class TaskServiceTest
         var result = TaskService.ResolveNotificationContent("$time\n$test.logtime", context).Split(Environment.NewLine);
         var after = DateTimeOffset.Now.AddSeconds(1);
 
-        Assert.True(DateTimeOffset.TryParseExact(result[0], "[yyyy-MM-dd HH:mm:ss]", null,
-            System.Globalization.DateTimeStyles.AssumeLocal, out var sendTime));
+        Assert.True(DateTimeOffset.TryParseExact(
+            result[0],
+            "[yyyy-MM-dd HH:mm:ss]",
+            null,
+            System.Globalization.DateTimeStyles.AssumeLocal,
+            out var sendTime));
         Assert.InRange(sendTime, before, after);
         Assert.Equal("12:34:56", result[1]);
     }
@@ -113,7 +119,9 @@ public sealed partial class TaskServiceTest
         using var scope = registry.CreateScope("test-plugin", "Test Plugin");
         ((IPluginNotificationVariableApi)scope).Register([new("&test.image", "Image", Type: PluginVariableType.Image)]);
 
-        Assert.Equal(name, Assert.Single(TaskService.ValidateImageVariables(content, new TaskVariableCatalog(registry))));
+        Assert.Equal(
+            name,
+            Assert.Single(TaskService.ValidateImageVariables(content, new TaskVariableCatalog(registry))));
         Assert.Equal(content.Replace(name, string.Empty), VariableResolver.Remove(content, name));
     }
 
@@ -131,13 +139,17 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, image);
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: content), true);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: content),
+            true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.NotNull(sent.Message.ImagePath);
         Assert.Equal(image.Content, notifications.ImageBytes);
         Assert.Equal(expected.Replace("\n", Environment.NewLine), sent.Message.Content);
-        Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar),
+        Assert.Equal(
+            Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar),
             Path.GetDirectoryName(sent.Message.ImagePath));
         AssertTemporaryNotificationImageRemoved(notifications);
     }
@@ -145,10 +157,11 @@ public sealed partial class TaskServiceTest
     [Fact]
     public void NotificationResultsRejectFailedChannels()
     {
-        var exception = Assert.Throws<InvalidOperationException>(() => NotificationDelivery.ValidateResults([
-            new NotificationChannelResult("Windows", true),
-            new NotificationChannelResult("QQBot", false),
-            new NotificationChannelResult("Telegram", false)
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            NotificationDelivery.ValidateResults([
+                new NotificationChannelResult("Windows", true),
+                new NotificationChannelResult("QQBot", false),
+                new NotificationChannelResult("Telegram", false)
         ]));
 
         Assert.Equal("通知发送失败：QQBot、Telegram", exception.Message);
@@ -176,8 +189,11 @@ public sealed partial class TaskServiceTest
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification,
-            NotificationChannel: "QQBot", NotificationContent: content), true);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification,
+            NotificationChannel: "QQBot", NotificationContent: content),
+            true);
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(content.Replace("\n", Environment.NewLine), sent.Message.Content);
         Assert.Null(sent.Message.ImagePath);
@@ -229,8 +245,14 @@ public sealed partial class TaskServiceTest
         using var client = app.GetTestClient();
         var request = new
         {
-            name = "Image", enabled = false, trigger = new { type = "WinPilotStartup" },
-            actions = new[] { new { type = "SendNotification", notificationChannel = "QQBot", notificationContent = content } }
+            name = "Image",
+            enabled = false,
+            trigger = new { type = "WinPilotStartup" },
+            actions = new[] { new {
+                type = "SendNotification",
+                notificationChannel = "QQBot",
+                notificationContent = content
+} }
         };
         using var created = await client.PostAsJsonAsync("/api/tasks", request);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -242,9 +264,13 @@ public sealed partial class TaskServiceTest
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification,
             new Dictionary<string, object?> { ["channel"] = "QQBot", ["content"] = content }));
         if (oversized)
+        {
             Assert.Equal("通知图片不能超过 10 MB", Assert.IsType<InvalidOperationException>(error).Message);
+        }
         else
+        {
             Assert.IsType<FileNotFoundException>(error);
+        }
         Assert.False(notifications.Sent.Task.IsCompleted);
     }
 
@@ -258,7 +284,12 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         var path = Path.Combine(Path.GetTempPath(), $"winpilot-test-{Guid.NewGuid():N}.png");
-        var bytes = new byte[] { 137, 80, 78, 71 };
+        var bytes = new byte[] {
+            137,
+            80,
+            78,
+            71
+};
         await File.WriteAllBytesAsync(path, bytes);
         try
         {
@@ -266,7 +297,10 @@ public sealed partial class TaskServiceTest
             var (content, imagePath) = TaskService.ExtractDirectImagePath(input);
             Assert.Equal(expected, content);
             Assert.Equal(path, imagePath);
-            await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: input), true);
+            await RunNotificationAsync(
+                fixture,
+                new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: input),
+                true);
             var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(path, sent.Message.ImagePath);
             Assert.Equal(expected.Replace("\n", Environment.NewLine), sent.Message.Content);
@@ -286,14 +320,27 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "prefix-&test.image image.png");
-        var bytes = new byte[] { 1, 2, 3 };
+        var bytes = new byte[] {
+            1,
+            2,
+            3
+};
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         await File.WriteAllBytesAsync(path, bytes);
         using var scope = fixture.Extensions.CreateScope("test", "测试插件");
         scope.Register([new("image", "图片触发")]);
-        fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "image"),
-            [new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: $"&image=\"{path}\"", ContinueOnFailure: true),
-                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "Notification",
+            true,
+            new(TaskTriggerType.Extension, PluginId: "test", TriggerId: "image"),
+            [
+                new(
+                    TaskActionType.SendNotification,
+                    NotificationChannel: "QQBot",
+                    NotificationContent: $"&image=\"{path}\"",
+                    ContinueOnFailure: true),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
 
         scope.Emit(new("image", DateTimeOffset.Now, new Dictionary<string, object?> { ["&test.image"] = new PluginImageContent([1], "image/png") }));
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -315,15 +362,25 @@ public sealed partial class TaskServiceTest
         await File.WriteAllBytesAsync(path, [1, 2, 3]);
         using var scope = fixture.Extensions.CreateScope("test", "测试插件");
         ((IPluginNotificationVariableApi)scope).Register([new("$test.path", "内容")],
-            (_, _, _) => Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["$test.path"] = "resolved" }));
+            (_, _, _) =>
+                Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["$test.path"] = "resolved" }));
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification,
-            NotificationChannel: "QQBot", NotificationContent: $"$test.path\n&image=\"{path}\""), true);
+        await RunNotificationAsync(
+            fixture,
+            new(
+                TaskActionType.SendNotification,
+                NotificationChannel: "QQBot",
+                NotificationContent: $"$test.path\n&image=\"{path}\""),
+            true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("resolved" + Environment.NewLine, sent.Message.Content);
         Assert.Equal(path, sent.Message.ImagePath);
-        Assert.Equal(new byte[] { 1, 2, 3 }, notifications.ImageBytes);
+        Assert.Equal(new byte[] {
+            1,
+            2,
+            3
+}, notifications.ImageBytes);
     }
 
     [Fact]
@@ -334,7 +391,10 @@ public sealed partial class TaskServiceTest
         using var scope = fixture.Extensions.CreateScope("test", "测试插件");
         ((IPluginNotificationVariableApi)scope).Register([new("&test.image", "图片", Type: PluginVariableType.Image)]);
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"), false);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"),
+            false);
 
         var exception = Assert.IsType<InvalidOperationException>(Assert.Single(fixture.Logger.Exceptions));
         Assert.Equal("图片变量 &test.image 不可用", exception.Message);
@@ -348,7 +408,10 @@ public sealed partial class TaskServiceTest
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
-        fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.WinPilotStartup),
+        fixture.Tasks.Create(new(
+            "Notification",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.SendNotification, NotificationContent: "测试通知", NotificationChannel: channel)]));
         Assert.Contains("测试通知", File.ReadAllText(Path.Combine(fixture.Paths.TasksDirectory, "Notification.json")));
         var saved = Assert.Single(fixture.Tasks.GetAll()).Actions.Single();
@@ -375,8 +438,13 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, new([], "image/png"));
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot",
-            NotificationContent: string.IsNullOrEmpty(content) ? "&test.image" : $"{content}\n&test.image"), succeeds);
+        await RunNotificationAsync(
+            fixture,
+            new(
+                TaskActionType.SendNotification,
+                NotificationChannel: "QQBot",
+                NotificationContent: string.IsNullOrEmpty(content) ? "&test.image" : $"{content}\n&test.image"),
+            succeeds);
 
         if (succeeds)
         {
@@ -396,14 +464,20 @@ public sealed partial class TaskServiceTest
     [InlineData(10 * 1024 * 1024, "image/png", ".png")]
     [InlineData(1, "IMAGE/JPEG", ".jpg")]
     [InlineData(10 * 1024 * 1024, "image/jpeg", ".jpg")]
-    public async Task NotificationImageVariableAcceptsSizeBoundariesAndDeclaredFormat(int length, string contentType, string extension)
+    public async Task NotificationImageVariableAcceptsSizeBoundariesAndDeclaredFormat(
+        int length,
+        string contentType,
+        string extension)
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         var image = new byte[length];
         using var scope = RegisterNotificationImage(fixture, new(image, contentType));
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"), true);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"),
+            true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("", sent.Message.Content);
@@ -417,14 +491,20 @@ public sealed partial class TaskServiceTest
     [InlineData(1, "image/gif", "通知图片仅支持 PNG 或 JPEG")]
     [InlineData(1, "image/webp", "通知图片仅支持 PNG 或 JPEG")]
     [InlineData(1, "image/jpg", "通知图片仅支持 PNG 或 JPEG")]
-    public async Task NotificationImageVariableRejectsInvalidSizeOrFormat(int length, string contentType, string expectedError)
+    public async Task NotificationImageVariableRejectsInvalidSizeOrFormat(
+        int length,
+        string contentType,
+        string expectedError)
     {
         var image = new PluginImageContent(new byte[length], contentType);
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, image);
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"), false);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"),
+            false);
 
         var error = Assert.IsType<InvalidOperationException>(Assert.Single(fixture.Logger.Exceptions));
         Assert.Equal(expectedError, error.Message);
@@ -436,13 +516,17 @@ public sealed partial class TaskServiceTest
     [InlineData(true)]
     public async Task NotificationFailedResultsFailActionAndRemoveTemporaryImage(bool partialFailure)
     {
-        var notifications = new RecordingNotifications(_ => Task.FromResult<IReadOnlyList<NotificationChannelResult>>(partialFailure
+        var notifications = new RecordingNotifications(_ =>
+            Task.FromResult<IReadOnlyList<NotificationChannelResult>>(partialFailure
             ? [new("Windows", true), new("QQBot", false), new("qqbot", false)]
             : []));
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, new([137, 80, 78, 71], "image/png"));
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"), false);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"),
+            false);
 
         AssertTemporaryNotificationImageRemoved(notifications);
     }
@@ -454,7 +538,10 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, new([137, 80, 78, 71], "image/png"));
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"), false);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"),
+            false);
 
         AssertTemporaryNotificationImageRemoved(notifications);
     }
@@ -468,14 +555,20 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications(async token =>
         {
             if (duringDelivery)
+            {
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
             else
+            {
                 await release.Task;
+            }
             return [new("Test", true)];
         });
         await using var fixture = new TaskServiceFixture(notifications);
         using var scope = RegisterNotificationImage(fixture, new([137, 80, 78, 71], "image/png"));
-        StartNotification(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"));
+        StartNotification(
+            fixture,
+            new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&test.image"));
         await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await CancelNotificationAsync(fixture, notifications, () => release.TrySetResult());
 
@@ -491,15 +584,25 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications(async token =>
         {
             if (outcome == "cancel")
+            {
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
             return [new("Test", outcome != "failure")];
         });
         await using var fixture = new TaskServiceFixture(notifications);
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "通知图片.png");
-        var image = new byte[] { 137, 80, 78, 71 };
+        var image = new byte[] {
+            137,
+            80,
+            78,
+            71
+};
         await File.WriteAllBytesAsync(path, image);
-        var action = new TaskAction(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: $"&image=\"{path}\"");
+        var action = new TaskAction(
+            TaskActionType.SendNotification,
+            NotificationChannel: "QQBot",
+            NotificationContent: $"&image=\"{path}\"");
         if (outcome == "cancel")
         {
             StartNotification(fixture, action);
@@ -527,8 +630,11 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification,
-            NotificationContent: "测试通知", NotificationChannel: channel), true);
+        await RunNotificationAsync(
+            fixture,
+            new(TaskActionType.SendNotification,
+            NotificationContent: "测试通知", NotificationChannel: channel),
+            true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(channel, sent.Channel);
@@ -542,7 +648,12 @@ public sealed partial class TaskServiceTest
         using var scope = fixture.Extensions.CreateScope("test", "测试插件");
         IReadOnlyList<string>? requested = null;
         var calls = 0;
-        var image = new byte[] { 137, 80, 78, 71 };
+        var image = new byte[] {
+            137,
+            80,
+            78,
+            71
+};
         ((IPluginNotificationVariableApi)scope).Register([
             new("$test.summary", "结果"), new("&test.image", "图片", Type: PluginVariableType.Image)
         ], (names, _, _) =>
@@ -551,13 +662,19 @@ public sealed partial class TaskServiceTest
             requested = names;
             return Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?>
             {
-                ["$test.summary"] = "已完成", ["&test.image"] = new PluginImageContent(image, "image/png")
+                ["$test.summary"] = "已完成",
+                ["&test.image"] = new PluginImageContent(image, "image/png")
             });
         });
         var before = DateTimeOffset.Now.AddSeconds(-1);
 
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot",
-            NotificationContent: "结果：$test.summary\n\n&test.image\n$time\n$unknown"), true);
+        await RunNotificationAsync(
+            fixture,
+            new(
+                TaskActionType.SendNotification,
+                NotificationChannel: "QQBot",
+                NotificationContent: "结果：$test.summary\n\n&test.image\n$time\n$unknown"),
+            true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var lines = sent.Message.Content.Split(Environment.NewLine);
@@ -566,8 +683,12 @@ public sealed partial class TaskServiceTest
         Assert.Equal("", lines[1]);
         Assert.Equal("", lines[2]);
         Assert.Equal("$unknown", lines[4]);
-        Assert.True(DateTimeOffset.TryParseExact(lines[3], "[yyyy-MM-dd HH:mm:ss]", null,
-            System.Globalization.DateTimeStyles.AssumeLocal, out var sendTime));
+        Assert.True(DateTimeOffset.TryParseExact(
+            lines[3],
+            "[yyyy-MM-dd HH:mm:ss]",
+            null,
+            System.Globalization.DateTimeStyles.AssumeLocal,
+            out var sendTime));
         Assert.InRange(sendTime, before, DateTimeOffset.Now.AddSeconds(1));
         Assert.Equal(1, calls);
         Assert.NotNull(requested);
@@ -579,10 +700,17 @@ public sealed partial class TaskServiceTest
     }
 
 
-    private static async Task AssertNotificationSaveRejectedAsync(string? channel, string content, string field, string message)
+    private static async Task AssertNotificationSaveRejectedAsync(
+        string? channel,
+        string content,
+        string field,
+        string message)
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("Existing", false, new(TaskTriggerType.WinPilotStartup),
+        fixture.Tasks.Create(new(
+            "Existing",
+            false,
+            new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.SendNotification, NotificationContent: "original", NotificationChannel: "QQBot")]));
         var path = Path.Combine(fixture.Paths.TasksDirectory, "Existing.json");
         var original = File.ReadAllText(path);
@@ -592,9 +720,14 @@ public sealed partial class TaskServiceTest
         {
             var request = new
             {
-                name = create ? "Rejected" : "Existing", enabled = false,
+                name = create ? "Rejected" : "Existing",
+                enabled = false,
                 trigger = new { type = "WinPilotStartup" },
-                actions = new[] { new { type = "SendNotification", notificationContent = content, notificationChannel = channel } }
+                actions = new[] { new {
+                    type = "SendNotification",
+                    notificationContent = content,
+                    notificationChannel = channel
+} }
             };
             using var response = create
                 ? await client.PostAsJsonAsync("/api/tasks", request)
@@ -614,14 +747,18 @@ public sealed partial class TaskServiceTest
     {
         var scope = fixture.Extensions.CreateScope("test", "测试插件");
         ((IPluginNotificationVariableApi)scope).Register([new("&test.image", "图片", Type: PluginVariableType.Image)],
-            (_, _, _) => Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["&test.image"] = image }));
+            (_, _, _) =>
+                Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["&test.image"] = image }));
         return scope;
     }
 
     private static void StartNotification(TaskServiceFixture fixture, TaskAction action)
     {
         fixture.Tasks.Create(new("Notification", true, new(TaskTriggerType.WinPilotStartup),
-            [action with { ContinueOnFailure = true }, new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+            [
+                action with { ContinueOnFailure = true },
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         fixture.Tasks.RunNow("Notification");
     }
 
@@ -630,11 +767,20 @@ public sealed partial class TaskServiceTest
         StartNotification(fixture, action);
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var failures = fixture.Logger.Messages.Where(message => message.StartsWith("任务「Notification」第 1 个动作失败：", StringComparison.Ordinal));
-        if (succeeds) Assert.Empty(failures);
-        else Assert.Single(failures);
+        if (succeeds)
+        {
+            Assert.Empty(failures);
+        }
+        else
+        {
+            Assert.Single(failures);
+        }
     }
 
-    private static async Task CancelNotificationAsync(TaskServiceFixture fixture, RecordingNotifications notifications, Action? release = null)
+    private static async Task CancelNotificationAsync(
+        TaskServiceFixture fixture,
+        RecordingNotifications notifications,
+        Action? release = null)
     {
         fixture.Logger.ActionCancelled = true;
         var stopping = fixture.Tasks.StopAsync(CancellationToken.None);
@@ -660,7 +806,11 @@ public sealed partial class TaskServiceTest
         internal TaskCompletionSource<(NotificationMessage Message, string? Channel)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal byte[]? ImageBytes { get; private set; }
         internal CancellationToken Token { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
         {
             ImageBytes = message.ImagePath is null ? null : File.ReadAllBytes(message.ImagePath);
             Token = cancellationToken;

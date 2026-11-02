@@ -11,8 +11,13 @@ public sealed class TaskTriggerPersistenceTest
     [InlineData(TaskProcessEventType.Exited)]
     public void ProcessTriggerPersistsEventAndPathsWithoutUnrelatedFields(TaskProcessEventType processEvent)
     {
-        var trigger = new TaskTrigger(TaskTriggerType.Process, Cron: "unused", ProcessPaths: ["C:\\app.exe"],
-            PluginId: "unused", TriggerId: "unused", Event: processEvent);
+        var trigger = new TaskTrigger(
+            TaskTriggerType.Process,
+            Cron: "unused",
+            ProcessPaths: ["C:\\app.exe"],
+            PluginId: "unused",
+            TriggerId: "unused",
+            Event: processEvent);
         var stored = TaskTriggerPersistence.From(trigger);
         Assert.Equal("Process", stored.Type);
         Assert.Equal(processEvent.ToString(), stored.Event);
@@ -45,8 +50,14 @@ public sealed class TaskTriggerPersistenceTest
     {
         var content = JsonSerializer.Serialize(new
         {
-            name = "process", enabled = false,
-            trigger = new { type = "Process", @event = processEvent.ToString(), processPaths = new[] { "C:\\app.exe" } },
+            name = "process",
+            enabled = false,
+            trigger = new
+            {
+                type = "Process",
+                @event = processEvent.ToString(),
+                processPaths = new[] { "C:\\app.exe" }
+            },
             actions = new[] { new { type = "StartProgram", programPath = Environment.ProcessPath! } }
         });
         string file = "";
@@ -69,12 +80,20 @@ public sealed class TaskTriggerPersistenceTest
     [InlineData("ProcessExited")]
     [InlineData("Process")]
     [InlineData("Process", "Unknown")]
-    public async Task InvalidOrLegacyProcessFilesAreSkippedWithoutChangingTheOriginal(string type, string? processEvent = null)
+    public async Task InvalidOrLegacyProcessFilesAreSkippedWithoutChangingTheOriginal(
+        string type,
+        string? processEvent = null)
     {
         var content = JsonSerializer.Serialize(new
         {
-            name = "invalid", enabled = false,
-            trigger = new { type, @event = processEvent, processPaths = new[] { "C:\\app.exe" } },
+            name = "invalid",
+            enabled = false,
+            trigger = new
+            {
+                type,
+                @event = processEvent,
+                processPaths = new[] { "C:\\app.exe" }
+            },
             actions = new[] { new { type = "StartProgram", programPath = Environment.ProcessPath! } }
         });
         string file = "";

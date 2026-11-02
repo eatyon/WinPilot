@@ -18,16 +18,26 @@ public sealed partial class TaskServiceTest
     [InlineData(".py", "程序事件仅支持 EXE 文件")]
     [InlineData(".txt", "程序事件仅支持 EXE 文件")]
     [InlineData(".exe", "找不到指定的程序文件")]
-    public async Task ProcessEventSaveRejectsNonExeAndMissingFilesWithoutChangingTheTask(string extension, string error)
+    public async Task ProcessEventSaveRejectsNonExeAndMissingFilesWithoutChangingTheTask(
+        string extension,
+        string error)
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Create("Original", enabled: false);
         var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "Original.json");
         var originalContent = File.ReadAllText(originalFile);
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "unavailable" + extension);
-        if (extension != ".exe") File.WriteAllText(path, "test script");
-        var task = new WinPilotTask("Changed", false,
-            new(TaskTriggerType.Process, ProcessPaths: [Environment.ProcessPath!, path], Event: TaskProcessEventType.Started),
+        if (extension != ".exe")
+        {
+            File.WriteAllText(path, "test script");
+        }
+        var task = new WinPilotTask(
+            "Changed",
+            false,
+            new(
+                TaskTriggerType.Process,
+                ProcessPaths: [Environment.ProcessPath!, path],
+                Event: TaskProcessEventType.Started),
             [new(TaskActionType.Delay, DelaySeconds: 1)]);
         await using var app = await CreateTaskAppAsync(fixture);
         using var client = app.GetTestClient();
@@ -38,7 +48,8 @@ public sealed partial class TaskServiceTest
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.Equal(error,
+            Assert.Equal(
+                error,
                 problem.RootElement.GetProperty("errors").GetProperty("trigger.processPaths")[0].GetString());
             Assert.Equal(originalContent, File.ReadAllText(originalFile));
             Assert.Equal("Original", Assert.Single(fixture.Tasks.GetAll()).Name);
@@ -56,7 +67,9 @@ public sealed partial class TaskServiceTest
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "test.EXE");
         File.WriteAllText(path, "test program");
-        var task = new WinPilotTask("Process", false,
+        var task = new WinPilotTask(
+            "Process",
+            false,
             new(TaskTriggerType.Process, ProcessPaths: [path, Environment.ProcessPath!], Event: processEvent),
             [new(TaskActionType.Delay, DelaySeconds: 1)]);
         await using var app = await CreateTaskAppAsync(fixture);
@@ -76,8 +89,13 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture(initialize: paths =>
         {
             Directory.CreateDirectory(paths.TasksDirectory);
-            var task = new WinPilotTask("Unavailable", false,
-                new(TaskTriggerType.Process, ProcessPaths: [Path.Combine(paths.ApplicationDirectory, "missing.exe")], Event: TaskProcessEventType.Started),
+            var task = new WinPilotTask(
+                "Unavailable",
+                false,
+                new(
+                    TaskTriggerType.Process,
+                    ProcessPaths: [Path.Combine(paths.ApplicationDirectory, "missing.exe")],
+                    Event: TaskProcessEventType.Started),
                 [new(TaskActionType.Delay, DelaySeconds: 1)]);
             content = JsonSerializer.Serialize(TaskPersistenceFile.From(task));
             File.WriteAllText(Path.Combine(paths.TasksDirectory, "Unavailable.json"), content);
@@ -104,7 +122,10 @@ public sealed partial class TaskServiceTest
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "winpilot-listener-test.exe");
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         File.WriteAllText(path, "test program");
-        fixture.Tasks.Create(new("process", true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Started),
+        fixture.Tasks.Create(new(
+            "process",
+            true,
+            new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Started),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         SetProcessListenerState(fixture.Tasks, true);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -123,9 +144,15 @@ public sealed partial class TaskServiceTest
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             switch (operation)
             {
-                case "stop": await fixture.Tasks.StopAsync(CancellationToken.None); break;
-                case "dispose": fixture.Tasks.Dispose(); break;
-                case "disable": fixture.Tasks.SetEnabled("process", false); break;
+                case "stop":
+                    await fixture.Tasks.StopAsync(CancellationToken.None);
+                    break;
+                case "dispose":
+                    fixture.Tasks.Dispose();
+                    break;
+                case "disable":
+                    fixture.Tasks.SetEnabled("process", false);
+                    break;
                 case "restart":
                     fixture.Tasks.SetEnabled("process", false);
                     SetProcessListenerState(fixture.Tasks, false);
@@ -145,7 +172,11 @@ public sealed partial class TaskServiceTest
         Assert.Empty(ProcessPathSnapshot(fixture.Tasks));
         Assert.Equal(0, fixture.Programs.Launches);
         var queries = 0;
-        fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Started, 123457, "winpilot-listener-test"), _ => { queries++; return path; });
+        fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Started, 123457, "winpilot-listener-test"), _ =>
+        {
+            queries++;
+            return path;
+        });
         if (operation == "restart")
         {
             Assert.Equal(1, queries);
@@ -168,11 +199,21 @@ public sealed partial class TaskServiceTest
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         File.WriteAllText(path, "test program");
         foreach (var processEvent in new[] { TaskProcessEventType.Started, TaskProcessEventType.Exited })
-            fixture.Tasks.Create(new(processEvent.ToString(), true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: processEvent),
+        {
+            fixture.Tasks.Create(new(
+                processEvent.ToString(),
+                true,
+                new(TaskTriggerType.Process, ProcessPaths: [path], Event: processEvent),
                 [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        }
         SetProcessListenerState(fixture.Tasks, true);
         var queries = 0;
-        string Resolve(int id) { Assert.Equal(123456, id); queries++; return path; }
+        string Resolve(int id)
+        {
+            Assert.Equal(123456, id);
+            queries++;
+            return path;
+        }
         fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Started, 123456, "winpilot-listener-test"), Resolve);
         Assert.Equal(path, Assert.Single(ProcessPathSnapshot(fixture.Tasks)).Value);
         Assert.Equal(1, queries);
@@ -193,11 +234,18 @@ public sealed partial class TaskServiceTest
         var path = Path.Combine(fixture.Paths.ApplicationDirectory, "winpilot-listener-test.exe");
         Directory.CreateDirectory(fixture.Paths.ApplicationDirectory);
         File.WriteAllText(path, "test program");
-        fixture.Tasks.Create(new("exit", true, new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Exited),
+        fixture.Tasks.Create(new(
+            "exit",
+            true,
+            new(TaskTriggerType.Process, ProcessPaths: [path], Event: TaskProcessEventType.Exited),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         SetProcessListenerState(fixture.Tasks, true);
         var queries = 0;
-        string Resolve(int _) { queries++; return path; }
+        string Resolve(int _)
+        {
+            queries++;
+            return path;
+        }
         fixture.Tasks.ProcessEvent(new(WindowsProcessEventType.Started, 123456, "winpilot-listener-test"), Resolve);
         Assert.Equal(0, fixture.Programs.Launches);
         Assert.Equal(path, Assert.Single(ProcessPathSnapshot(fixture.Tasks)).Value);
@@ -222,6 +270,9 @@ public sealed partial class TaskServiceTest
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var gate = typeof(TaskService).GetField("gate", flags)!.GetValue(service)!;
-        lock (gate) return new Dictionary<int, string>((Dictionary<int, string>)typeof(TaskService).GetField("processPaths", flags)!.GetValue(service)!);
+        lock (gate)
+        {
+            return new Dictionary<int, string>((Dictionary<int, string>)typeof(TaskService).GetField("processPaths", flags)!.GetValue(service)!);
+        }
     }
 }

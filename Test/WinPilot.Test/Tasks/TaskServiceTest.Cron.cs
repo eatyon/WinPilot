@@ -32,16 +32,24 @@ public sealed partial class TaskServiceTest
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var times = json.RootElement.GetProperty("nextRuns").EnumerateArray().Select(value => value.GetDateTimeOffset()).ToArray();
         var cron = CronExpression.Parse(expression, CronFormat.IncludeSeconds);
-        if (expression == "0 0 0 31 2 *") Assert.Empty(times);
+        if (expression == "0 0 0 31 2 *")
+        {
+            Assert.Empty(times);
+        }
         else
         {
             Assert.Equal(5, times.Length);
-            Assert.InRange(times[0], cron.GetNextOccurrence(before, TimeZoneInfo.Local)!.Value,
+            Assert.InRange(
+                times[0],
+                cron.GetNextOccurrence(before, TimeZoneInfo.Local)!.Value,
                 cron.GetNextOccurrence(after, TimeZoneInfo.Local)!.Value);
             for (var index = 0; index < times.Length; index++)
             {
                 Assert.Equal(TimeZoneInfo.Local.GetUtcOffset(times[index]), times[index].Offset);
-                if (index > 0) Assert.Equal(cron.GetNextOccurrence(times[index - 1], TimeZoneInfo.Local), times[index]);
+                if (index > 0)
+                {
+                    Assert.Equal(cron.GetNextOccurrence(times[index - 1], TimeZoneInfo.Local), times[index]);
+                }
             }
         }
         Assert.Empty(fixture.Tasks.GetAll());
@@ -84,7 +92,10 @@ public sealed partial class TaskServiceTest
     public async Task SixFieldCronCanBeSavedWithoutChangingTheExpression(string expression)
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("generated", false, new(TaskTriggerType.Cron, Cron: expression),
+        fixture.Tasks.Create(new(
+            "generated",
+            false,
+            new(TaskTriggerType.Cron, Cron: expression),
             [new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "content")]));
         Assert.Equal(expression, Assert.Single(fixture.Tasks.GetAll()).Trigger.Cron);
     }
@@ -93,9 +104,15 @@ public sealed partial class TaskServiceTest
     public async Task CronFiresAtDueTimeOnceAndSkipsDisabledTasks()
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("enabled", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "enabled",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
-        fixture.Tasks.Create(new("disabled", false, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "disabled",
+            false,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2030, 1, 15)));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
@@ -113,7 +130,10 @@ public sealed partial class TaskServiceTest
     public async Task CronWithSecondsRunsConsecutiveSecondsWithoutSkippingTheNextOne()
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("seconds", true, new(TaskTriggerType.Cron, Cron: "* * * * * *"),
+        fixture.Tasks.Create(new(
+            "seconds",
+            true,
+            new(TaskTriggerType.Cron, Cron: "* * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time.AddMilliseconds(500), CancellationToken.None);
@@ -133,10 +153,16 @@ public sealed partial class TaskServiceTest
         await using var fixture = new TaskServiceFixture();
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2030, 1, 15)));
         Assert.Null(CronExpression.Parse("0 0 0 31 2 *", CronFormat.IncludeSeconds).GetNextOccurrence(time, TimeZoneInfo.Local));
-        fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "b-healthy",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
-        fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "a-unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         Assert.Equal(new[] { "a-unreachable", "b-healthy" }, fixture.Tasks.GetAll().Select(task => task.Name));
 
@@ -145,7 +171,8 @@ public sealed partial class TaskServiceTest
         await fixture.ProcessDueCronTasksAsync(time.AddMinutes(1), CancellationToken.None);
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, fixture.Programs.Launches);
-        Assert.True(failure is null && launchesAfterFailure == 1,
+        Assert.True(
+            failure is null && launchesAfterFailure == 1,
             $"调度异常：{failure?.GetType().Name}：{failure?.Message}；后续到期任务执行次数：{launchesAfterFailure}；同一时刻再次检查执行次数：{fixture.Programs.Launches}");
     }
 
@@ -155,10 +182,16 @@ public sealed partial class TaskServiceTest
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
-        fixture.Tasks.Create(new("b-healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "b-healthy",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
-        fixture.Tasks.Create(new("a-unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "a-unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var injected = 0;
         probe.BeforeLog = (level, message) =>
@@ -182,12 +215,18 @@ public sealed partial class TaskServiceTest
     {
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "unreachable.json");
         var original = File.ReadAllText(file);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
-        for (var index = 0; index < 10; index++) await fixture.ProcessDueCronTasksAsync(time.AddMinutes(index), CancellationToken.None);
+        for (var index = 0; index < 10; index++)
+        {
+            await fixture.ProcessDueCronTasksAsync(time.AddMinutes(index), CancellationToken.None);
+        }
         var warning = Assert.Single(probe.Warnings);
         Assert.Contains("任务「unreachable」", warning);
         Assert.Contains("0 0 0 31 2 *", warning);
@@ -212,13 +251,25 @@ public sealed partial class TaskServiceTest
     public async Task TaskListReportsCronAvailabilityWithoutPersistingItOrChangingScheduling()
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
-        fixture.Tasks.Create(new("disabled", false, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "disabled",
+            false,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
-        fixture.Tasks.Create(new("healthy", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "healthy",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
-        fixture.Tasks.Create(new("startup", true, new(TaskTriggerType.WinPilotStartup),
+        fixture.Tasks.Create(new(
+            "startup",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var originals = Directory.GetFiles(fixture.Paths.TasksDirectory).ToDictionary(path => path, File.ReadAllText);
         await using var app = await CreateTaskAppAsync(fixture);
@@ -250,7 +301,10 @@ public sealed partial class TaskServiceTest
     public async Task UnavailableCronStillAllowsManualExecutionAndClearsStatusAfterEditing()
     {
         await using var fixture = new TaskServiceFixture();
-        var task = fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        var task = fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(DateTimeOffset.Now, CancellationToken.None);
         Assert.False(fixture.Tasks.GetCronAvailability(task));
@@ -272,7 +326,10 @@ public sealed partial class TaskServiceTest
     {
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
@@ -281,12 +338,16 @@ public sealed partial class TaskServiceTest
         var task = Assert.Single(fixture.Tasks.GetAll()) with { Enabled = true };
         switch (operation)
         {
-            case "edit": fixture.Tasks.Update(task.Name, task); break;
+            case "edit":
+                fixture.Tasks.Update(task.Name, task);
+                break;
             case "reenable":
                 fixture.Tasks.SetEnabled(task.Name, false);
                 fixture.Tasks.SetEnabled(task.Name, true);
                 break;
-            case "rename": fixture.Tasks.Update(task.Name, task with { Name = "renamed" }); break;
+            case "rename":
+                fixture.Tasks.Update(task.Name, task with { Name = "renamed" });
+                break;
             case "recreate":
                 fixture.Tasks.Delete(task.Name);
                 fixture.Tasks.Create(task);
@@ -310,15 +371,22 @@ public sealed partial class TaskServiceTest
     {
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
-        var task = fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        var task = fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var file = Path.Combine(fixture.Paths.TasksDirectory, "unreachable.json");
         var original = File.ReadAllText(file);
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         using (File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
             await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
+        }
         for (var index = 1; index <= 5; index++)
+        {
             await fixture.ProcessDueCronTasksAsync(time.AddMinutes(index), CancellationToken.None);
+        }
         Assert.Contains("已停止该任务调度", Assert.Single(probe.Warnings));
         Assert.Empty(probe.Exceptions);
         Assert.Same(task, Assert.Single(fixture.Tasks.GetAll()));
@@ -340,11 +408,18 @@ public sealed partial class TaskServiceTest
         var due = expression.GetNextOccurrence(time, TimeZoneInfo.Local);
         Assert.NotNull(due);
         Assert.Null(expression.GetNextOccurrence(due.Value.AddSeconds(1), TimeZoneInfo.Local));
-        fixture.Tasks.Create(new("last", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 12 *"),
+        fixture.Tasks.Create(new(
+            "last",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 12 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
         using var fileLock = lockFile
-            ? File.Open(Path.Combine(fixture.Paths.TasksDirectory, "last.json"), FileMode.Open, FileAccess.Read, FileShare.Read)
+            ? File.Open(
+                Path.Combine(fixture.Paths.TasksDirectory, "last.json"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read)
             : null;
         await fixture.ProcessDueCronTasksAsync(due.Value, CancellationToken.None);
         await fixture.Programs.Launched.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -359,7 +434,10 @@ public sealed partial class TaskServiceTest
     public async Task CronDueProcessingPropagatesServiceCancellationWithoutSchedulingTasks()
     {
         await using var fixture = new TaskServiceFixture();
-        fixture.Tasks.Create(new("enabled", true, new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
+        fixture.Tasks.Create(new(
+            "enabled",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 * * * * *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         var time = new DateTimeOffset(2030, 1, 15, 12, 0, 0, TimeSpan.Zero);
         await fixture.ProcessDueCronTasksAsync(time, CancellationToken.None);
@@ -376,7 +454,10 @@ public sealed partial class TaskServiceTest
     {
         using var probe = new CronFailureProbeLogger();
         await using var fixture = new TaskServiceFixture(logger: probe);
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         probe.BeforeLog = (level, message) =>
         {
@@ -387,7 +468,9 @@ public sealed partial class TaskServiceTest
                 throw new InvalidOperationException("受控单任务异常");
             }
             if (level == LogLevel.Error && message.Contains("Cron 调度失败", StringComparison.Ordinal))
+            {
                 throw new InvalidOperationException("受控调度边界异常");
+            }
         };
         fixture.Tasks.NotifyPluginsLoaded();
         try
@@ -399,7 +482,8 @@ public sealed partial class TaskServiceTest
                 Assert.IsType<InvalidOperationException>(exception);
                 Assert.Equal("受控调度边界异常", exception.Message);
             });
-            Assert.True(observed.Interval >= TimeSpan.FromSeconds(1),
+            Assert.True(
+                observed.Interval >= TimeSpan.FromSeconds(1),
                 $"两次任务监听失败的间隔：{observed.Interval.TotalMilliseconds:F3} ms，应保留至少 1000 ms 的异常重试延时");
         }
         finally
@@ -419,9 +503,15 @@ public sealed partial class TaskServiceTest
         var warned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         probe.BeforeLog = (level, message) =>
         {
-            if (level == LogLevel.Warning && message.Contains("没有后续执行时间", StringComparison.Ordinal)) warned.TrySetResult();
+            if (level == LogLevel.Warning && message.Contains("没有后续执行时间", StringComparison.Ordinal))
+            {
+                warned.TrySetResult();
+            }
         };
-        fixture.Tasks.Create(new("unreachable", true, new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
+        fixture.Tasks.Create(new(
+            "unreachable",
+            true,
+            new(TaskTriggerType.Cron, Cron: "0 0 0 31 2 *"),
             [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
         fixture.Tasks.NotifyPluginsLoaded();
         try
@@ -444,29 +534,55 @@ public sealed partial class TaskServiceTest
         private readonly ManualResetEventSlim release = new(false);
         private readonly List<Exception> exceptions = [];
         private long firstFailure;
+
         internal Action<LogLevel, string>? BeforeLog { get; set; }
         internal System.Collections.Concurrent.ConcurrentQueue<string> Warnings { get; } = new();
         internal System.Collections.Concurrent.ConcurrentQueue<Exception> Exceptions { get; } = new();
         internal TaskCompletionSource<(TimeSpan Interval, Exception[] Exceptions)> Observed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             var message = formatter(state, exception);
             BeforeLog?.Invoke(level, message);
-            if (level == LogLevel.Warning) Warnings.Enqueue(message);
-            if (exception is not null) Exceptions.Enqueue(exception);
-            if (level != LogLevel.Error || exception is null || message != "任务监听失败" || exceptions.Count >= 2) return;
+            if (level == LogLevel.Warning)
+            {
+                Warnings.Enqueue(message);
+            }
+            if (exception is not null)
+            {
+                Exceptions.Enqueue(exception);
+            }
+            if (level != LogLevel.Error || exception is null || message != "任务监听失败" || exceptions.Count >= 2)
+            {
+                return;
+            }
             var timestamp = Stopwatch.GetTimestamp();
             exceptions.Add(exception);
-            if (exceptions.Count == 1) firstFailure = timestamp;
+            if (exceptions.Count == 1)
+            {
+                firstFailure = timestamp;
+            }
             else
             {
                 Observed.TrySetResult((Stopwatch.GetElapsedTime(firstFailure, timestamp), exceptions.ToArray()));
-                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Cron 复现测试未释放日志握手");
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException("Cron 复现测试未释放日志握手");
+                }
             }
         }
+
         internal void Release() => release.Set();
+
         public void Dispose() => release.Dispose();
     }
 }

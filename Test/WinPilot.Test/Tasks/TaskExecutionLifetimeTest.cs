@@ -39,11 +39,20 @@ public sealed class TaskExecutionLifetimeTest
                 });
                 await releaseAction.Task;
             }
-            else await releaseNew.Task;
+            else
+            {
+                await releaseNew.Task;
+            }
             return PluginTaskActionResult.Success();
         });
-        fixture.Tasks.Create(new("cancel", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "cancel",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.Extension, PluginId: "test", ActionId: "run"),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         fixture.Tasks.RunNow("cancel");
         var record = Running(fixture.Tasks)["cancel"]!;
         var source = Source(record);
@@ -51,11 +60,21 @@ public sealed class TaskExecutionLifetimeTest
         {
             switch (operation)
             {
-                case "rename-during-cancel": fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "retiring" }); break;
-                case "rename": fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "renamed" }); break;
-                case "delete": fixture.Tasks.Delete("cancel"); break;
-                case "stop": await fixture.Tasks.StopAsync(CancellationToken.None); break;
-                case "dispose": fixture.Tasks.Dispose(); break;
+                case "rename-during-cancel":
+                    fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "retiring" });
+                    break;
+                case "rename":
+                    fixture.Tasks.Update("cancel", fixture.Tasks.GetAll().Single() with { Name = "renamed" });
+                    break;
+                case "delete":
+                    fixture.Tasks.Delete("cancel");
+                    break;
+                case "stop":
+                    await fixture.Tasks.StopAsync(CancellationToken.None);
+                    break;
+                case "dispose":
+                    fixture.Tasks.Dispose();
+                    break;
             }
         });
         Task? probing = null;
@@ -69,7 +88,9 @@ public sealed class TaskExecutionLifetimeTest
                 if (operation is "rename" or "rename-during-cancel")
                 {
                     if (operation == "rename-during-cancel")
+                    {
                         fixture.Tasks.Update("retiring", fixture.Tasks.GetAll().Single() with { Name = "renamed" });
+                    }
                     fixture.Tasks.RunNow("renamed");
                     replacement = Running(fixture.Tasks)["renamed"]!;
                     fixture.Tasks.RunNow("renamed");
@@ -91,16 +112,25 @@ public sealed class TaskExecutionLifetimeTest
         {
             releaseAction.TrySetResult();
             releaseCallback.Set();
-            try { await Task.WhenAll(cancelling, probing ?? Task.CompletedTask, Execution(record)).WaitAsync(TimeSpan.FromSeconds(5)); }
+            try
+            {
+                await Task.WhenAll(cancelling, probing ?? Task.CompletedTask, Execution(record)).WaitAsync(TimeSpan.FromSeconds(5));
+            }
             finally
             {
                 releaseNew.TrySetResult();
-                if (replacement is not null) await Execution(replacement).WaitAsync(TimeSpan.FromSeconds(5));
+                if (replacement is not null)
+                {
+                    await Execution(replacement).WaitAsync(TimeSpan.FromSeconds(5));
+                }
                 registration.Dispose();
             }
         }
         Assert.Throws<ObjectDisposedException>(() => source.Token);
-        if (replacement is not null) await Execution(replacement).WaitAsync(TimeSpan.FromSeconds(5));
+        if (replacement is not null)
+        {
+            await Execution(replacement).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -124,13 +154,22 @@ public sealed class TaskExecutionLifetimeTest
                 });
                 await releaseFirst.Task;
             }
-            else await releaseSecond.Task;
+            else
+            {
+                await releaseSecond.Task;
+            }
             return PluginTaskActionResult.Success();
         });
         foreach (var name in new[] { "first", "second" })
         {
-            fixture.Tasks.Create(new(name, false, new(TaskTriggerType.WinPilotStartup),
-                [new(TaskActionType.Extension, PluginId: "test", ActionId: "run"), new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+            fixture.Tasks.Create(new(
+                name,
+                false,
+                new(TaskTriggerType.WinPilotStartup),
+                [
+                    new(TaskActionType.Extension, PluginId: "test", ActionId: "run"),
+                    new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
             fixture.Tasks.RunNow(name);
         }
         var second = Running(fixture.Tasks)["second"]!;
@@ -178,8 +217,16 @@ public sealed class TaskExecutionLifetimeTest
         ((IPluginTaskActionApi)scope).Register([new("run", "Run")], async (_, _, token) =>
         {
             entered.TrySetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            finally { cleaning.TrySetResult(); await release.Task; cleaned = true; }
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            finally
+            {
+                cleaning.TrySetResult();
+                await release.Task;
+                cleaned = true;
+            }
             return PluginTaskActionResult.Success();
         });
         Create(fixture, "cooperative");
@@ -200,7 +247,14 @@ public sealed class TaskExecutionLifetimeTest
             Assert.Throws<ObjectDisposedException>(() => source.Token);
             Assert.Empty(Running(fixture.Tasks).Keys.Cast<object>());
         }
-        finally { release.TrySetResult(); if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            if (stopping is not null)
+            {
+                await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
     }
 
     [Theory]
@@ -227,7 +281,10 @@ public sealed class TaskExecutionLifetimeTest
         using var budget = new CancellationTokenSource();
         try
         {
-            if (alreadyExpired) budget.Cancel();
+            if (alreadyExpired)
+            {
+                budget.Cancel();
+            }
             var stopping = fixture.Tasks.StopAsync(budget.Token);
             Assert.True(Source(record).Token.IsCancellationRequested);
             budget.Cancel();
@@ -238,7 +295,11 @@ public sealed class TaskExecutionLifetimeTest
             fixture.Tasks.RunNow("uncooperative");
             Assert.Equal(1, calls);
         }
-        finally { release.TrySetResult(); await Execution(record).WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            await Execution(record).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -265,7 +326,11 @@ public sealed class TaskExecutionLifetimeTest
             fixture.Tasks.RunNow("race");
             Assert.Equal(0, fixture.Programs.Launches);
         }
-        finally { release.Set(); await Task.WhenAll(run ?? Task.CompletedTask, stopping ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(run ?? Task.CompletedTask, stopping ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -303,7 +368,10 @@ public sealed class TaskExecutionLifetimeTest
         }
         finally
         {
-            foreach (var release in releases.Values) release.TrySetResult();
+            foreach (var release in releases.Values)
+            {
+                release.TrySetResult();
+            }
             await fixture.Tasks.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
@@ -325,10 +393,16 @@ public sealed class TaskExecutionLifetimeTest
         try
         {
             await host.StartAsync();
-            Assert.Equal(TimeSpan.FromSeconds(30), host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+            Assert.Equal(
+                TimeSpan.FromSeconds(30),
+                host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
             using var scope = fixture!.Extensions.CreateScope("test", "Test");
             ((IPluginTaskActionApi)scope).Register([new("run", "Run")], async (_, _, _) =>
-            { actionEntered.TrySetResult(); await release.Task; return PluginTaskActionResult.Success(); });
+            {
+                actionEntered.TrySetResult();
+                await release.Task;
+                return PluginTaskActionResult.Success();
+            });
             Create(fixture, "budget");
             fixture.Tasks.RunNow("budget");
             await actionEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -349,35 +423,70 @@ public sealed class TaskExecutionLifetimeTest
             release.TrySetResult();
             await host.StopAsync(new CancellationToken(true));
             await ((IAsyncDisposable)host).DisposeAsync();
-            if (fixture is not null) await fixture.DisposeAsync();
+            if (fixture is not null)
+            {
+                await fixture.DisposeAsync();
+            }
         }
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private static void Create(TaskServiceFixture fixture, string name) => fixture.Tasks.Create(new(name, false,
-        new(TaskTriggerType.WinPilotStartup), [new(TaskActionType.Extension, PluginId: "test", ActionId: "run")]));
-    private static IDictionary Running(TaskService service) => (IDictionary)typeof(TaskService).GetField("runningTasks", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
-    private static CancellationTokenSource Source(object record) => (CancellationTokenSource)record.GetType().GetProperty("Cancellation", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(record)!;
-    private static Task Execution(object record) => (Task)record.GetType().GetProperty("Execution", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(record)!;
+
+    private static void Create(TaskServiceFixture fixture, string name) =>
+        fixture.Tasks.Create(new(
+            name,
+            false,
+            new(TaskTriggerType.WinPilotStartup),
+            [new(TaskActionType.Extension, PluginId: "test", ActionId: "run")]));
+
+    private static IDictionary Running(TaskService service) =>
+        (IDictionary)typeof(TaskService).GetField("runningTasks", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+
+    private static CancellationTokenSource Source(object record) =>
+        (CancellationTokenSource)record.GetType().GetProperty("Cancellation", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(record)!;
+
+    private static Task Execution(object record) =>
+        (Task)record.GetType().GetProperty("Execution", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(record)!;
+
     private sealed class StartLogger(TaskCompletionSource entered, ManualResetEventSlim release) : ILogger<TaskService>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> format)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> format)
         {
-            if (format(state, exception) != "任务「race」开始执行，触发：手动运行") return;
+            if (format(state, exception) != "任务「race」开始执行，触发：手动运行")
+            {
+                return;
+            }
             entered.TrySetResult();
-            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("未解除任务启动握手");
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("未解除任务启动握手");
+            }
         }
     }
+
     private sealed class OtherService(TaskCompletionSource entered) : IHostedService
     {
         public Task StartAsync(CancellationToken token) => Task.CompletedTask;
+
         public async Task StopAsync(CancellationToken token)
         {
             entered.TrySetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
         }
     }
 }
