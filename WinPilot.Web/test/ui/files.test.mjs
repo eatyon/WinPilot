@@ -6,7 +6,7 @@ import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
 
-function fixture() {
+function fixture({ abortSignal = AbortSignal } = {}) {
   const code = loadScriptModule(new URL('../../src/features/files/FilesView.vue', import.meta.url),
     'browse, browseTarget, resetTargetDirectory, startEdit, confirmEditSave, submitFileOperation, uploadSelectedFiles, confirmDownload, directory, targetDirectory, targetPath, editTarget, editContent, editOriginalLength, uploadFiles, uploadDirectoryPath, uploadItems, downloadTargets, transferKind, requests, loading, submitting');
   const requests = [], toasts = [], revokedUrls = [];
@@ -14,7 +14,7 @@ function fixture() {
   const safeModeEnabled = vue.ref(false);
   let unmount;
   const context = {
-    exports: {}, AbortController, DOMException, FormData,
+    exports: {}, AbortController, AbortSignal: abortSignal, DOMException, FormData,
     URL: { createObjectURL: () => 'blob:download', revokeObjectURL: url => revokedUrls.push(url) },
     document: { createElement: () => anchor, body: { append() {} } },
     require: name => {
@@ -164,15 +164,194 @@ test('uploads use their selected directory and do not navigate back after comple
     f.subject.uploadDirectoryPath.value = 'selected-location';
     f.subject.uploadFiles.value = [new File(['content'], 'file.txt')];
     const pending = f.subject.uploadSelectedFiles();
-    assert.equal(f.requests[0].init.body.get('directory'), 'selected-location');
+    assert.equal(JSON.parse(f.requests[0].init.body).directory, 'selected-location');
     assert.equal(f.subject.uploadFiles.value.length, 0);
-    f.requests[0].resolve(ok([{ fileName: 'file.txt', success: true }]));
+    assert.equal(f.subject.uploadItems.value[0].status, 'preparing');
+    f.requests[0].resolve(ok({ uploadId: 'upload-test' }));
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[0].status, 'uploading');
+    assert.equal(f.subject.uploadItems.value[0].percentage, 0);
+    f.requests[1].resolve(ok());
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[0].status, 'saving');
+    assert.equal(f.subject.uploadItems.value[0].percentage, 100);
+    f.requests[2].resolve(ok());
     await pending;
-    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests.length, 3);
     assert.equal(f.subject.directory.value.path, 'new-location');
     assert.equal(f.subject.uploadItems.value[0].status, 'success');
   } finally { f.dispose(); }
 });
+
+test('upload progress counts acknowledged chunks and preserves failures before the next file', async () => {
+  const f = fixture();
+  try {
+    f.subject.uploadDirectoryPath.value = 'selected-location';
+    f.subject.uploadFiles.value = [new File([new Uint8Array(1024 * 1024)], 'large.bin'), new File(['x'], 'next.txt')];
+    const pending = f.subject.uploadSelectedFiles();
+    assert.equal(f.subject.uploadItems.value[1].status, 'waiting');
+    f.requests[0].resolve(ok({ uploadId: 'first' }));
+    await setImmediate();
+    assert.equal(f.requests[1].init.body.size, 512 * 1024);
+    assert.equal(f.subject.uploadItems.value[0].percentage, 0);
+    f.requests[1].resolve(ok());
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[0].percentage, 50);
+    assert.match(f.requests[2].url, /offset=524288$/);
+    f.requests[2].reject(new Error('chunk failed'));
+    await setImmediate();
+    assert.equal(f.requests[3].url, '/api/files/upload/cancel');
+    f.requests[3].resolve(ok());
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[0].status, 'failed');
+    assert.equal(f.subject.uploadItems.value[0].percentage, 50);
+    assert.equal(f.subject.uploadItems.value[0].error, 'chunk failed');
+    assert.equal(f.subject.uploadItems.value[1].status, 'preparing');
+    f.requests[4].resolve(ok({ uploadId: 'second' }));
+    await setImmediate();
+    f.requests[5].resolve(ok());
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[1].status, 'saving');
+    f.requests[6].resolve(ok());
+    await pending;
+    assert.equal(f.subject.uploadItems.value[1].status, 'success');
+    assert.equal(f.subject.uploadItems.value[1].percentage, 100);
+  } finally { f.dispose(); }
+});
+
+test('empty uploads complete without sending an empty chunk', async () => {
+  const f = fixture();
+  try {
+    f.subject.uploadDirectoryPath.value = 'selected-location';
+    f.subject.uploadFiles.value = [new File([], 'empty.txt')];
+    const pending = f.subject.uploadSelectedFiles();
+    assert.equal(JSON.parse(f.requests[0].init.body).size, 0);
+    f.requests[0].resolve(ok({ uploadId: 'empty' }));
+    await setImmediate();
+    assert.equal(f.requests[1].url, '/api/files/upload/complete');
+    f.requests[1].resolve(ok());
+    await pending;
+    assert.equal(f.subject.uploadItems.value[0].status, 'success');
+    assert.equal(f.subject.uploadItems.value[0].percentage, 100);
+    assert.equal(f.requests.length, 2);
+  } finally { f.dispose(); }
+});
+
+test('completion connection failure is reported without retrying', async () => {
+  const f = fixture();
+  try {
+    f.subject.uploadDirectoryPath.value = 'selected-location';
+    f.subject.uploadFiles.value = [new File([], 'empty.txt')];
+    const pending = f.subject.uploadSelectedFiles();
+    f.requests[0].resolve(ok({ uploadId: 'session' }));
+    await setImmediate();
+    f.requests[1].reject(new apiErrors.WinPilotConnectionError());
+    await setImmediate();
+    assert.equal(f.requests[2].url, '/api/files/upload/cancel');
+    f.requests[2].resolve(ok());
+    await pending;
+    assert.equal(f.requests.length, 3);
+    assert.equal(f.subject.uploadItems.value[0].status, 'failed');
+    assert.equal(f.subject.uploadItems.value[0].error, '无法连接到 WinPilot');
+  } finally { f.dispose(); }
+});
+
+test('failed upload is shown immediately and cleanup timeout allows the next file', async () => {
+  const cleanup = new AbortController();
+  const timeouts = [];
+  const f = fixture({ abortSignal: { timeout: milliseconds => { timeouts.push(milliseconds); return cleanup.signal; } } });
+  try {
+    f.subject.uploadDirectoryPath.value = 'selected-location';
+    f.subject.uploadFiles.value = [new File(['x'], 'first.txt'), new File(['y'], 'second.txt')];
+    const pending = f.subject.uploadSelectedFiles();
+    f.requests[0].resolve(ok({ uploadId: 'first' }));
+    await setImmediate();
+    f.requests[1].reject(new Error('chunk failed'));
+    await setImmediate();
+    assert.equal(f.subject.uploadItems.value[0].status, 'failed');
+    assert.equal(f.subject.uploadItems.value[0].error, 'chunk failed');
+    assert.equal(f.requests[2].url, '/api/files/upload/cancel');
+    assert.deepEqual(timeouts, [5000]);
+    f.requests[2].init.signal.addEventListener('abort', () => f.requests[2].reject(new DOMException('清理超时', 'AbortError')), { once: true });
+    cleanup.abort();
+    await setImmediate();
+    assert.equal(f.requests[3].url, '/api/files/upload/start');
+    f.requests[3].resolve(ok({ uploadId: 'second' }));
+    await setImmediate();
+    f.requests[4].resolve(ok());
+    await setImmediate();
+    f.requests[5].resolve(ok());
+    await pending;
+    assert.equal(f.subject.uploadItems.value[0].error, 'chunk failed');
+    assert.equal(f.subject.uploadItems.value[1].status, 'success');
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
+for (const stage of ['start', 'complete']) {
+  test(`upload ${stage} failure keeps the correct progress and never reports success`, async () => {
+    const f = fixture();
+    try {
+      f.subject.uploadDirectoryPath.value = 'selected-location';
+      f.subject.uploadFiles.value = [new File(['content'], 'file.txt')];
+      const pending = f.subject.uploadSelectedFiles();
+      if (stage === 'start') {
+        f.requests[0].reject(new Error('start failed'));
+      } else {
+        f.requests[0].resolve(ok({ uploadId: 'upload-test' }));
+        await setImmediate();
+        f.requests[1].resolve(ok());
+        await setImmediate();
+        assert.equal(f.subject.uploadItems.value[0].status, 'saving');
+        f.requests[2].reject(new Error('complete failed'));
+        await setImmediate();
+        assert.equal(f.requests[3].url, '/api/files/upload/cancel');
+        f.requests[3].reject(new Error('cleanup failed'));
+      }
+      await pending;
+      const item = f.subject.uploadItems.value[0];
+      assert.equal(item.status, 'failed');
+      assert.equal(item.percentage, stage === 'start' ? 0 : 100);
+      assert.equal(item.error, `${stage} failed`);
+      assert.equal(f.subject.requests.size, 0);
+      assert.equal(f.requests.length, stage === 'start' ? 1 : 4);
+    } finally { f.dispose(); }
+  });
+}
+
+for (const cancellation of ['unmount', 'safe-mode']) {
+  test(`upload ${cancellation} clears progress without late updates or failure messages`, async () => {
+    const f = fixture();
+    let disposed = false;
+    try {
+      f.subject.uploadDirectoryPath.value = 'selected-location';
+      f.subject.uploadFiles.value = [new File([new Uint8Array(1024 * 1024)], 'large.bin')];
+      const pending = f.subject.uploadSelectedFiles();
+      f.requests[0].resolve(ok({ uploadId: 'upload-test' }));
+      await setImmediate();
+      f.requests[1].resolve(ok());
+      await setImmediate();
+      assert.equal(f.subject.uploadItems.value[0].percentage, 50);
+      if (cancellation === 'unmount') {
+        f.dispose();
+        disposed = true;
+      } else {
+        f.safeModeEnabled.value = true;
+      }
+      assert.equal(f.requests[2].init.signal.aborted, true);
+      assert.equal(f.subject.uploadItems.value.length, 0);
+      f.requests[2].resolve(ok());
+      await setImmediate();
+      assert.equal(f.requests[3].url, '/api/files/upload/cancel');
+      f.requests[3].resolve(ok());
+      await pending;
+      assert.equal(f.requests.some(request => request.url === '/api/files/upload/complete'), false);
+      assert.equal(f.subject.uploadItems.value.length, 0);
+      assert.equal(f.subject.requests.size, 0);
+      assert.equal(f.toasts.length, 0);
+    } finally { if (!disposed) f.dispose(); }
+  });
+}
 
 test('download releases its blob URL even if the browser click fails', async () => {
   const f = fixture();

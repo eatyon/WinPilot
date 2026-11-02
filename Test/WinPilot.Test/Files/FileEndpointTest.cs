@@ -1,19 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Primitives;
 using WinPilot.Core.Files;
 using WinPilot.Features.Files;
 using WinPilot.Web;
@@ -51,7 +46,9 @@ public sealed class FileEndpointTest : IAsyncLifetime
         var directory = await client.GetFromJsonAsync<FileDirectoryResult>("/api/files/directory?path=" + Uri.EscapeDataString(root));
         Assert.Equal("file.txt", Assert.Single(directory!.Entries).Name);
         var original = await client.GetFromJsonAsync<EditFileSystemItemResult>("/api/files/edit?path=" + Uri.EscapeDataString(path));
-        using var saved = await client.PostAsJsonAsync("/api/files/edit", new EditFileSystemItemRequest(path, "saved", original!.Length, original.LastWriteTime, original.Encoding));
+        using var saved = await client.PostAsJsonAsync(
+            "/api/files/edit",
+            new EditFileSystemItemRequest(path, "saved", original!.Length, original.LastWriteTime, original.Encoding));
         Assert.Equal(HttpStatusCode.NoContent, saved.StatusCode);
         using var renamed = await client.PostAsJsonAsync("/api/files/rename", new RenameFileSystemItemRequest(path, "renamed.txt"));
         Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
@@ -63,21 +60,160 @@ public sealed class FileEndpointTest : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UploadReturnsPerFileResultsAndNeverOverwrites()
+    public async Task ChunkedUploadWritesFileAndRejectsInvalidSize()
     {
-        var path = Path.Combine(root, "exists.txt");
-        File.WriteAllText(path, "keep");
-        using var form = new MultipartFormDataContent();
-        form.Add(new StringContent(root), "directory");
-        form.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("replace")), "files", "exists.txt");
-        form.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("new")), "files", "new.txt");
-        using var response = await client.PostAsync("/api/files/upload", form);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var results = await response.Content.ReadFromJsonAsync<UploadResult[]>();
-        Assert.False(results![0].Success);
-        Assert.True(results[1].Success);
-        Assert.Equal("keep", File.ReadAllText(path));
-        Assert.Equal("new", File.ReadAllText(Path.Combine(root, "new.txt")));
+        using var started = await client.PostAsJsonAsync(
+            "/api/files/upload/start",
+            new BeginFileUploadRequest(root, "chunked.txt", 11));
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        Assert.NotNull(upload);
+
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("hello world"));
+        content.Headers.ContentType = new("application/octet-stream");
+        using var chunk = await client.PostAsync(
+            $"/api/files/upload/chunk?uploadId={upload!.UploadId}&offset=0",
+            content);
+        Assert.Equal(HttpStatusCode.NoContent, chunk.StatusCode);
+        using var completed = await client.PostAsJsonAsync(
+            "/api/files/upload/complete",
+            new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
+        Assert.Equal("hello world", File.ReadAllText(Path.Combine(root, "chunked.txt")));
+
+        using var invalidSize = await client.PostAsJsonAsync(
+            "/api/files/upload/start",
+            new BeginFileUploadRequest(root, "invalid.bin", -1));
+        Assert.Equal(HttpStatusCode.BadRequest, invalidSize.StatusCode);
+        Assert.False(File.Exists(Path.Combine(root, "invalid.bin")));
+    }
+
+    [Fact]
+    public async Task EmptyFileCanBeCompletedWithoutChunks()
+    {
+        using var started = await client.PostAsJsonAsync("/api/files/upload/start", new BeginFileUploadRequest(root, "empty.bin", 0));
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        Assert.NotNull(upload);
+        using var completed = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
+        Assert.Empty(File.ReadAllBytes(Path.Combine(root, "empty.bin")));
+        Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
+    }
+
+    [Fact]
+    public async Task CompletedUploadReleasesSessionAndCannotBeCompletedAgain()
+    {
+        using var started = await client.PostAsJsonAsync("/api/files/upload/start", new BeginFileUploadRequest(root, "empty.bin", 0));
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        Assert.NotNull(upload);
+        using var completed = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
+        using var retried = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.BadRequest, retried.StatusCode);
+        using var cancelled = await client.PostAsJsonAsync("/api/files/upload/cancel", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, cancelled.StatusCode);
+        Assert.True(File.Exists(Path.Combine(root, "empty.bin")));
+    }
+
+    [Fact]
+    public async Task CancelledUploadStaysCancelledAndRepeatedCancellationSucceeds()
+    {
+        using var started = await client.PostAsJsonAsync("/api/files/upload/start", new BeginFileUploadRequest(root, "empty.bin", 0));
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        Assert.NotNull(upload);
+        foreach (var id in new[] { upload.UploadId, upload.UploadId, "invalid" })
+        {
+            using var cancelled = await client.PostAsJsonAsync("/api/files/upload/cancel", new CompleteFileUploadRequest(id));
+            Assert.Equal(HttpStatusCode.NoContent, cancelled.StatusCode);
+        }
+        using var completed = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.BadRequest, completed.StatusCode);
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task MissingUploadNameReturnsValidationError(string? name)
+    {
+        using var response = await client.PostAsJsonAsync("/api/files/upload/start", new { directory = root, fileName = name, size = 1 });
+        await AssertProblem(response, HttpStatusCode.BadRequest, "名称不能为空，且不能使用 . 或 ..");
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingOrNullUploadSizeReturns400WithoutCreatingFiles(bool explicitNull)
+    {
+        object body = explicitNull
+            ? new { directory = root, fileName = "file.bin", size = (long?)null }
+            : new { directory = root, fileName = "file.bin" };
+        using var response = await client.PostAsJsonAsync("/api/files/upload/start", body);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task OversizedChunksReturn413WithAndWithoutContentLength(bool knownLength)
+    {
+        using var started = await client.PostAsJsonAsync("/api/files/upload/start", new BeginFileUploadRequest(root, "large.bin", 2 * FileSystemService.MaxUploadChunkBytes));
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        var bytes = new byte[FileSystemService.MaxUploadChunkBytes + 1];
+        using HttpContent content = knownLength ? new ByteArrayContent(bytes) : new UnknownLengthContent(bytes);
+        content.Headers.ContentType = new("application/octet-stream");
+        if (knownLength) Assert.Equal(bytes.Length, content.Headers.ContentLength);
+        else Assert.Null(content.Headers.ContentLength);
+        using var response = await client.PostAsync($"/api/files/upload/chunk?uploadId={upload!.UploadId}&offset=0", content);
+        await AssertProblem(response, HttpStatusCode.RequestEntityTooLarge, "单次上传分块不能超过 1 MiB");
+        using var cancelled = await client.PostAsJsonAsync("/api/files/upload/cancel", new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, cancelled.StatusCode);
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Fact]
+    public async Task UploadValidationResponsesPreserveSpecificReasons()
+    {
+        using var started = await client.PostAsJsonAsync("/api/files/upload/start", new BeginFileUploadRequest(root, "file.bin", 1));
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        using var incomplete = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload!.UploadId));
+        await AssertProblem(incomplete, HttpStatusCode.BadRequest, "上传文件不完整");
+        using var missing = await client.PostAsJsonAsync("/api/files/upload/complete", new CompleteFileUploadRequest(upload.UploadId));
+        await AssertProblem(missing, HttpStatusCode.BadRequest, "上传会话不存在或已关闭");
+        Assert.Empty(Directory.GetFiles(root));
+    }
+
+    [Fact]
+    public async Task ChunkedUploadRequiresSequentialNonEmptyChunks()
+    {
+        using var started = await client.PostAsJsonAsync(
+            "/api/files/upload/start",
+            new BeginFileUploadRequest(root, "ordered.bin", 3));
+        var upload = await started.Content.ReadFromJsonAsync<FileUploadStartResult>();
+        Assert.NotNull(upload);
+
+        using var empty = new ByteArrayContent([]);
+        empty.Headers.ContentType = new("application/octet-stream");
+        using var emptyResponse = await client.PostAsync(
+            $"/api/files/upload/chunk?uploadId={upload!.UploadId}&offset=0",
+            empty);
+        Assert.Equal(HttpStatusCode.BadRequest, emptyResponse.StatusCode);
+
+        using var outOfOrder = new ByteArrayContent([1, 2, 3]);
+        outOfOrder.Headers.ContentType = new("application/octet-stream");
+        using var outOfOrderResponse = await client.PostAsync(
+            $"/api/files/upload/chunk?uploadId={upload.UploadId}&offset=1",
+            outOfOrder);
+        Assert.Equal(HttpStatusCode.BadRequest, outOfOrderResponse.StatusCode);
+
+        using var cancel = await client.PostAsJsonAsync(
+            "/api/files/upload/cancel",
+            new CompleteFileUploadRequest(upload.UploadId));
+        Assert.Equal(HttpStatusCode.NoContent, cancel.StatusCode);
         Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
     }
 
@@ -95,7 +231,9 @@ public sealed class FileEndpointTest : IAsyncLifetime
     public async Task MissingFileOrDirectoryReturns404(string operation, string method)
     {
         var missing = Path.Combine(root, "missing.txt");
-        using var request = new HttpRequestMessage(new HttpMethod(method), $"/api/files/{operation}" +
+        using var request = new HttpRequestMessage(
+            new HttpMethod(method),
+            $"/api/files/{operation}" +
             (method == "GET" ? "?path=" + Uri.EscapeDataString(missing) : ""));
         if (method == "POST")
         {
@@ -195,8 +333,13 @@ public sealed class FileEndpointTest : IAsyncLifetime
         Assert.NotNull(original);
         var external = changeLength ? "external content" : "new";
         File.WriteAllText(path, external);
-        if (!changeLength) File.SetLastWriteTimeUtc(path, original.LastWriteTime.UtcDateTime.AddMinutes(1));
-        using var response = await client.PostAsJsonAsync("/api/files/edit", new EditFileSystemItemRequest(path, "replacement", original.Length, original.LastWriteTime, original.Encoding));
+        if (!changeLength)
+        {
+            File.SetLastWriteTimeUtc(path, original.LastWriteTime.UtcDateTime.AddMinutes(1));
+        }
+        using var response = await client.PostAsJsonAsync(
+            "/api/files/edit",
+            new EditFileSystemItemRequest(path, "replacement", original.Length, original.LastWriteTime, original.Encoding));
         await AssertProblem(response, HttpStatusCode.Conflict, "文件在编辑期间已被其他程序修改");
         Assert.Equal(external, File.ReadAllText(path));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
@@ -216,7 +359,9 @@ public sealed class FileEndpointTest : IAsyncLifetime
             var saves = content.Select(value => Task.Run(async () =>
             {
                 Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
-                return await client.PostAsJsonAsync("/api/files/edit", new EditFileSystemItemRequest(path, value, original.Length, original.LastWriteTime, original.Encoding));
+                return await client.PostAsJsonAsync(
+                    "/api/files/edit",
+                    new EditFileSystemItemRequest(path, value, original.Length, original.LastWriteTime, original.Encoding));
             })).ToArray();
             var responses = await Task.WhenAll(saves).WaitAsync(TimeSpan.FromSeconds(10));
             try
@@ -228,7 +373,13 @@ public sealed class FileEndpointTest : IAsyncLifetime
                 Assert.Equal(content[winner], File.ReadAllText(path));
                 Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
             }
-            finally { foreach (var response in responses) response.Dispose(); }
+            finally
+            {
+                foreach (var response in responses)
+                {
+                    response.Dispose();
+                }
+            }
         }
     }
 
@@ -257,152 +408,10 @@ public sealed class FileEndpointTest : IAsyncLifetime
             response = await client.GetAsync("/api/files/edit?path=" + Uri.EscapeDataString(path));
             detail = "此文件不支持编辑";
         }
-        using (response) await AssertProblem(response, HttpStatusCode.BadRequest, detail);
-    }
-
-    [Theory]
-    [InlineData("io", "文件操作失败")]
-    [InlineData("permission", "无法访问此项目，没有足够的权限")]
-    [InlineData("sharing", "文件正在被其他程序使用，请稍后重试")]
-    [InlineData("missing", "文件或文件夹不存在")]
-    public async Task UploadReadFailureRemainsPerFileAndLaterFileSucceeds(string kind, string message)
-    {
-        var secret = Path.Combine(root, "private-diagnostics.txt");
-        Exception failure = kind switch
+        using (response)
         {
-            "permission" => new UnauthorizedAccessException(secret),
-            "sharing" => new IOException(secret, unchecked((int)0x80070020)),
-            "missing" => new FileNotFoundException(secret),
-            _ => new IOException(secret)
-        };
-        using var broken = new FailingReadStream(failure);
-        using var good = new MemoryStream(Encoding.UTF8.GetBytes("saved"));
-        var files = new FormFileCollection
-        {
-            new FormFile(broken, 0, broken.Length, "files", "broken.txt"),
-            new FormFile(good, 0, good.Length, "files", "good.txt")
-        };
-        var form = new FormCollection(new Dictionary<string, StringValues> { ["directory"] = root }, files);
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Logging.ClearProviders();
-        builder.Services.AddSingleton<FileSystemService>();
-        await using var uploadApp = builder.Build();
-        uploadApp.Use(async (context, next) => { context.Features.Set<IFormFeature>(new SuppliedFormFeature(form)); await next(context); });
-        uploadApp.MapFileEndpoints();
-        await uploadApp.StartAsync();
-        using var uploadClient = uploadApp.GetTestClient();
-        using var response = await uploadClient.PostAsync("/api/files/upload", null);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var results = json.RootElement.EnumerateArray().ToArray();
-        Assert.Equal(2, results.Length);
-        Assert.Equal(new[] { "error", "fileName", "success" }, results[0].EnumerateObject().Select(property => property.Name).Order());
-        Assert.Equal("broken.txt", results[0].GetProperty("fileName").GetString());
-        Assert.False(results[0].GetProperty("success").GetBoolean());
-        Assert.Equal(message, results[0].GetProperty("error").GetString());
-        Assert.True(results[1].GetProperty("success").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, results[1].GetProperty("error").ValueKind);
-        Assert.Equal("saved", File.ReadAllText(Path.Combine(root, "good.txt")));
-        Assert.False(File.Exists(Path.Combine(root, "broken.txt")));
-        Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
-    }
-
-    [Fact]
-    public async Task UploadParserBodyLimitExceptionReturns413()
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Logging.ClearProviders();
-        builder.Services.AddSingleton<FileSystemService>();
-        await using var parserApp = builder.Build();
-        using var body = new FailingReadStream(new BadHttpRequestException("Request body too large", 413));
-        parserApp.Use(async (context, next) => { context.Request.Body = body; await next(context); });
-        parserApp.MapFileEndpoints();
-        await parserApp.StartAsync();
-        using var parserClient = parserApp.GetTestClient();
-        using var content = new MultipartFormDataContent();
-        content.Add(new StringContent(root), "directory");
-        using var response = await parserClient.PostAsync("/api/files/upload", content);
-        await AssertProblem(response, HttpStatusCode.RequestEntityTooLarge, "上传请求体超过大小限制");
-    }
-
-    [Theory]
-    [InlineData(false, -1)]
-    [InlineData(true, -1)]
-    [InlineData(false, 0)]
-    [InlineData(true, 0)]
-    [InlineData(false, 1)]
-    [InlineData(true, 1)]
-    public async Task KestrelUploadHonorsBodyLimitWithoutChangingSuccessfulMultiFileResults(bool unknownLength, int limitOffset)
-    {
-        var first = Encoding.UTF8.GetBytes("中文内容");
-        var second = new byte[1024];
-        using var form = new MultipartFormDataContent();
-        form.Add(new StringContent(root), "directory");
-        form.Add(new ByteArrayContent(first), "files", "first.txt");
-        form.Add(new ByteArrayContent(second), "files", "second.txt");
-        var bytes = await form.ReadAsByteArrayAsync();
-        var chunkFramingLength = unknownLength ? Encoding.ASCII.GetByteCount($"{bytes.Length:X}\r\n\r\n0\r\n\r\n") : 0;
-        var builder = WebApplication.CreateBuilder();
-        builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(options =>
-        {
-            options.Listen(IPAddress.Loopback, 0);
-            options.Limits.MaxRequestBodySize = bytes.Length + chunkFramingLength + limitOffset;
-        });
-        builder.Services.AddSingleton<FileSystemService>();
-        await using var uploadApp = builder.Build();
-        long? receivedLength = null;
-        var receivedChunked = false;
-        uploadApp.Use(async (context, next) =>
-        {
-            receivedLength = context.Request.ContentLength;
-            receivedChunked = context.Request.Headers.TransferEncoding.ToString().Contains("chunked", StringComparison.OrdinalIgnoreCase);
-            await next(context);
-        });
-        uploadApp.MapFileEndpoints();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await uploadApp.StartAsync(timeout.Token);
-        try
-        {
-            var address = uploadApp.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-            using var uploadClient = new HttpClient { BaseAddress = new Uri(address) };
-            using HttpContent content = unknownLength ? new UnknownLengthContent(bytes) : new ByteArrayContent(bytes);
-            content.Headers.ContentType = form.Headers.ContentType;
-            using var response = await uploadClient.PostAsync("/api/files/upload", content, timeout.Token);
-            Assert.Equal(unknownLength ? null : (long?)bytes.Length, receivedLength);
-            Assert.Equal(unknownLength, receivedChunked);
-            if (limitOffset < 0)
-            {
-                await AssertProblem(response, HttpStatusCode.RequestEntityTooLarge, "上传请求体超过大小限制");
-                Assert.Empty(Directory.GetFileSystemEntries(root));
-            }
-            else
-            {
-                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-                Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
-                var results = await response.Content.ReadFromJsonAsync<UploadResult[]>(timeout.Token);
-                Assert.Collection(results!,
-                    result => Assert.Equal(new UploadResult("first.txt", true, null), result),
-                    result => Assert.Equal(new UploadResult("second.txt", true, null), result));
-                Assert.Equal(first, File.ReadAllBytes(Path.Combine(root, "first.txt")));
-                Assert.Equal(second, File.ReadAllBytes(Path.Combine(root, "second.txt")));
-                Assert.Equal(2, Directory.GetFiles(root).Length);
-            }
-            Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
+            await AssertProblem(response, HttpStatusCode.BadRequest, detail);
         }
-        finally { await uploadApp.StopAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
-    }
-
-    [Fact]
-    public async Task UploadInvalidMultipartHeaderStillReturns400WithoutWritingFiles()
-    {
-        using var content = new StringContent("--probe\r\nbroken-header\r\n\r\nx\r\n--probe--\r\n", Encoding.UTF8);
-        content.Headers.ContentType = new("multipart/form-data") { Parameters = { new("boundary", "probe") } };
-        using var response = await client.PostAsync("/api/files/upload", content);
-        await AssertProblem(response, HttpStatusCode.BadRequest, "上传表单格式无效");
-        Assert.Empty(Directory.GetFileSystemEntries(root));
     }
 
     private static async Task AssertProblem(HttpResponseMessage response, HttpStatusCode status, string detail)
@@ -415,28 +424,6 @@ public sealed class FileEndpointTest : IAsyncLifetime
         Assert.Equal(detail, json.RootElement.GetProperty("detail").GetString());
     }
 
-    private sealed class SuppliedFormFeature(IFormCollection form) : IFormFeature
-    {
-        public bool HasFormContentType => true;
-        public IFormCollection? Form { get; set; } = form;
-        public IFormCollection ReadForm() => Form!;
-        public Task<IFormCollection> ReadFormAsync(CancellationToken cancellationToken) => Task.FromResult(Form!);
-    }
-
-    private sealed class FailingReadStream(Exception failure) : MemoryStream(new byte[] { 1, 2, 3 })
-    {
-        public override int Read(byte[] buffer, int offset, int count) => throw failure;
-        public override int Read(Span<byte> buffer) => throw failure;
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => Task.FromException<int>(failure);
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => ValueTask.FromException<int>(failure);
-    }
-
-    private sealed class UnknownLengthContent(byte[] bytes) : HttpContent
-    {
-        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(bytes).AsTask();
-        protected override bool TryComputeLength(out long length) { length = 0; return false; }
-    }
-
     public async Task DisposeAsync()
     {
         client.Dispose();
@@ -444,5 +431,9 @@ public sealed class FileEndpointTest : IAsyncLifetime
         Directory.Delete(root, true);
     }
 
-    private sealed record UploadResult(string FileName, bool Success, string? Error);
+    private sealed class UnknownLengthContent(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(bytes).AsTask();
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
 }

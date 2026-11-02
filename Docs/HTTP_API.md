@@ -103,13 +103,16 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 
 ## 文件管理
 
-文件操作按原因返回 `400`（无效输入）、`403`（权限不足）、`404`（不存在）、`409`（冲突）或 `500`（服务器故障）。批量上传须逐项读取结果；其他批量文件操作不保证整批回滚。
+文件操作按原因返回 `400`（无效输入）、`403`（权限不足）、`404`（不存在）、`409`（冲突）或 `500`（服务器故障）；批量文件操作不保证整批回滚。
 
 | 方法 | 路径 | 请求与说明 | 成功响应 | 错误 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/files/roots` | 列出可访问驱动器 | 200 驱动器数组 | 400、403、404、409、500 |
 | GET | `/api/files/directory` | 查询 `path` 必填有效路径 | 200 文件夹及条目 | 400、403、404、409、500 |
-| POST | `/api/files/upload` | `multipart/form-data`，含 `directory` 和文件；逐项检查 `{ fileName, success, error }`，单项失败仍为 200；整体请求超限 413 | 200 逐文件结果数组 | 400、403、404、409、413、500 |
+| POST | `/api/files/upload/start` | JSON `{ directory, fileName, size }`，`size` 必填；创建上传会话并校验目标，空文件可跳过分块，直接调用完成接口 | 200 `{ uploadId }` | 400、403、404、409、500 |
+| POST | `/api/files/upload/chunk` | `application/octet-stream` 请求体；查询 `uploadId`、`offset`，按偏移顺序提交分块，单块不超过 1 MiB | 204 | 400、403、404、409、413、415、500 |
+| POST | `/api/files/upload/complete` | JSON `{ uploadId }`；校验上传完整性并保存文件，完成后关闭会话；重复请求返回 400 | 204 | 400、403、404、409、500 |
+| POST | `/api/files/upload/cancel` | JSON `{ uploadId }`，提交前取消；已有分块退出后清理临时文件。提交期间返回 409，重复取消或无效会话返回 204 | 204 | 409 |
 | POST | `/api/files/download` | JSON `{ paths }`；响应携带下载文件名，支持 Range | 200 文件/ZIP 流；范围请求可为 206 | 400、403、404、409、416、500 |
 | POST | `/api/files/folder` | JSON `{ parentPath, name }`；同名冲突 409 | 204 | 400、403、404、409、500 |
 | POST | `/api/files/file` | JSON `{ parentPath, name }`；同名冲突 409 | 204 | 400、403、404、409、500 |

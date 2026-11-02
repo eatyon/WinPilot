@@ -26,8 +26,12 @@ type DirectoryResult = {
 type CreateKind = 'folder' | 'file';
 type TransferKind = 'copy' | 'move';
 type Breadcrumb = { name: string; path: string };
-type UploadItem = { fileName: string; status: 'uploading' | 'success' | 'failed'; error?: string };
-type UploadResponse = { fileName: string; success: boolean; error?: string | null };
+type UploadItem = {
+  fileName: string;
+  status: 'waiting' | 'preparing' | 'uploading' | 'saving' | 'success' | 'failed';
+  percentage: number;
+  error?: string;
+};
 type EditResponse = {
   path: string;
   content: string;
@@ -328,28 +332,75 @@ async function uploadSelectedFiles() {
   uploadWarning.value = false;
   uploadFiles.value = [];
   uploadDirectoryPath.value = '';
-  uploadItems.value = files.map((file) => ({ fileName: file.name, status: 'uploading' }));
-  const form = new FormData();
-  form.append('directory', directoryPath);
-  files.forEach((file) => form.append('files', file, file.name));
-  await runRequest('upload', async (signal) => {
-    try {
-      const response = await fetchResponse('/api/files/upload', signal, { method: 'POST', body: form });
-      const results = await response.json() as UploadResponse[];
-      ensureRequestActive(signal);
-      uploadItems.value = results.map((result) => ({
-        fileName: result.fileName,
-        status: result.success ? 'success' : 'failed',
-        error: result.error ?? undefined,
-      }));
+  const chunkSize = 512 * 1024;
+  const statuses: UploadItem[] = files.map((file) => ({
+    fileName: file.name,
+    status: 'waiting',
+    percentage: 0,
+  }));
+  function updateUpload(index: number, changes: Partial<Omit<UploadItem, 'fileName'>>) {
+    statuses[index] = { ...statuses[index]!, ...changes };
+    uploadItems.value = [...statuses];
+  }
+  uploadItems.value = statuses;
+  await runRequest(
+    'upload',
+    async (signal) => {
+      for (const [index, file] of files.entries()) {
+        ensureRequestActive(signal);
+        updateUpload(index, { status: 'preparing' });
+        let uploadId = '';
+        try {
+          const started = await fetchResponse('/api/files/upload/start', signal, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ directory: directoryPath, fileName: file.name, size: file.size }),
+          });
+          uploadId = ((await started.json()) as { uploadId: string }).uploadId;
+          ensureRequestActive(signal);
+          updateUpload(index, { status: 'uploading' });
+          for (let offset = 0; offset < file.size; offset += chunkSize) {
+            const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+            await fetchResponse(
+              `/api/files/upload/chunk?uploadId=${encodeURIComponent(uploadId)}&offset=${offset}`,
+              signal,
+              { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: chunk },
+            );
+            updateUpload(index, {
+              percentage: Math.min(100, (offset + chunk.size) / file.size * 100),
+            });
+          }
+          updateUpload(index, { status: 'saving' });
+          await fetchResponse('/api/files/upload/complete', signal, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uploadId }),
+          });
+          updateUpload(index, { status: 'success', percentage: 100 });
+        } catch (exception) {
+          try {
+            ensureRequestActive(signal);
+            updateUpload(index, {
+              status: 'failed',
+              error: userErrorMessage(exception, '文件上传失败'),
+            });
+          } finally {
+            if (uploadId) {
+              await apiFetch('/api/files/upload/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uploadId }),
+                signal: AbortSignal.timeout(5000),
+              }).catch(() => undefined);
+            }
+          }
+        }
+      }
       await refreshDirectory(directoryPath);
-    } catch (exception) {
-      ensureRequestActive(signal);
-      const message = userErrorMessage(exception, '文件上传失败');
-      uploadItems.value = files.map((file) => ({ fileName: file.name, status: 'failed', error: message || undefined }));
-      throw exception;
-    }
-  }, '文件上传失败', false);
+    },
+    '文件上传失败',
+    false,
+  );
 }
 function requestDownload(entries: Entry[]) {
   downloadTargets.value = entries;
@@ -682,7 +733,7 @@ function formatTime(value: string) {
       <div class="file-upload-status">
         <p v-for="item in uploadItems" :key="item.fileName">
           <strong>{{ item.fileName }}</strong>
-          <span v-if="item.status === 'uploading'">上传中…</span>
+          <span v-if="!['success', 'failed'].includes(item.status)">上传中…</span>
           <span v-else-if="item.status === 'success'" class="status-success">上传成功</span>
           <span v-else class="status-error">上传失败{{ item.error ? `：${item.error}` : '' }}</span>
         </p>

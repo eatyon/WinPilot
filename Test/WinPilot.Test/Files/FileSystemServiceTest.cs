@@ -1,7 +1,7 @@
-using WinPilot.Features.Files;
-using Microsoft.Extensions.Logging.Abstractions;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging.Abstractions;
+using WinPilot.Features.Files;
 
 namespace WinPilot.Test;
 
@@ -29,15 +29,26 @@ public sealed class FileSystemServiceTest
             var expectedCode = SHFileOperation(ref native);
             Assert.True(expectedCode != 0 || native.AnyOperationsAborted);
             var target = Path.Combine(destination, "source.txt");
-            if (File.Exists(target)) File.Delete(target);
+            if (File.Exists(target))
+            {
+                File.Delete(target);
+            }
             var service = new FileSystemService(NullLogger<FileSystemService>.Instance);
             var failure = Assert.Throws<ShellFileOperationException>(() => service.Copy(new([source], destination)));
             Assert.Equal(expectedCode, failure.ReturnCode);
             Assert.Equal(native.AnyOperationsAborted, failure.AnyOperationsAborted);
-            Assert.Equal(expectedCode != 0 ? $"无法复制：{new Win32Exception(expectedCode).Message}" : "复制操作已取消", failure.Message);
+            Assert.Equal(
+                expectedCode != 0 ? $"无法复制：{new Win32Exception(expectedCode).Message}" : "复制操作已取消",
+                failure.Message);
             Assert.IsAssignableFrom<IOException>(failure);
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [Theory]
@@ -54,13 +65,28 @@ public sealed class FileSystemServiceTest
             var service = new FileSystemService(NullLogger<FileSystemService>.Instance);
             Assert.Throws<FileNotFoundException>(() =>
             {
-                if (operation == "copy") service.Copy(new([source], root));
-                else if (operation == "move") service.Move(new([source], root));
-                else service.Delete(new([source]));
+                if (operation == "copy")
+                {
+                    service.Copy(new([source], root));
+                }
+                else if (operation == "move")
+                {
+                    service.Move(new([source], root));
+                }
+                else
+                {
+                    service.Delete(new([source]));
+                }
             });
             Assert.Empty(Directory.GetFileSystemEntries(root));
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [Theory]
@@ -78,15 +104,33 @@ public sealed class FileSystemServiceTest
             Directory.CreateDirectory(destination);
             File.WriteAllText(source, "original content");
             var service = new FileSystemService(NullLogger<FileSystemService>.Instance);
-            if (operation == "copy") service.Copy(new([source], destination));
-            else if (operation == "move") service.Move(new([source], destination));
-            else service.Delete(new([source]));
+            if (operation == "copy")
+            {
+                service.Copy(new([source], destination));
+            }
+            else if (operation == "move")
+            {
+                service.Move(new([source], destination));
+            }
+            else
+            {
+                service.Delete(new([source]));
+            }
             Assert.Equal(operation == "copy", File.Exists(source));
             var target = Path.Combine(destination, "source.txt");
             Assert.Equal(operation != "delete", File.Exists(target));
-            if (operation != "delete") Assert.Equal("original content", File.ReadAllText(target));
+            if (operation != "delete")
+            {
+                Assert.Equal("original content", File.ReadAllText(target));
+            }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -97,7 +141,8 @@ public sealed class FileSystemServiceTest
         public string Source;
         public string? Destination;
         public ushort Flags;
-        [MarshalAs(UnmanagedType.Bool)] public bool AnyOperationsAborted;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool AnyOperationsAborted;
         public IntPtr NameMappings;
         public string? ProgressTitle;
     }
@@ -125,7 +170,10 @@ public sealed class FileSystemServiceTest
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
         }
     }
 
@@ -146,7 +194,10 @@ public sealed class FileSystemServiceTest
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
         }
     }
 
@@ -165,7 +216,10 @@ public sealed class FileSystemServiceTest
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
         }
     }
 }

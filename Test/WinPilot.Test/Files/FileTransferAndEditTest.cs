@@ -1,10 +1,10 @@
 using System.IO.Compression;
-using System.Text;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -44,7 +44,9 @@ public sealed class FileTransferAndEditTest : IDisposable
         var saved = service.ReadForEdit(path);
         Assert.Equal("新内容\nsecond", saved.Content);
         Assert.Equal(name, saved.Encoding);
-        Assert.Equal(bom, File.ReadAllBytes(path).AsSpan().StartsWith(name == "utf-16" ? Encoding.Unicode.GetPreamble() : Encoding.UTF8.GetPreamble()));
+        Assert.Equal(
+            bom,
+            File.ReadAllBytes(path).AsSpan().StartsWith(name == "utf-16" ? Encoding.Unicode.GetPreamble() : Encoding.UTF8.GetPreamble()));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
     }
 
@@ -57,7 +59,10 @@ public sealed class FileTransferAndEditTest : IDisposable
         File.WriteAllText(path, "old");
         var original = service.ReadForEdit(path);
         File.WriteAllText(path, changeLength ? "external-content" : "new");
-        if (!changeLength) File.SetLastWriteTimeUtc(path, original.LastWriteTime.UtcDateTime.AddMinutes(1));
+        if (!changeLength)
+        {
+            File.SetLastWriteTimeUtc(path, original.LastWriteTime.UtcDateTime.AddMinutes(1));
+        }
         Assert.Throws<FileEditConflictException>(() => service.SaveEdit(new(path, "replacement", original.Length, original.LastWriteTime, original.Encoding)));
         Assert.Equal(changeLength ? "external-content" : "new", File.ReadAllText(path));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
@@ -77,32 +82,11 @@ public sealed class FileTransferAndEditTest : IDisposable
     public void OversizedFileCannotBeEdited()
     {
         var path = Path.Combine(root, "large");
-        using (var file = File.Create(path)) file.SetLength(11 * 1024 * 1024);
+        using (var file = File.Create(path))
+        {
+            file.SetLength(11 * 1024 * 1024);
+        }
         Assert.Throws<InvalidOperationException>(() => service.ReadForEdit(path));
-    }
-
-    [Fact]
-    public async Task UploadUsesOnlyFileNameAndDoesNotOverwriteExistingFile()
-    {
-        using var input = new MemoryStream(Encoding.UTF8.GetBytes("upload"));
-        var file = new FormFile(input, 0, input.Length, "file", "../notes.txt");
-        await service.UploadAsync(root, file, CancellationToken.None);
-        Assert.Equal("upload", File.ReadAllText(Path.Combine(root, "notes.txt")));
-        await Assert.ThrowsAsync<WinPilot.Core.ResourceNameConflictException>(() => service.UploadAsync(root, file, CancellationToken.None));
-        Assert.Equal("upload", File.ReadAllText(Path.Combine(root, "notes.txt")));
-        Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
-    }
-
-    [Fact]
-    public async Task CancelledUploadLeavesNeitherTargetNorTemporaryFile()
-    {
-        using var input = new MemoryStream(new byte[1024]);
-        var file = new FormFile(input, 0, input.Length, "file", "upload.bin");
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.UploadAsync(root, file, cancellation.Token));
-        Assert.False(File.Exists(Path.Combine(root, "upload.bin")));
-        Assert.Empty(Directory.GetFiles(root, ".winpilot-upload-*.tmp"));
     }
 
     [Fact]
@@ -112,8 +96,12 @@ public sealed class FileTransferAndEditTest : IDisposable
         File.WriteAllText(path, "content");
         var artifact = await service.CreateDownloadAsync(new([path]), CancellationToken.None, downloads);
         using (artifact.Content)
-        using (var reader = new StreamReader(artifact.Content))
-            Assert.Equal("content", await reader.ReadToEndAsync());
+        {
+            using (var reader = new StreamReader(artifact.Content))
+            {
+                Assert.Equal("content", await reader.ReadToEndAsync());
+            }
+        }
         Assert.Equal("file.txt", artifact.FileName);
         using var exclusive = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         Assert.Empty(Directory.GetFiles(downloads));
@@ -128,14 +116,16 @@ public sealed class FileTransferAndEditTest : IDisposable
         var artifact = await service.CreateDownloadAsync(new([source]), CancellationToken.None, downloads);
         var temporaryPath = Assert.Single(Directory.GetFiles(downloads));
         using (artifact.Content)
-        using (var zip = new ZipArchive(artifact.Content, ZipArchiveMode.Read, leaveOpen: true))
         {
-            Assert.Contains(zip.Entries, entry => entry.FullName == "source/");
-            Assert.Contains(zip.Entries, entry => entry.FullName == "source/nested/");
-            var entry = Assert.Single(zip.Entries.Where(entry => !entry.FullName.EndsWith('/')));
-            Assert.Equal("source/nested/中文.txt", entry.FullName);
-            using var reader = new StreamReader(entry.Open());
-            Assert.Equal("content", await reader.ReadToEndAsync());
+            using (var zip = new ZipArchive(artifact.Content, ZipArchiveMode.Read, leaveOpen: true))
+            {
+                Assert.Contains(zip.Entries, entry => entry.FullName == "source/");
+                Assert.Contains(zip.Entries, entry => entry.FullName == "source/nested/");
+                var entry = Assert.Single(zip.Entries.Where(entry => !entry.FullName.EndsWith('/')));
+                Assert.Equal("source/nested/中文.txt", entry.FullName);
+                using var reader = new StreamReader(entry.Open());
+                Assert.Equal("content", await reader.ReadToEndAsync());
+            }
         }
         Assert.False(File.Exists(temporaryPath));
     }
@@ -149,8 +139,11 @@ public sealed class FileTransferAndEditTest : IDisposable
         Directory.CreateDirectory(second);
         File.WriteAllText(Path.Combine(first, "same.txt"), "first");
         File.WriteAllText(Path.Combine(second, "same.txt"), "second");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateDownloadAsync(
-            new([Path.Combine(first, "same.txt"), Path.Combine(second, "same.txt")]), CancellationToken.None, downloads));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateDownloadAsync(
+                new([Path.Combine(first, "same.txt"), Path.Combine(second, "same.txt")]),
+                CancellationToken.None,
+                downloads));
         Assert.Empty(Directory.GetFiles(downloads));
     }
 
@@ -170,7 +163,9 @@ public sealed class FileTransferAndEditTest : IDisposable
         var artifact = await service.CreateDownloadAsync(new([source]), CancellationToken.None, downloads);
         var temporaryPath = Assert.Single(Directory.GetFiles(downloads));
         using (var archive = new ZipArchive(artifact.Content, ZipArchiveMode.Read, leaveOpen: true))
+        {
             Assert.Equal("empty/", Assert.Single(archive.Entries).FullName);
+        }
         await artifact.Content.DisposeAsync();
         Assert.False(File.Exists(temporaryPath));
     }
@@ -203,7 +198,13 @@ public sealed class FileTransferAndEditTest : IDisposable
         var path = Path.Combine(root, "small.txt");
         File.WriteAllText(path, "original");
         var original = service.ReadForEdit(path);
-        Assert.Throws<InvalidOperationException>(() => service.SaveEdit(new(path, new string('x', 10 * 1024 * 1024 + 1), original.Length, original.LastWriteTime, original.Encoding)));
+        Assert.Throws<InvalidOperationException>(() =>
+            service.SaveEdit(new(
+                path,
+                new string('x', 10 * 1024 * 1024 + 1),
+                original.Length,
+                original.LastWriteTime,
+                original.Encoding)));
         Assert.Equal("original", File.ReadAllText(path));
         Assert.Empty(Directory.GetFiles(root, ".winpilot-edit-*.tmp"));
     }
@@ -230,7 +231,16 @@ public sealed class FileTransferAndEditTest : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var argument in new[] { "/c", "mklink", "/J", link, source }) start.ArgumentList.Add(argument);
+        foreach (var argument in new[] {
+            "/c",
+            "mklink",
+            "/J",
+            link,
+            source
+})
+        {
+            start.ArgumentList.Add(argument);
+        }
         using var process = new System.Diagnostics.Process { StartInfo = start };
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Task<string>? standardOutput = null;
@@ -243,7 +253,10 @@ public sealed class FileTransferAndEditTest : IDisposable
             Assert.True(started);
             standardOutput = process.StandardOutput.ReadToEndAsync();
             standardError = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync(cancellation.Token); }
+            try
+            {
+                await process.WaitForExitAsync(cancellation.Token);
+            }
             catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
             {
                 throw new TimeoutException($"创建 Junction 超时：{link}", exception);
@@ -252,7 +265,11 @@ public sealed class FileTransferAndEditTest : IDisposable
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateDownloadAsync(new([selectLink ? link : source]), CancellationToken.None, downloads));
             Assert.Empty(Directory.GetFiles(downloads));
         }
-        catch (Exception exception) { failure = exception; throw; }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
         finally
         {
             try
@@ -262,71 +279,41 @@ public sealed class FileTransferAndEditTest : IDisposable
                     using var cleanupCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                     if (started && !process.HasExited)
                     {
-                        try { process.Kill(entireProcessTree: true); }
-                        catch (InvalidOperationException) when (process.HasExited) { }
+                        try
+                        {
+                            process.Kill(entireProcessTree: true);
+                        }
+                        catch (InvalidOperationException) when (process.HasExited)
+                        {
+                        }
                         await process.WaitForExitAsync(cleanupCancellation.Token);
                     }
                     if (standardOutput is not null)
+                    {
                         output.WriteLine("mklink 标准输出：{0}", await standardOutput.WaitAsync(cleanupCancellation.Token));
+                    }
                     if (standardError is not null)
+                    {
                         output.WriteLine("mklink 标准错误：{0}", await standardError.WaitAsync(cleanupCancellation.Token));
+                    }
                 }
-                finally { if (Directory.Exists(link)) Directory.Delete(link); }
+                finally
+                {
+                    if (Directory.Exists(link))
+                    {
+                        Directory.Delete(link);
+                    }
+                }
             }
             catch (Exception exception)
             {
-                if (failure is not null) throw new AggregateException($"Junction 测试收尾失败：{link}", failure, exception);
+                if (failure is not null)
+                {
+                    throw new AggregateException($"Junction 测试收尾失败：{link}", failure, exception);
+                }
                 throw new IOException($"Junction 测试收尾失败：{link}", exception);
             }
         }
-    }
-
-    [Fact]
-    public async Task UploadApiRejectsMissingMultipartBoundaryWithProblem()
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Logging.ClearProviders();
-        builder.Services.AddSingleton(service);
-        await using var app = builder.Build();
-        app.MapFileEndpoints();
-        await app.StartAsync();
-        using var client = app.GetTestClient();
-        using var content = new StringContent("invalid body", Encoding.UTF8);
-        content.Headers.ContentType = new("multipart/form-data");
-        using var response = await client.PostAsync("/api/files/upload", content);
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
-        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal(400, problem.RootElement.GetProperty("status").GetInt32());
-        Assert.Equal("文件操作失败", problem.RootElement.GetProperty("title").GetString());
-        Assert.Equal("上传表单格式无效", problem.RootElement.GetProperty("detail").GetString());
-        Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
-    }
-
-    [Fact]
-    public async Task UploadApiPreservesSuccessfulPerFileResultsAndContent()
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Logging.ClearProviders();
-        builder.Services.AddSingleton(service);
-        await using var app = builder.Build();
-        app.MapFileEndpoints();
-        await app.StartAsync();
-        using var client = app.GetTestClient();
-        using var content = new MultipartFormDataContent();
-        content.Add(new StringContent(root), "directory");
-        content.Add(new ByteArrayContent(Encoding.UTF8.GetBytes("中文内容")), "files", "uploaded.txt");
-        using var response = await client.PostAsync("/api/files/upload", content);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
-        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var file = Assert.Single(result.RootElement.EnumerateArray());
-        Assert.Equal("uploaded.txt", file.GetProperty("fileName").GetString());
-        Assert.True(file.GetProperty("success").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, file.GetProperty("error").ValueKind);
-        Assert.Equal("中文内容", File.ReadAllText(Path.Combine(root, "uploaded.txt")));
     }
 
     public void Dispose() => Directory.Delete(root, true);
