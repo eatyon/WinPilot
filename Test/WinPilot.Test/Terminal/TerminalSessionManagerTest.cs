@@ -50,6 +50,43 @@ public sealed class TerminalSessionManagerTest
     }
 
     [Fact]
+    public async Task ClosingMissingOrAlreadyClosedSessionSucceeds()
+    {
+        await using var manager = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
+        var owner = Guid.NewGuid();
+        await manager.CloseAsync(owner, Guid.NewGuid());
+        var session = await manager.CreateAsync(owner, "cmd", Path.GetTempPath(), _ => Task.CompletedTask, CancellationToken.None);
+        await Task.WhenAll(
+            manager.CloseAsync(owner, session.SessionId),
+            manager.CloseAsync(owner, session.SessionId));
+        await manager.CloseAsync(owner, session.SessionId);
+        Assert.Equal(0, manager.ActiveSessionCount);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.InputAsync(owner, session.SessionId, ""));
+    }
+
+    [Fact]
+    public async Task ClosingNaturallyExitedSessionSucceeds()
+    {
+        await using var manager = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
+        var owner = Guid.NewGuid();
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = await manager.CreateAsync(owner, "cmd", Path.GetTempPath(), item =>
+        {
+            if (item.Type == "exited") exited.TrySetResult();
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+        await manager.InputAsync(owner, session.SessionId, "exit\r");
+        await exited.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (manager.ActiveSessionCount != 0)
+        {
+            await Task.Delay(20, timeout.Token);
+        }
+        await manager.CloseAsync(owner, session.SessionId);
+        Assert.Equal(0, manager.ActiveSessionCount);
+    }
+
+    [Fact]
     public async Task SessionLimitIsPerConnectionAndClosingOneReleasesCapacity()
     {
         await using var manager = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);

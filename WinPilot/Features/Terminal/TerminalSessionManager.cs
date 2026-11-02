@@ -83,7 +83,21 @@ public sealed class TerminalSessionManager : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public Task CloseAsync(Guid connectionId, Guid id) => Get(connectionId, id).CloseAsync();
+    /// <summary>
+    /// 关闭所属连接的会话；已退出或已关闭的会话无需再次处理。
+    /// </summary>
+    public Task CloseAsync(Guid connectionId, Guid id)
+    {
+        if (!sessions.TryGetValue(id, out var session))
+        {
+            return Task.CompletedTask;
+        }
+        if (session.ConnectionId != connectionId)
+        {
+            throw new InvalidOperationException("终端会话不存在");
+        }
+        return session.CloseAsync();
+    }
 
     public async Task CloseConnectionAsync(Guid connectionId)
     {

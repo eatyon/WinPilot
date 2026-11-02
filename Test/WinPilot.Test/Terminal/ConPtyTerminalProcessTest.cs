@@ -1,9 +1,62 @@
+using Microsoft.Win32.SafeHandles;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using WinPilot.Windows;
+using Process = System.Diagnostics.Process;
+using ProcessStartInfo = System.Diagnostics.ProcessStartInfo;
 
 namespace WinPilot.Test;
 
 public sealed class ConPtyTerminalProcessTest
 {
+    private const uint SynchronizeAccess = 0x00100000;
+    private const uint QueryLimitedInformationAccess = 0x00001000;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task KillProcessAcceptsBothRunningAndAlreadyExitedProcess(bool exitBeforeKill)
+    {
+        using var process = StartWaitingProcess();
+        var handle = process.SafeHandle;
+        try
+        {
+            Assert.False(process.HasExited);
+            if (exitBeforeKill)
+            {
+                await process.StandardInput.WriteLineAsync("exit");
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            ConPtyTerminalProcess.KillProcess(handle);
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(process.HasExited);
+        }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        }
+    }
+
+    [Theory]
+    [InlineData(SynchronizeAccess)]
+    [InlineData(QueryLimitedInformationAccess)]
+    public async Task KillProcessPreservesAccessDeniedWhenProcessIsAliveOrExitCannotBeChecked(uint access)
+    {
+        using var process = StartWaitingProcess();
+        try
+        {
+            using var handle = OpenProcess(access, false, process.Id);
+            Assert.False(handle.IsInvalid);
+            var error = Assert.Throws<Win32Exception>(() => ConPtyTerminalProcess.KillProcess(handle));
+            Assert.Equal(5, error.NativeErrorCode);
+            Assert.False(process.HasExited);
+        }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        }
+    }
+
     [Fact]
     public void ResizeAndClosePreserveHandleDimensionsAndSingleRelease()
     {
@@ -206,6 +259,18 @@ public sealed class ConPtyTerminalProcessTest
             for (var index = 0; index < expected.Length; index++) Assert.Same(expected[index], aggregate.InnerExceptions[index]);
         }
     }
+
+    private static Process StartWaitingProcess() => Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/d /q")
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardInput = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    })!;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
 
     private static (Thread Thread, Task Completion) StartThread(Action action)
     {

@@ -313,7 +313,7 @@ function interruptTerminal(tab: TerminalTab) {
 }
 
 function closeTerminal(tab: TerminalTab) {
-  send({ type: 'close', sessionId: tab.id });
+  if (tab.status === 'running') send({ type: 'close', sessionId: tab.id });
   const renderer = renderers.get(tab.id);
   if (renderer) {
     renderer.terminal.dispose();

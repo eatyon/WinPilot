@@ -83,7 +83,15 @@ internal sealed class ConPtyTerminalProcess : ITerminalProcess
         if (result == uint.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), "等待终端进程退出失败");
     }, cancellationToken);
     public void Resize(short columns, short rows) => pseudoConsole.Resize(columns, rows);
-    public void Kill() { if (!processHandle.IsInvalid) Ensure(TerminateProcess(processHandle, 1), "终止终端进程失败"); }
+    public void Kill() => KillProcess(processHandle);
+
+    internal static void KillProcess(SafeHandle processHandle)
+    {
+        if (processHandle.IsInvalid || TerminateProcess(processHandle, 1)) return;
+        var error = Marshal.GetLastWin32Error();
+        if (WaitForSingleObject(processHandle, 0) == 0) return;
+        throw new Win32Exception(error, "终止终端进程失败");
+    }
     public void ClosePseudoConsoleHandle() => pseudoConsole.Close();
     public ValueTask CloseOutputAsync() => Output.DisposeAsync();
     public ValueTask DisposeAsync() => ReleaseResourcesAsync(Input, Output, processHandle, ClosePseudoConsoleHandle);

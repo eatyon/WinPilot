@@ -103,6 +103,25 @@ test('closing a tab releases its observer and ignores late output', async () => 
   } finally { f.dispose(); }
 });
 
+test('closing exited sessions stays local while running sessions send close', async () => {
+  const f = fixture();
+  try {
+    const { socket } = await f.create('exited');
+    await f.create('running');
+    f.subject.handleEvent({ type: 'exited', sessionId: 'exited', data: '' });
+    socket.sent.length = 0;
+    f.subject.closeTerminal(f.subject.tabs.value[0]);
+    assert.equal(socket.sent.length, 0);
+    assert.equal(f.terminals[0].disposed, true);
+    f.subject.closeTerminal(f.subject.tabs.value[0]);
+    assert.equal(socket.sent.length, 1);
+    assert.equal(socket.sent[0].type, 'close');
+    assert.equal(socket.sent[0].sessionId, 'running');
+    assert.equal(f.terminals[1].disposed, true);
+    assert.deepEqual(f.toasts, []);
+  } finally { f.dispose(); }
+});
+
 test('stale socket events cannot affect a new connection and invalid JSON is reported', async () => {
   const f = fixture();
   try {
