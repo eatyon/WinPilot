@@ -12,7 +12,9 @@ public sealed partial class TerminalSessionTest
     [InlineData("operation", false)]
     [InlineData("cancel", false)]
     [InlineData("io", true)]
-    public async Task OutputReadFailureNotifiesAndEndsOnlyItsSessionWithoutWaitingOnItself(string kind, bool notificationFails)
+    public async Task OutputReadFailureNotifiesAndEndsOnlyItsSessionWithoutWaitingOnItself(
+        string kind,
+        bool notificationFails)
     {
         var process = new ProcessDouble(new());
         var healthyProcess = new ProcessDouble(new());
@@ -35,11 +37,25 @@ public sealed partial class TerminalSessionTest
             {
                 errorEntered.TrySetResult();
                 await releaseError.Task;
-                if (notificationFails) throw notificationFailure;
+                if (notificationFails)
+                {
+                    throw notificationFailure;
+                }
             }
-        }, _ => { removeCount++; removed.TrySetResult(); return Task.CompletedTask; }, logger, source);
-        var healthy = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), healthyProcess,
-            _ => Task.CompletedTask, _ => Task.CompletedTask, new CloseLogger(), healthySource);
+        }, _ =>
+        {
+            removeCount++;
+            removed.TrySetResult();
+            return Task.CompletedTask;
+        }, logger, source);
+        var healthy = new TerminalSession(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            healthyProcess,
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            new CloseLogger(),
+            healthySource);
         try
         {
             session.Start();
@@ -54,15 +70,28 @@ public sealed partial class TerminalSessionTest
             await close.WaitAsync(TimeSpan.FromSeconds(3));
             await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Collection(events,
-                item => { Assert.Equal("error", item.Type); Assert.Equal(session.Id, item.SessionId); Assert.Equal("终端输出读取失败，正在关闭会话", item.Data); },
-                item => { Assert.Equal("exited", item.Type); Assert.Equal(session.Id, item.SessionId); Assert.Equal("终端会话已结束", item.Data); });
+                item =>
+                {
+                    Assert.Equal("error", item.Type);
+                    Assert.Equal(session.Id, item.SessionId);
+                    Assert.Equal("终端输出读取失败，正在关闭会话", item.Data);
+                },
+                item =>
+                {
+                    Assert.Equal("exited", item.Type);
+                    Assert.Equal(session.Id, item.SessionId);
+                    Assert.Equal("终端会话已结束", item.Data);
+                });
             Assert.Equal(1, removeCount);
             Assert.Equal(1, process.DisposeCount);
             Assert.True(token.IsCancellationRequested);
             var warning = Assert.Single(logger.Entries.Where(entry => ReferenceEquals(entry.Error, failure)));
             Assert.Equal(LogLevel.Warning, warning.Level);
             Assert.Contains(session.Id.ToString(), warning.Message);
-            if (notificationFails) Assert.Single(logger.Entries.Where(entry => ReferenceEquals(entry.Error, notificationFailure)));
+            if (notificationFails)
+            {
+                Assert.Single(logger.Entries.Where(entry => ReferenceEquals(entry.Error, notificationFailure)));
+            }
             Assert.False(healthyToken.IsCancellationRequested);
             Assert.Equal(0, healthyProcess.DisposeCount);
             await healthy.WriteAsync("still running");
@@ -90,14 +119,28 @@ public sealed partial class TerminalSessionTest
         var outputClosedBeforeConsole = false;
         process.OnStage = stage =>
         {
-            if (stage != "console") return;
+            if (stage != "console")
+            {
+                return;
+            }
             outputClosedBeforeConsole = process.OutputClosed;
             consoleEntered.TrySetResult();
-            if (!releaseConsole.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("测试未释放伪控制台关闭");
+            if (!releaseConsole.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("测试未释放伪控制台关闭");
+            }
         };
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process,
-            item => { events.Enqueue(item); return Task.CompletedTask; },
-            _ => { removed.TrySetResult(); return Task.CompletedTask; }, logger);
+            item =>
+            {
+                events.Enqueue(item);
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                removed.TrySetResult();
+                return Task.CompletedTask;
+            }, logger);
         try
         {
             session.Start();
@@ -115,7 +158,12 @@ public sealed partial class TerminalSessionTest
             Assert.Single(events.Where(item => item.Type == "exited"));
             Assert.Equal(1, process.DisposeCount);
         }
-        finally { releaseConsole.Set(); process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            releaseConsole.Set();
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
     [Fact]
@@ -127,7 +175,11 @@ public sealed partial class TerminalSessionTest
         var notificationFailure = new IOException("结束通知失败");
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process,
             item => item.Type == "exited" ? Task.FromException(notificationFailure) : Task.CompletedTask,
-            _ => { removed.TrySetResult(); return Task.CompletedTask; }, logger);
+            _ =>
+            {
+                removed.TrySetResult();
+                return Task.CompletedTask;
+            }, logger);
         try
         {
             session.Start();
@@ -138,7 +190,11 @@ public sealed partial class TerminalSessionTest
             Assert.Single(logger.Entries.Where(entry => ReferenceEquals(entry.Error, notificationFailure)));
             Assert.Equal(1, process.DisposeCount);
         }
-        finally { process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
     [Fact]
@@ -149,8 +205,16 @@ public sealed partial class TerminalSessionTest
         var events = new ConcurrentQueue<TerminalEvent>();
         var removed = 0;
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process,
-            item => { events.Enqueue(item); return Task.CompletedTask; },
-            _ => { removed++; return Task.CompletedTask; }, logger);
+            item =>
+            {
+                events.Enqueue(item);
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                removed++;
+                return Task.CompletedTask;
+            }, logger);
         try
         {
             session.Start();
@@ -163,7 +227,11 @@ public sealed partial class TerminalSessionTest
             Assert.Empty(events);
             Assert.Empty(logger.Entries);
         }
-        finally { process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
     [Theory]
@@ -172,11 +240,21 @@ public sealed partial class TerminalSessionTest
     public async Task ReadFailureDuringNormalCloseDoesNotReportFatalOutputFailure(string kind)
     {
         var process = new ProcessDouble(new());
-        process.OnStage = stage => { if (stage == "output") process.FailRead(ReadFailure(kind)); };
+        process.OnStage = stage =>
+        {
+            if (stage == "output")
+            {
+                process.FailRead(ReadFailure(kind));
+            }
+        };
         var logger = new CloseLogger();
         var events = new ConcurrentQueue<TerminalEvent>();
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process,
-            item => { events.Enqueue(item); return Task.CompletedTask; }, _ => Task.CompletedTask, logger);
+            item =>
+            {
+                events.Enqueue(item);
+                return Task.CompletedTask;
+            }, _ => Task.CompletedTask, logger);
         try
         {
             session.Start();
@@ -186,14 +264,19 @@ public sealed partial class TerminalSessionTest
             Assert.Empty(logger.Entries);
             Assert.Equal(1, process.DisposeCount);
         }
-        finally { process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
-    private static Exception ReadFailure(string kind) => kind switch
-    {
-        "disposed" => new ObjectDisposedException("private-output"),
-        "operation" => new InvalidOperationException("private-output"),
-        "cancel" => new OperationCanceledException("unexpected cancellation"),
-        _ => new IOException("private-output")
-    };
+    private static Exception ReadFailure(string kind) =>
+        kind switch
+        {
+            "disposed" => new ObjectDisposedException("private-output"),
+            "operation" => new InvalidOperationException("private-output"),
+            "cancel" => new OperationCanceledException("unexpected cancellation"),
+            _ => new IOException("private-output")
+        };
 }

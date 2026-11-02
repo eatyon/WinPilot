@@ -115,15 +115,23 @@ public sealed class TerminalEndpointTest : IAsyncLifetime
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var socket = await app.GetTestServer().CreateWebSocketClient().ConnectAsync(new Uri("ws://localhost/api/terminal/ws"), cancellation.Token);
         var manager = app.Services.GetRequiredService<TerminalSessionManager>();
-        await Send(socket, JsonSerializer.Serialize(new { type = "create", shell = "cmd", workingDirectory = root }), cancellation.Token);
-        while (await ReceiveType(socket, cancellation.Token) != "created") { }
+        await Send(socket, JsonSerializer.Serialize(new
+        {
+            type = "create",
+            shell = "cmd",
+            workingDirectory = root
+        }), cancellation.Token);
+        while (await ReceiveType(socket, cancellation.Token) != "created")
+        {
+        }
         Assert.Equal(1, manager.ActiveSessionCount);
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", cancellation.Token);
         Assert.Equal(0, manager.ActiveSessionCount);
     }
 
     private static Task Send(WebSocket socket, string payload, CancellationToken token)
-        => socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(payload)), WebSocketMessageType.Text, true, token);
+        =>
+        socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(payload)), WebSocketMessageType.Text, true, token);
 
     private static async Task<string?> ReceiveType(WebSocket socket, CancellationToken token)
     {
@@ -138,6 +146,9 @@ public sealed class TerminalEndpointTest : IAsyncLifetime
     {
         await app.StopAsync();
         await app.DisposeAsync();
-        if (Directory.Exists(root)) Directory.Delete(root, true);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, true);
+        }
     }
 }

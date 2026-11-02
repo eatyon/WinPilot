@@ -19,8 +19,14 @@ public sealed partial class TerminalSessionTest
         process.MonitorCheck = () =>
         {
             var check = Interlocked.Increment(ref checks);
-            if (check == 1) return false;
-            if (check != 2) return true;
+            if (check == 1)
+            {
+                return false;
+            }
+            if (check != 2)
+            {
+                return true;
+            }
             entered.TrySetResult();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             throw failure;
@@ -28,7 +34,11 @@ public sealed partial class TerminalSessionTest
         var logger = new CloseLogger();
         var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process, _ => Task.CompletedTask,
-            _ => { removed.TrySetResult(); return Task.CompletedTask; }, logger);
+            _ =>
+            {
+                removed.TrySetResult();
+                return Task.CompletedTask;
+            }, logger);
         try
         {
             session.Start();
@@ -43,7 +53,11 @@ public sealed partial class TerminalSessionTest
             Assert.Contains(session.Id.ToString(), entry.Message);
             Assert.Equal(1, process.DisposeCount);
         }
-        finally { release.Set(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            release.Set();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     [Theory]
@@ -66,7 +80,10 @@ public sealed partial class TerminalSessionTest
         void Stage(string stage)
         {
             stages.Enqueue(stage);
-            if (stage == failedStage) throw failure;
+            if (stage == failedStage)
+            {
+                throw failure;
+            }
         }
         process.OnStage = Stage;
         var source = new DisposeSource(() => Stage("source"));
@@ -98,13 +115,22 @@ public sealed partial class TerminalSessionTest
         Assert.Equal(failedStage != "kill", stages.Contains("wait"));
         Assert.True(Array.IndexOf(stages.ToArray(), "console") < Array.IndexOf(stages.ToArray(), "output"));
         var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToArray();
-        if (failedStage == "none") Assert.Empty(warnings);
+        if (failedStage == "none")
+        {
+            Assert.Empty(warnings);
+        }
         else
         {
             var warning = Assert.Single(warnings);
             Assert.Contains(session.Id.ToString(), warning.Message);
-            if (failedStage == "cancel") Assert.Same(failure, Assert.Single(Assert.IsType<AggregateException>(warning.Error).InnerExceptions));
-            else Assert.Same(failure, warning.Error);
+            if (failedStage == "cancel")
+            {
+                Assert.Same(failure, Assert.Single(Assert.IsType<AggregateException>(warning.Error).InnerExceptions));
+            }
+            else
+            {
+                Assert.Same(failure, warning.Error);
+            }
         }
     }
 
@@ -117,9 +143,18 @@ public sealed partial class TerminalSessionTest
         var bottomFailure = new AggregateException(new IOException("bottom-input"), new IOException("bottom-output"));
         process.OnStage = stage =>
         {
-            if (stage == "input") throw inputFailure;
-            if (stage == "console") throw consoleFailure;
-            if (stage == "dispose") throw bottomFailure;
+            if (stage == "input")
+            {
+                throw inputFailure;
+            }
+            if (stage == "console")
+            {
+                throw consoleFailure;
+            }
+            if (stage == "dispose")
+            {
+                throw bottomFailure;
+            }
         };
         var logger = new CloseLogger();
         var removed = false;
@@ -135,7 +170,9 @@ public sealed partial class TerminalSessionTest
         var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToArray();
         Assert.Equal(3, warnings.Length);
         Assert.Contains(warnings, entry => ReferenceEquals(inputFailure, entry.Error) && entry.Message.Contains("关闭输入"));
-        Assert.Contains(warnings, entry => ReferenceEquals(consoleFailure, entry.Error) && entry.Message.Contains("关闭伪控制台"));
+        Assert.Contains(
+            warnings,
+            entry => ReferenceEquals(consoleFailure, entry.Error) && entry.Message.Contains("关闭伪控制台"));
         Assert.Single(warnings.Where(entry => ReferenceEquals(bottomFailure, entry.Error)));
         Assert.Equal(1, process.DisposeCount);
     }
@@ -159,11 +196,17 @@ public sealed partial class TerminalSessionTest
         try
         {
             session.Start();
-            if (expectedCancellation) await process.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (expectedCancellation)
+            {
+                await process.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
             await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10));
             Assert.True(removed);
             Assert.Equal(1, process.DisposeCount);
-            if (expectedCancellation) Assert.Empty(logger.Entries);
+            if (expectedCancellation)
+            {
+                Assert.Empty(logger.Entries);
+            }
             else
             {
                 var entry = Assert.Single(logger.Entries);
@@ -173,7 +216,11 @@ public sealed partial class TerminalSessionTest
                 Assert.Same(failure, entry.Error);
             }
         }
-        finally { process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     [Theory]
@@ -187,7 +234,10 @@ public sealed partial class TerminalSessionTest
         process.OnStage = stage =>
         {
             stages.Enqueue(stage);
-            if (stage == "output" && outputFails) throw failure;
+            if (stage == "output" && outputFails)
+            {
+                throw failure;
+            }
         };
         var logger = new CloseLogger();
         var removed = false;
@@ -211,10 +261,20 @@ public sealed partial class TerminalSessionTest
             Assert.True(outputFails
                 ? Array.IndexOf(order, "dispose") < Array.IndexOf(order, "read-ended")
                 : Array.IndexOf(order, "read-ended") < Array.IndexOf(order, "dispose"));
-            if (outputFails) Assert.Same(failure, Assert.Single(logger.Entries).Error);
-            else Assert.Empty(logger.Entries);
+            if (outputFails)
+            {
+                Assert.Same(failure, Assert.Single(logger.Entries).Error);
+            }
+            else
+            {
+                Assert.Empty(logger.Entries);
+            }
         }
-        finally { process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     [Fact]
@@ -223,7 +283,10 @@ public sealed partial class TerminalSessionTest
         var process = new ProcessDouble(new());
         process.OnStage = stage =>
         {
-            if (stage is "output" or "dispose") throw new IOException(stage);
+            if (stage is "output" or "dispose")
+            {
+                throw new IOException(stage);
+            }
         };
         var logger = new CloseLogger();
         var removed = false;
@@ -246,7 +309,11 @@ public sealed partial class TerminalSessionTest
             Assert.True(removed);
             Assert.Equal(2, logger.Entries.Count(entry => entry.Level == LogLevel.Warning));
         }
-        finally { process.ReleaseOutput(); await (close ?? session.CloseAsync()).WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            process.ReleaseOutput();
+            await (close ?? session.CloseAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     [Fact]
@@ -255,7 +322,11 @@ public sealed partial class TerminalSessionTest
         var process = new ProcessDouble(new());
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.Wait = () => { waiting.TrySetResult(); return release.Task; };
+        process.Wait = () =>
+        {
+            waiting.TrySetResult();
+            return release.Task;
+        };
         var removed = 0;
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process, _ => Task.CompletedTask, _ =>
         {
@@ -277,7 +348,11 @@ public sealed partial class TerminalSessionTest
             Assert.Equal(1, removed);
             Assert.Equal(1, process.DisposeCount);
         }
-        finally { release.TrySetResult(); await Task.WhenAll(first ?? session.CloseAsync(), second ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            release.TrySetResult();
+            await Task.WhenAll(first ?? session.CloseAsync(), second ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     [Theory]
@@ -292,10 +367,17 @@ public sealed partial class TerminalSessionTest
         var logger = new CloseLogger();
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process, async item =>
         {
-            if (item.Type != "exited") return;
+            if (item.Type != "exited")
+            {
+                return;
+            }
             publishing.TrySetResult();
             await release.Task;
-        }, _ => { removed.TrySetResult(); return Task.CompletedTask; }, logger);
+        }, _ =>
+        {
+            removed.TrySetResult();
+            return Task.CompletedTask;
+        }, logger);
         Task? close = null;
         try
         {
@@ -312,26 +394,39 @@ public sealed partial class TerminalSessionTest
             Assert.Equal(1, process.DisposeCount);
             Assert.Empty(logger.Entries);
         }
-        finally { release.TrySetResult(); process.ReleaseOutput(); await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            release.TrySetResult();
+            process.ReleaseOutput();
+            await session.CloseAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     private sealed class ProcessDouble : ITerminalProcess
     {
         private readonly ConcurrentQueue<string> stages;
         private readonly OutputStream output;
+
         public ProcessDouble(ConcurrentQueue<string> stages)
         {
             this.stages = stages;
             Input = new InputStream(() => Stage("input"));
             output = new OutputStream(stages, ReadStarted);
         }
+
         public Action<string>? OnStage { get; set; }
+
         public Exception? OutputOpenFailure { set => output.OpenFailure = value; }
+
         public bool HonorReadCancellation { set => output.HonorCancellation = value; }
+
         public void FailRead(Exception exception) => output.Fail(exception);
+
         public TaskCompletionSource ReadEnded => output.Ended;
         public TaskCompletionSource SecondMonitorPoll { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private int monitorPolls;
+
         public bool OutputClosed { get; private set; }
         public Func<Task>? Wait { get; set; }
         public bool Exited { get; set; }
@@ -342,20 +437,31 @@ public sealed partial class TerminalSessionTest
         public Stream Input { get; }
         public Stream Output => output;
         public int? ExitCode => 0;
+
         public bool HasExited()
         {
-            if (Interlocked.Increment(ref monitorPolls) >= 2) SecondMonitorPoll.TrySetResult();
+            if (Interlocked.Increment(ref monitorPolls) >= 2)
+            {
+                SecondMonitorPoll.TrySetResult();
+            }
             return MonitorCheck?.Invoke() ?? Exited;
         }
+
         public void Kill() => Stage("kill");
+
         public Task WaitForExitAsync(CancellationToken cancellationToken)
         {
             Assert.Equal(CancellationToken.None, cancellationToken);
             Stage("wait");
             return Wait?.Invoke() ?? Task.CompletedTask;
         }
-        public void Resize(short columns, short rows) { }
+
+        public void Resize(short columns, short rows)
+        {
+        }
+
         public void ClosePseudoConsoleHandle() => Stage("console");
+
         public ValueTask CloseOutputAsync()
         {
             Stage("output");
@@ -363,6 +469,7 @@ public sealed partial class TerminalSessionTest
             ReleaseOutput();
             return ValueTask.CompletedTask;
         }
+
         public ValueTask DisposeAsync()
         {
             DisposeCount++;
@@ -372,11 +479,19 @@ public sealed partial class TerminalSessionTest
             ReleaseOutput();
             return ValueTask.CompletedTask;
         }
+
         public void ReleaseOutput() => output.Release();
+
         private void Stage(string stage)
         {
-            if (OnStage is not null) OnStage(stage);
-            else stages.Enqueue(stage);
+            if (OnStage is not null)
+            {
+                OnStage(stage);
+            }
+            else
+            {
+                stages.Enqueue(stage);
+            }
         }
     }
 
@@ -385,7 +500,10 @@ public sealed partial class TerminalSessionTest
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
-            if (disposing) close();
+            if (disposing)
+            {
+                close();
+            }
         }
     }
 
@@ -394,28 +512,46 @@ public sealed partial class TerminalSessionTest
         internal Exception? OpenFailure { get; set; }
         internal bool HonorCancellation { get; set; }
         internal TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private readonly TaskCompletionSource<int> released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public void Fail(Exception exception) => released.TrySetException(exception);
+
         public void Release() => released.TrySetResult(0);
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
         {
             started.TrySetResult();
-            try { return HonorCancellation ? await released.Task.WaitAsync(cancellationToken) : await released.Task; }
+            try
+            {
+                return HonorCancellation ? await released.Task.WaitAsync(cancellationToken) : await released.Task;
+            }
             finally
             {
                 stages.Enqueue("read-ended");
                 Ended.TrySetResult();
             }
         }
+
         public override bool CanRead => OpenFailure is not null ? throw OpenFailure : true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
         public override long Length => throw new NotSupportedException();
+
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override void Flush() { }
+
+        public override void Flush()
+        {
+        }
+
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
         public override void SetLength(long value) => throw new NotSupportedException();
+
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
@@ -424,16 +560,28 @@ public sealed partial class TerminalSessionTest
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
-            if (disposing) dispose();
+            if (disposing)
+            {
+                dispose();
+            }
         }
     }
 
     private sealed class CloseLogger : ILogger
     {
         internal ConcurrentQueue<(LogLevel Level, string Message, Exception? Error)> Entries { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Enqueue((level, formatter(state, exception), exception));
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            =>
+            Entries.Enqueue((level, formatter(state, exception), exception));
     }
 }

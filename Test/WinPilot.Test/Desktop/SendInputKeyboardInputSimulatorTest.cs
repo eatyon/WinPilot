@@ -21,5 +21,6 @@ public sealed class SendInputKeyboardInputSimulatorTest
     [InlineData(2u, 2, 0)]
     [InlineData(2u, 2, 5)]
     public void CompleteInputDoesNotTreatStaleErrorCodeAsFailure(uint sent, int expected, int errorCode)
-        => SendInputKeyboardInputSimulator.ValidateSentInputCount(sent, expected, errorCode);
+        =>
+        SendInputKeyboardInputSimulator.ValidateSentInputCount(sent, expected, errorCode);
 }

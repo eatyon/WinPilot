@@ -5,6 +5,9 @@ using WinPilot.Core;
 
 namespace WinPilot.Web;
 
+/// <summary>
+/// 提供未认证访问的伪装页面与资源，以短期令牌控制进入管理登录页的入口，不代替密码认证。
+/// </summary>
 public sealed class WebFacadeService(PortableDataPaths paths)
 {
     public const string VisitorCookieName = "WinPilot.WebFacadeVisitor";
@@ -19,7 +22,10 @@ public sealed class WebFacadeService(PortableDataPaths paths)
     public void EnsureDefaultPage()
     {
         Directory.CreateDirectory(paths.WebDirectory);
-        if (File.Exists(paths.WebIndexFile)) return;
+        if (File.Exists(paths.WebIndexFile))
+        {
+            return;
+        }
         File.WriteAllText(paths.WebIndexFile, DefaultPage);
     }
 
@@ -38,19 +44,36 @@ public sealed class WebFacadeService(PortableDataPaths paths)
     public async Task<bool> TryServeResourceAsync(HttpContext context)
     {
         var relativePath = context.Request.Path.Value?.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
-        if (string.IsNullOrWhiteSpace(relativePath) || string.Equals(relativePath, "index.html", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(relativePath)
+            || string.Equals(relativePath, "index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
         var webRoot = Path.GetFullPath(paths.WebDirectory);
         var candidate = Path.GetFullPath(Path.Combine(webRoot, relativePath));
-        if (!candidate.StartsWith(webRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(candidate)) return false;
+        if (!candidate.StartsWith(webRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(candidate))
+        {
+            return false;
+        }
         for (var current = candidate; current is not null; current = Path.GetDirectoryName(current))
         {
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return false;
-            if (string.Equals(current, paths.ApplicationDirectory, StringComparison.OrdinalIgnoreCase)) break;
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return false;
+            }
+            if (string.Equals(current, paths.ApplicationDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
         }
         contentTypes.TryGetContentType(candidate, out var contentType);
         var file = new FileInfo(candidate);
         context.Response.Headers.CacheControl = "private, no-cache";
-        await Results.File(candidate, contentType ?? "application/octet-stream", lastModified: file.LastWriteTimeUtc,
+        await Results.File(
+            candidate,
+            contentType ?? "application/octet-stream",
+            lastModified: file.LastWriteTimeUtc,
             entityTag: new($"\"{file.LastWriteTimeUtc.Ticks:x}-{file.Length:x}\"", isWeak: true)).ExecuteAsync(context);
         return true;
     }
@@ -58,7 +81,10 @@ public sealed class WebFacadeService(PortableDataPaths paths)
     public bool GrantManagementEntry(HttpContext context)
     {
         RemoveExpiredTokens();
-        if (!TryConsume(visitors, context.Request.Cookies[VisitorCookieName])) return false;
+        if (!TryConsume(visitors, context.Request.Cookies[VisitorCookieName]))
+        {
+            return false;
+        }
         var entry = CreateToken();
         entries[entry] = DateTimeOffset.UtcNow.AddMinutes(5);
         context.Response.Cookies.Append(ManagementEntryCookieName, entry, CookieOptions(context, TimeSpan.FromMinutes(5)));
@@ -66,11 +92,15 @@ public sealed class WebFacadeService(PortableDataPaths paths)
         return true;
     }
 
-    public bool HasManagementEntry(HttpContext context) => IsActive(entries, context.Request.Cookies[ManagementEntryCookieName]);
+    public bool HasManagementEntry(HttpContext context) =>
+        IsActive(entries, context.Request.Cookies[ManagementEntryCookieName]);
 
     public void ConsumeManagementEntry(HttpContext context)
     {
-        if (context.Request.Cookies[ManagementEntryCookieName] is { } entry) entries.TryRemove(entry, out _);
+        if (context.Request.Cookies[ManagementEntryCookieName] is { } entry)
+        {
+            entries.TryRemove(entry, out _);
+        }
         context.Response.Cookies.Delete(ManagementEntryCookieName);
     }
 
@@ -78,35 +108,56 @@ public sealed class WebFacadeService(PortableDataPaths paths)
     {
         var now = DateTimeOffset.UtcNow;
         var previous = Volatile.Read(ref nextCleanupUtcTicks);
-        if (now.UtcTicks < previous || Interlocked.CompareExchange(ref nextCleanupUtcTicks, now.AddMinutes(1).UtcTicks, previous) != previous) return;
+        if (now.UtcTicks < previous
+            || Interlocked.CompareExchange(ref nextCleanupUtcTicks, now.AddMinutes(1).UtcTicks, previous) != previous)
+        {
+            return;
+        }
         foreach (var tokens in new[] { visitors, entries })
+        {
             foreach (var item in tokens)
+            {
                 if (item.Value <= now)
+                {
                     ((ICollection<KeyValuePair<string, DateTimeOffset>>)tokens).Remove(item);
+                }
+            }
+        }
     }
 
-    private static CookieOptions CookieOptions(HttpContext context, TimeSpan maxAge) => new()
-    {
-        HttpOnly = true,
-        SameSite = SameSiteMode.Strict,
-        Secure = context.Request.IsHttps,
-        Path = "/",
-        MaxAge = maxAge
-    };
+    private static CookieOptions CookieOptions(HttpContext context, TimeSpan maxAge) =>
+        new()
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            Secure = context.Request.IsHttps,
+            Path = "/",
+            MaxAge = maxAge
+        };
 
-    private static string CreateToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    private static string CreateToken() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static bool IsActive(ConcurrentDictionary<string, DateTimeOffset> tokens, string? token)
     {
-        if (string.IsNullOrWhiteSpace(token) || !tokens.TryGetValue(token, out var expiresAt)) return false;
-        if (expiresAt > DateTimeOffset.UtcNow) return true;
+        if (string.IsNullOrWhiteSpace(token) || !tokens.TryGetValue(token, out var expiresAt))
+        {
+            return false;
+        }
+        if (expiresAt > DateTimeOffset.UtcNow)
+        {
+            return true;
+        }
         tokens.TryRemove(token, out _);
         return false;
     }
 
     private static bool TryConsume(ConcurrentDictionary<string, DateTimeOffset> tokens, string? token)
     {
-        if (!IsActive(tokens, token)) return false;
+        if (!IsActive(tokens, token))
+        {
+            return false;
+        }
         return tokens.TryRemove(token!, out _);
     }
 

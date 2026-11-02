@@ -1,5 +1,5 @@
-using WinPilot.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using WinPilot.Core;
 using WinPilot.Core.Desktop;
 using WinPilot.Core.Input;
 using WinPilot.Core.Notifications;
@@ -21,7 +21,12 @@ public sealed class DesktopImageVariableTest
     {
         var applicationDirectory = Path.Combine(Path.GetTempPath(), $"WinPilot-desktop-image-{Guid.NewGuid():N}");
         Directory.CreateDirectory(applicationDirectory);
-        var screenshotBytes = new byte[] { 1, 2, 3, 4 };
+        var screenshotBytes = new byte[] {
+            1,
+            2,
+            3,
+            4
+};
         var screenshotProvider = new RecordingScreenshotProvider(new(DateTimeOffset.UtcNow, screenshotBytes, "image/jpeg"));
         var notificationService = new RecordingNotificationService();
         Exception? failure = null;
@@ -42,7 +47,10 @@ public sealed class DesktopImageVariableTest
                 new(new(), new(), new()));
             try
             {
-                service.Create(new("desktop-image", true, new(TaskTriggerType.WinPilotStartup),
+                service.Create(new(
+                    "desktop-image",
+                    true,
+                    new(TaskTriggerType.WinPilotStartup),
                     [new(TaskActionType.SendNotification, NotificationChannel: "QQBot", NotificationContent: "&screenshot")]));
 
                 service.RunNow("desktop-image");
@@ -60,14 +68,24 @@ public sealed class DesktopImageVariableTest
                 await service.StopAsync(cancellation.Token);
             }
         }
-        catch (Exception exception) { failure = exception; throw; }
+        catch (Exception exception)
+        {
+            failure = exception;
+            throw;
+        }
         finally
         {
-            try { Directory.Delete(applicationDirectory, true); }
+            try
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 var cleanupFailure = new IOException($"清理桌面图片测试目录失败：{applicationDirectory}", exception);
-                if (failure is not null) throw new AggregateException(failure, cleanupFailure);
+                if (failure is not null)
+                {
+                    throw new AggregateException(failure, cleanupFailure);
+                }
                 throw cleanupFailure;
             }
         }
@@ -78,7 +96,10 @@ public sealed class DesktopImageVariableTest
         var deadline = DateTime.UtcNow + timeout;
         while (!condition())
         {
-            if (DateTime.UtcNow >= deadline) throw new TimeoutException("等待临时图片删除超时");
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException("等待临时图片删除超时");
+            }
             await Task.Delay(50);
         }
     }
@@ -86,6 +107,7 @@ public sealed class DesktopImageVariableTest
     private sealed class RecordingScreenshotProvider(DesktopScreenshot screenshot) : IDesktopScreenshotProvider
     {
         public int CaptureCount { get; private set; }
+
         public DesktopScreenshot Capture()
         {
             CaptureCount++;
@@ -97,7 +119,10 @@ public sealed class DesktopImageVariableTest
     {
         public TaskCompletionSource<(NotificationMessage Message, byte[] ImageBytes)> Sent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
         {
             var imageBytes = message.ImagePath is null ? [] : await File.ReadAllBytesAsync(message.ImagePath, cancellationToken);
             Sent.TrySetResult((message, imageBytes));
@@ -108,14 +133,21 @@ public sealed class DesktopImageVariableTest
     private sealed class NoOpProgramManager : IProgramManager
     {
         public IReadOnlyList<InteractiveUser> GetInteractiveUsers() => [];
+
         public IReadOnlyList<RunningProgram> GetRunningPrograms(string userName) => [];
-        public ProgramUsage GetUsage(IReadOnlyList<int> processIds, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public void Close(IReadOnlyList<int> processIds, bool force) => throw new NotSupportedException();
+
+        public ProgramUsage GetUsage(IReadOnlyList<int> processIds, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public void Close(IReadOnlyList<int> processIds, bool isGroup) => throw new NotSupportedException();
+
         public void Launch(ProgramLaunchRequest request) => throw new NotSupportedException();
     }
 
     private sealed class NoOpKeyboardInputSimulator : IKeyboardInputSimulator
     {
-        public void Send(IReadOnlyList<KeyboardKey> keys) { }
+        public void Send(IReadOnlyList<KeyboardKey> keys)
+        {
+        }
     }
 }

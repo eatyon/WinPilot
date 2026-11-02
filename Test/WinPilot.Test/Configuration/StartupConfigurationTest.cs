@@ -7,6 +7,7 @@ namespace WinPilot.Test;
 public sealed class StartupConfigurationTest : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "winpilot-startup-config", Guid.NewGuid().ToString("N"));
+
     private string PathToConfig => Path.Combine(root, "config.json");
 
     [Theory]
@@ -16,14 +17,21 @@ public sealed class StartupConfigurationTest : IDisposable
     {
         WinPilotSettings.LoadAndInitialize(PathToConfig);
         var original = File.ReadAllText(PathToConfig);
-        if (!failApply) Directory.CreateDirectory(PathToConfig + ".tmp");
+        if (!failApply)
+        {
+            Directory.CreateDirectory(PathToConfig + ".tmp");
+        }
         var applied = new List<StartupMode>();
         void Apply(StartupMode mode)
         {
             applied.Add(mode);
-            if (failApply && mode == StartupMode.Enabled) throw new InvalidOperationException("测试失败");
+            if (failApply && mode == StartupMode.Enabled)
+            {
+                throw new InvalidOperationException("测试失败");
+            }
         }
-        var exception = Record.Exception(() => SettingsEndpointRouteBuilderExtensions.UpdateStartupSettings(
+        var exception = Record.Exception(() =>
+            SettingsEndpointRouteBuilderExtensions.UpdateStartupSettings(
             PathToConfig, current => current with { StartupMode = StartupMode.Enabled }, Apply,
             NullLogger.Instance));
         Assert.NotNull(exception);
@@ -37,7 +45,8 @@ public sealed class StartupConfigurationTest : IDisposable
         WinPilotSettings.LoadAndInitialize(PathToConfig);
         var original = File.ReadAllText(PathToConfig);
         var called = false;
-        Assert.Throws<InvalidDataException>(() => SettingsEndpointRouteBuilderExtensions.UpdateStartupSettings(
+        Assert.Throws<InvalidDataException>(() =>
+            SettingsEndpointRouteBuilderExtensions.UpdateStartupSettings(
             PathToConfig, current => current with { StartupMode = (StartupMode)999 }, _ => called = true,
             NullLogger.Instance));
         Assert.False(called);
@@ -66,7 +75,10 @@ public sealed class StartupConfigurationTest : IDisposable
         Assert.Same(originalError, Record.Exception(() => SettingsEndpointRouteBuilderExtensions.UpdateStartupSettings(
             PathToConfig, current => current with { StartupMode = StartupMode.Enabled }, mode =>
             {
-                if (mode == StartupMode.Enabled) throw originalError;
+                if (mode == StartupMode.Enabled)
+                {
+                    throw originalError;
+                }
                 throw new InvalidOperationException("恢复失败");
             }, logger)));
         Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error);
@@ -74,6 +86,9 @@ public sealed class StartupConfigurationTest : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

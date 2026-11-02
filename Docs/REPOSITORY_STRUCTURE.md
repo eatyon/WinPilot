@@ -21,6 +21,26 @@
 | `WinPilot.sln` | C# 项目与测试的解决方案 |
 | `Directory.Build.props` | C# 构建输出和中间文件路径 |
 
+### C# 目录
+
+以下路径相对 `WinPilot/`：
+
+| 路径 | 用途 |
+| --- | --- |
+| `Core/` | 配置、模型和平台契约，按功能分类；共享类型保留在根目录 |
+| `Features/` | 业务服务及功能专用类型，按功能分类 |
+| `Features/Plugins/` | 插件管理，按运行时、宿主 API、扩展、命令、状态、页面和配置分类 |
+| `Features/Notifications/Channels/<渠道>/` | 通知渠道实现 |
+| `Features/Notifications/CommandBots/<渠道>/` | 命令机器人实现；共用生命周期位于上级目录 |
+| `Web/Endpoints/` | HTTP 端点与请求、响应适配 |
+| `Web/Middleware/` | HTTP 请求中间件 |
+| `Windows/<功能>/` | 应用、桌面、输入、程序、系统状态和终端的平台实现 |
+| `Infrastructure/` | 单实例、日志等基础设施 |
+
+类型和文件名使用 PascalCase，接口名以 `I` 开头。独立实现优先使用同名文件，紧密相关的类型可合组；分类子目录沿用所属模块的命名空间。
+
+插件共享契约位于 `WinPilot.PluginContract/`，按能力组织。
+
 ## 构建与测试
 
 环境：Windows、.NET 10 SDK 或更新版本、Node.js 22.12 或更新版本。以下命令在仓库根目录执行

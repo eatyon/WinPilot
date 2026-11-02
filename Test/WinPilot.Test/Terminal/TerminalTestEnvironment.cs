@@ -12,7 +12,11 @@ public sealed class TerminalTestCollection : ICollectionFixture<TerminalTestEnvi
 public sealed class TerminalTestEnvironment : IDisposable
 {
     private readonly string? modulePath = Environment.GetEnvironmentVariable("PSModulePath");
-    private readonly (int Id, IntPtr Handle)[] handles = new[] { -10, -11, -12 }
+    private readonly (int Id, IntPtr Handle)[] handles = new[] {
+        -10,
+        -11,
+        -12
+}
         .Select(id => (id, GetStdHandle(id))).ToArray();
 
     public TerminalTestEnvironment()
@@ -21,8 +25,12 @@ public sealed class TerminalTestEnvironment : IDisposable
         {
             Environment.SetEnvironmentVariable("PSModulePath", null);
             foreach (var handle in handles)
+            {
                 if (!SetStdHandle(handle.Id, IntPtr.Zero))
+                {
                     throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            }
         }
         catch
         {
@@ -36,9 +44,16 @@ public sealed class TerminalTestEnvironment : IDisposable
         Environment.SetEnvironmentVariable("PSModulePath", modulePath);
         Win32Exception? error = null;
         foreach (var handle in handles)
+        {
             if (!SetStdHandle(handle.Id, handle.Handle))
+            {
                 error ??= new Win32Exception(Marshal.GetLastWin32Error());
-        if (error is not null) throw error;
+            }
+        }
+        if (error is not null)
+        {
+            throw error;
+        }
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

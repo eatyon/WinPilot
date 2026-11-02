@@ -6,6 +6,9 @@ using WinPilot.Features.Notifications;
 
 namespace WinPilot.Core;
 
+/// <summary>
+/// 主程序配置快照，集中处理默认值、校验和文件更新；各功能通过 Update 修改自己的设置。
+/// </summary>
 public sealed record WinPilotSettings
 {
     private static readonly object configurationGate = new();
@@ -47,9 +50,15 @@ public sealed record WinPilotSettings
     public static WinPilotSettings LoadAndInitialize(string configurationFile)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationFile);
-        lock (configurationGate) return LoadCore(configurationFile);
+        lock (configurationGate)
+        {
+            return LoadCore(configurationFile);
+        }
     }
 
+    /// <summary>
+    /// 在同一锁内读取最新配置、应用修改并写回，避免不同设置入口相互覆盖。
+    /// </summary>
     public static WinPilotSettings Update(string configurationFile, Func<WinPilotSettings, WinPilotSettings> update)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationFile);
@@ -88,9 +97,13 @@ public sealed record WinPilotSettings
 
     private static WinPilotSettings NormalizeAndValidate(WinPilotSettings? settings)
     {
-        if (settings is null || settings.Port is < 1 or > 65535 || !Enum.IsDefined(settings.StartupMode)
+        if (settings is null
+            || settings.Port is < 1 or > 65535
+            || !Enum.IsDefined(settings.StartupMode)
             || settings.Updates is { IsValid: false })
+        {
             throw new InvalidDataException("配置内容不符合当前 WinPilot 版本要求");
+        }
         var normalized = settings with
         {
             Notifications = settings.Notifications ?? new(),
@@ -113,18 +126,32 @@ public sealed record WinPilotSettings
     private static void WriteConfiguration(string configurationFile, WinPilotSettings settings)
     {
         var configuration = JsonSerializer.SerializeToNode(settings, JsonOptions)!.AsObject();
+        // 保留当前模型未识别的根级字段，不因保存已知设置而丢弃其他配置。
         if (File.Exists(configurationFile))
+        {
             foreach (var property in ReadConfiguration(configurationFile))
+            {
                 if (!configuration.Any(item => item.Key.Equals(property.Key, StringComparison.OrdinalIgnoreCase)))
+                {
                     configuration.Add(property.Key, property.Value?.DeepClone());
+                }
+            }
+        }
         var directory = Path.GetDirectoryName(configurationFile)
-            ?? throw new InvalidOperationException("配置文件路径必须包含目录");
+                    ?? throw new InvalidOperationException("配置文件路径必须包含目录");
         Directory.CreateDirectory(directory);
+        // 先完整写入临时文件再替换目标，失败时清理临时文件。
         var temporaryFile = configurationFile + ".tmp";
         FileOperationRecovery.WithCleanup(() =>
         {
             File.WriteAllText(temporaryFile, configuration.ToJsonString(JsonOptions));
             File.Move(temporaryFile, configurationFile, overwrite: true);
-        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
+        }, () =>
+        {
+            if (File.Exists(temporaryFile))
+            {
+                File.Delete(temporaryFile);
+            }
+        });
     }
 }

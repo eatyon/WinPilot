@@ -59,7 +59,10 @@ public sealed class WebShutdownTest
                 }
                 else
                 {
-                    response = await client.GetAsync(new Uri(address, connection == "sse" ? "/api/security/safe-mode/events" : "/waiting"), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                    response = await client.GetAsync(
+                        new Uri(address, connection == "sse" ? "/api/security/safe-mode/events" : "/waiting"),
+                        HttpCompletionOption.ResponseHeadersRead,
+                        timeout.Token);
                     response.EnsureSuccessStatusCode();
                 }
                 await app.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -73,7 +76,10 @@ public sealed class WebShutdownTest
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 }

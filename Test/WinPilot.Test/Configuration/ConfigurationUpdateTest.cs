@@ -8,6 +8,7 @@ namespace WinPilot.Test;
 public sealed class ConfigurationUpdateTest : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "winpilot-configuration-update-tests", Guid.NewGuid().ToString("N"));
+
     private string FilePath => Path.Combine(directory, "config.json");
 
     [Fact]
@@ -66,8 +67,15 @@ public sealed class ConfigurationUpdateTest : IDisposable
     {
         var settings = WinPilotSettings.LoadAndInitialize(FilePath);
         var root = JsonNode.Parse(File.ReadAllText(FilePath))!.AsObject();
-        foreach (var section in new[] { "notifications", "commandBots", "securityNotifications", "updates" })
+        foreach (var section in new[] {
+            "notifications",
+            "commandBots",
+            "securityNotifications",
+            "updates"
+})
+        {
             Assert.IsType<JsonObject>(root[section]);
+        }
         Assert.Equal(9123, settings.Port);
         Assert.False(settings.LanAccessEnabled);
         Assert.False(settings.CommandBots.TelegramEnabled);
@@ -76,7 +84,9 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.False(settings.CommandBots.QQBotEnabled);
         Assert.True(root["notifications"]!["TelegramProxyEnabled"] is not null);
         foreach (var channel in NotificationChannelCatalog.All)
+        {
             Assert.False(root["notifications"]!.AsObject().ContainsKey(channel.Id + "Enabled"));
+        }
         Assert.Equal("http://127.0.0.1:7890", settings.Notifications.TelegramProxyUrl);
         Assert.False(settings.SafeModeEnabled);
         Assert.Equal("", settings.SecurityNotifications.Channel);
@@ -134,11 +144,21 @@ public sealed class ConfigurationUpdateTest : IDisposable
         {
             switch (index % 5)
             {
-                case 0: WinPilotSettings.Update(FilePath, current => current with { Port = current.Port + 1 }); break;
-                case 1: WinPilotSettings.Update(FilePath, current => current with { SafeModeEnabled = true }); break;
-                case 2: WinPilotSettings.Update(FilePath, current => current with { Notifications = current.Notifications with { QQBotAppId = "app" } }); break;
-                case 3: WinPilotSettings.Update(FilePath, current => current with { CommandBots = current.CommandBots with { TelegramPrefix = "/" } }); break;
-                case 4: WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Channel = "telegram" } }); break;
+                case 0:
+                    WinPilotSettings.Update(FilePath, current => current with { Port = current.Port + 1 });
+                    break;
+                case 1:
+                    WinPilotSettings.Update(FilePath, current => current with { SafeModeEnabled = true });
+                    break;
+                case 2:
+                    WinPilotSettings.Update(FilePath, current => current with { Notifications = current.Notifications with { QQBotAppId = "app" } });
+                    break;
+                case 3:
+                    WinPilotSettings.Update(FilePath, current => current with { CommandBots = current.CommandBots with { TelegramPrefix = "/" } });
+                    break;
+                case 4:
+                    WinPilotSettings.Update(FilePath, current => current with { SecurityNotifications = current.SecurityNotifications with { Channel = "telegram" } });
+                    break;
             }
         })));
         var saved = WinPilotSettings.LoadAndInitialize(FilePath);
@@ -183,7 +203,11 @@ public sealed class ConfigurationUpdateTest : IDisposable
     [InlineData("notifications", "QQBotMessageFormat", null, "QQBot 消息格式无效")]
     [InlineData("securityNotifications", "Channel", "unknown", "安全通知渠道无效")]
     [InlineData("securityNotifications", "Events", "[999]", "安全事件类型无效")]
-    public void InvalidNotificationValuesAreRejectedOnLoadAndSaveWithoutChangingFile(string section, string property, string? value, string message)
+    public void InvalidNotificationValuesAreRejectedOnLoadAndSaveWithoutChangingFile(
+        string section,
+        string property,
+        string? value,
+        string message)
     {
         WinPilotSettings.LoadAndInitialize(FilePath);
         var original = File.ReadAllText(FilePath);
@@ -205,13 +229,29 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.False(File.Exists(FilePath + ".tmp"));
 
         if (section == "securityNotifications")
-            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(submitted.SecurityNotifications)).Message);
+        {
+            Assert.Equal(
+                message,
+                Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(submitted.SecurityNotifications)).Message);
+        }
         else if (property == "QQBotMessageFormat")
-            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.ValidateMessageFormat(submitted.Notifications)).Message);
+        {
+            Assert.Equal(
+                message,
+                Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.ValidateMessageFormat(submitted.Notifications)).Message);
+        }
         else if (property == "OneBotSendTarget")
-            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => OneBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+        {
+            Assert.Equal(
+                message,
+                Assert.Throws<InvalidOperationException>(() => OneBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+        }
         else
-            Assert.Equal(message, Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+        {
+            Assert.Equal(
+                message,
+                Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.SelectTargets(submitted.Notifications)).Message);
+        }
     }
 
     [Theory]
@@ -220,10 +260,16 @@ public sealed class ConfigurationUpdateTest : IDisposable
     [InlineData("group", "text")]
     public void DisabledChannelsWithoutCredentialsLoadWithValidValues(string target, string format)
     {
-        WinPilotSettings.Update(FilePath, current => current with
-        {
-            Notifications = new() { OneBotSendTarget = target, QQBotSendTarget = target, QQBotMessageFormat = format }
-        });
+        WinPilotSettings.Update(FilePath, current =>
+            current with
+            {
+                Notifications = new()
+                {
+                    OneBotSendTarget = target,
+                    QQBotSendTarget = target,
+                    QQBotMessageFormat = format
+                }
+            });
         var original = File.ReadAllText(FilePath);
         var loaded = WinPilotSettings.LoadAndInitialize(FilePath);
         Assert.Equal(target, loaded.Notifications.OneBotSendTarget);
@@ -240,11 +286,12 @@ public sealed class ConfigurationUpdateTest : IDisposable
         foreach (var channel in NotificationChannelCatalog.All.Select(item => item.Id).Append(""))
         {
             var savedChannel = channel.ToUpperInvariant();
-            WinPilotSettings.Update(FilePath, current => current with
-            {
-                SecurityNotifications = new() { Channel = savedChannel, Events = Enum.GetValues<SecurityEventType>() },
-                Notifications = current.Notifications with { TelegramProxyUrl = "http://localhost:10809" }
-            });
+            WinPilotSettings.Update(FilePath, current =>
+                current with
+                {
+                    SecurityNotifications = new() { Channel = savedChannel, Events = Enum.GetValues<SecurityEventType>() },
+                    Notifications = current.Notifications with { TelegramProxyUrl = "http://localhost:10809" }
+                });
             var original = File.ReadAllText(FilePath);
             var loaded = WinPilotSettings.LoadAndInitialize(FilePath);
             Assert.Equal(savedChannel, loaded.SecurityNotifications.Channel);
@@ -264,9 +311,21 @@ public sealed class ConfigurationUpdateTest : IDisposable
         Assert.NotNull(saved.CommandBots);
         Assert.NotNull(saved.SecurityNotifications);
         var root = JsonNode.Parse(File.ReadAllText(FilePath))!.AsObject();
-        foreach (var section in new[] { "notifications", "commandBots", "securityNotifications" })
+        foreach (var section in new[] {
+            "notifications",
+            "commandBots",
+            "securityNotifications"
+})
+        {
             Assert.IsType<JsonObject>(root[section]);
+        }
     }
 
-    public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    public void Dispose()
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, true);
+        }
+    }
 }

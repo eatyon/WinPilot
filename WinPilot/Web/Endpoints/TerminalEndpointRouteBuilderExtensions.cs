@@ -17,10 +17,23 @@ public static class TerminalEndpointRouteBuilderExtensions
         return endpoints;
     }
 
-    private static async Task HandleAsync(HttpContext context, TerminalSessionManager manager, SafeModeService safeMode, ILogger<TerminalSessionManager> logger)
+    private static async Task HandleAsync(
+        HttpContext context,
+        TerminalSessionManager manager,
+        SafeModeService safeMode,
+        ILogger<TerminalSessionManager> logger)
     {
-        if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
-        if (safeMode.Enabled) { context.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+        if (safeMode.Enabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+        // 登录会话失效、客户端断开或安全模式开启时，共同终止此连接及其终端会话。
         using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, safeMode.RestrictedOperationsCancellation);
         var cancellationToken = connectionCancellation.Token;
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
@@ -29,7 +42,10 @@ public static class TerminalEndpointRouteBuilderExtensions
 
         async Task Publish(TerminalEvent item)
         {
-            if (socket.State != WebSocketState.Open || cancellationToken.IsCancellationRequested) return;
+            if (socket.State != WebSocketState.Open || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
             using var sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             sendCancellation.CancelAfter(SendTimeout);
             var acquired = false;
@@ -38,14 +54,26 @@ public static class TerminalEndpointRouteBuilderExtensions
                 await sendLock.WaitAsync(sendCancellation.Token);
                 acquired = true;
                 if (socket.State == WebSocketState.Open)
-                    await socket.SendAsync(JsonSerializer.SerializeToUtf8Bytes(item, JsonOptions), WebSocketMessageType.Text, true, sendCancellation.Token);
+                {
+                    await socket.SendAsync(
+                        JsonSerializer.SerializeToUtf8Bytes(item, JsonOptions),
+                        WebSocketMessageType.Text,
+                        true,
+                        sendCancellation.Token);
+                }
             }
             catch (Exception exception) when (exception is WebSocketException or OperationCanceledException)
             {
                 connectionCancellation.Cancel();
                 socket.Abort();
             }
-            finally { if (acquired) sendLock.Release(); }
+            finally
+            {
+                if (acquired)
+                {
+                    sendLock.Release();
+                }
+            }
         }
 
         try
@@ -56,7 +84,10 @@ public static class TerminalEndpointRouteBuilderExtensions
             while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
             {
                 var result = await socket.ReceiveAsync(buffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close) break;
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    break;
+                }
                 if (message.Length + result.Count > MaximumMessageBytes)
                 {
                     using var closeCancellation = new CancellationTokenSource(SendTimeout);
@@ -65,11 +96,17 @@ public static class TerminalEndpointRouteBuilderExtensions
                 }
                 invalidMessageType |= result.MessageType != WebSocketMessageType.Text;
                 message.Write(buffer, 0, result.Count);
-                if (!result.EndOfMessage) continue;
+                if (!result.EndOfMessage)
+                {
+                    continue;
+                }
                 TerminalCommand? command;
                 try
                 {
-                    if (invalidMessageType) throw new JsonException();
+                    if (invalidMessageType)
+                    {
+                        throw new JsonException();
+                    }
                     command = JsonSerializer.Deserialize<TerminalCommand>(message.GetBuffer().AsSpan(0, (int)message.Length), JsonOptions);
                 }
                 catch (JsonException)
@@ -99,23 +136,46 @@ public static class TerminalEndpointRouteBuilderExtensions
                                 await Publish(new TerminalEvent("created", info.SessionId, null, JsonSerializer.Serialize(info, JsonOptions)));
                                 break;
                             }
-                        case "input": await manager.InputAsync(connectionId, command.SessionId!.Value, command.Data ?? string.Empty); break;
-                        case "interrupt": await manager.InterruptAsync(connectionId, command.SessionId!.Value); break;
-                        case "resize": await manager.ResizeAsync(connectionId, command.SessionId!.Value, command.Columns ?? 0, command.Rows ?? 0); break;
-                        case "close": await manager.CloseAsync(connectionId, command.SessionId!.Value); break;
-                        default: await Publish(new TerminalEvent("error", command?.SessionId, null, "不支持的终端操作")); break;
+                        case "input":
+                            await manager.InputAsync(connectionId, command.SessionId!.Value, command.Data ?? string.Empty);
+                            break;
+                        case "interrupt":
+                            await manager.InterruptAsync(connectionId, command.SessionId!.Value);
+                            break;
+                        case "resize":
+                            await manager.ResizeAsync(connectionId, command.SessionId!.Value, command.Columns ?? 0, command.Rows ?? 0);
+                            break;
+                        case "close":
+                            await manager.CloseAsync(connectionId, command.SessionId!.Value);
+                            break;
+                        default:
+                            await Publish(new TerminalEvent("error", command?.SessionId, null, "不支持的终端操作"));
+                            break;
                     }
                 }
-                catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or DirectoryNotFoundException or FileNotFoundException or System.ComponentModel.Win32Exception)
+                catch (Exception exception) when (exception is InvalidOperationException
+                    or ArgumentException
+                    or DirectoryNotFoundException
+                    or FileNotFoundException
+                    or System.ComponentModel.Win32Exception)
                 {
-                    logger.Log(exception is System.ComponentModel.Win32Exception ? LogLevel.Warning : LogLevel.Debug,
-                        exception, "终端操作失败，操作：{Operation}，会话 ID：{TerminalSessionId}", command?.Type, command?.SessionId);
+                    logger.Log(
+                        exception is System.ComponentModel.Win32Exception ? LogLevel.Warning : LogLevel.Debug,
+                        exception,
+                        "终端操作失败，操作：{Operation}，会话 ID：{TerminalSessionId}",
+                        command?.Type,
+                        command?.SessionId);
                     await Publish(new TerminalEvent("error", command?.SessionId, null, exception.Message));
                 }
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (WebSocketException exception) { logger.LogDebug(exception, "终端连接已断开"); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (WebSocketException exception)
+        {
+            logger.LogDebug(exception, "终端连接已断开");
+        }
         finally
         {
             connectionCancellation.Cancel();
@@ -123,11 +183,24 @@ public static class TerminalEndpointRouteBuilderExtensions
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 using var closeCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "连接已关闭", closeCancellation.Token); }
-                catch (Exception exception) when (exception is WebSocketException or OperationCanceledException) { socket.Abort(); }
+                try
+                {
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "连接已关闭", closeCancellation.Token);
+                }
+                catch (Exception exception) when (exception is WebSocketException or OperationCanceledException)
+                {
+                    socket.Abort();
+                }
             }
         }
     }
 
-    private sealed record TerminalCommand(string Type, Guid? SessionId, string? Shell, string? WorkingDirectory, string? Data, int? Columns, int? Rows);
+    private sealed record TerminalCommand(
+        string Type,
+        Guid? SessionId,
+        string? Shell,
+        string? WorkingDirectory,
+        string? Data,
+        int? Columns,
+        int? Rows);
 }

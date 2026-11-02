@@ -23,7 +23,12 @@ public sealed class ResponseJsonTest
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
         await using var app = builder.Build();
-        app.MapGet("/json", () => Results.Ok(new { Message = "中文 <>&", Status = DayOfWeek.Monday, Optional = (string?)null }));
+        app.MapGet("/json", () => Results.Ok(new
+        {
+            Message = "中文 <>&",
+            Status = DayOfWeek.Monday,
+            Optional = (string?)null
+        }));
         await app.StartAsync();
         using var client = app.GetTestClient();
 

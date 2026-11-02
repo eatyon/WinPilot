@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
@@ -30,7 +30,9 @@ public sealed class CancellationCallbackCleanupTest
     [InlineData("disable", true)]
     [InlineData("delete", false)]
     [InlineData("delete", true)]
-    public async Task TaskMutationsReturnAccurateResponsesAndOnlyCancelForRenameOrDelete(string operation, bool throwCallback)
+    public async Task TaskMutationsReturnAccurateResponsesAndOnlyCancelForRenameOrDelete(
+        string operation,
+        bool throwCallback)
     {
         var logger = new CallbackLogger<TaskService>();
         await using var fixture = new TaskServiceFixture(logger: logger);
@@ -46,15 +48,23 @@ public sealed class CancellationCallbackCleanupTest
             using var registration = token.Register(() =>
             {
                 Interlocked.Increment(ref callbacks);
-                if (throwCallback) throw failure;
+                if (throwCallback)
+                {
+                    throw failure;
+                }
             });
             started.TrySetResult();
             await release.Task;
             return PluginTaskActionResult.Success();
         });
-        var task = fixture.Tasks.Create(new("original", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block"),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        var task = fixture.Tasks.Create(new(
+            "original",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block"),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton(fixture.Tasks);
@@ -81,7 +91,10 @@ public sealed class CancellationCallbackCleanupTest
             Assert.Equal(cancelled, executionToken.IsCancellationRequested);
             Assert.Equal(cancelled ? 1 : 0, callbacks);
             AssertWarning(logger.Entries, failure, throwCallback && cancelled);
-            if (throwCallback && cancelled) Assert.Contains("original", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            if (throwCallback && cancelled)
+            {
+                Assert.Contains("original", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            }
             var originalFile = Path.Combine(fixture.Paths.TasksDirectory, "original.json");
             var listed = await client.GetFromJsonAsync<JsonArray>("/api/tasks");
             if (operation == "delete")
@@ -104,7 +117,10 @@ public sealed class CancellationCallbackCleanupTest
                 {
                     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
                 })));
-                if (operation == "rename") Assert.False(File.Exists(originalFile));
+                if (operation == "rename")
+                {
+                    Assert.False(File.Exists(originalFile));
+                }
             }
             if (operation is "disable" or "update-disable")
             {
@@ -148,13 +164,21 @@ public sealed class CancellationCallbackCleanupTest
                 tokens.Add(token);
                 registrations.Add(token.Register(() =>
                 {
-                    if (Interlocked.Increment(ref callbacks) == 1 && throwCallback) throw failure;
+                    if (Interlocked.Increment(ref callbacks) == 1 && throwCallback)
+                    {
+                        throw failure;
+                    }
                 }));
             }
 
-            if (dispose) sessions.Dispose();
-            else sessions.RevokeAll();
-
+            if (dispose)
+            {
+                sessions.Dispose();
+            }
+            else
+            {
+                sessions.RevokeAll();
+            }
             Assert.Equal(3, callbacks);
             Assert.All(tokens, token =>
             {
@@ -179,7 +203,10 @@ public sealed class CancellationCallbackCleanupTest
         }
         finally
         {
-            foreach (var registration in registrations) registration.Dispose();
+            foreach (var registration in registrations)
+            {
+                registration.Dispose();
+            }
             sessions.RevokeAll();
             sessions.Dispose();
         }
@@ -194,7 +221,13 @@ public sealed class CancellationCallbackCleanupTest
     {
         var logger = new CallbackLogger<TaskService>();
         var serviceStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        logger.OnMessage = message => { if (message == "任务服务已启动") serviceStarted.TrySetResult(); };
+        logger.OnMessage = message =>
+        {
+            if (message == "任务服务已启动")
+            {
+                serviceStarted.TrySetResult();
+            }
+        };
         await using var fixture = new TaskServiceFixture(logger: logger);
         using var scope = fixture.Extensions.CreateScope("cleanup-test", "Cleanup test");
         var failure = new InvalidOperationException("测试任务取消回调失败");
@@ -208,20 +241,31 @@ public sealed class CancellationCallbackCleanupTest
             tokens[taskName] = token;
             registrations.Add(token.Register(() =>
             {
-                if (throwCallback && taskName == "Cleanup0") throw failure;
+                if (throwCallback && taskName == "Cleanup0")
+                {
+                    throw failure;
+                }
             }));
             started[int.Parse(taskName["Cleanup".Length..])].TrySetResult();
             await release.Task;
             return PluginTaskActionResult.Success();
         });
         for (var index = 0; index < 3; index++)
-            fixture.Tasks.Create(new($"Cleanup{index}", true, new(TaskTriggerType.WinPilotStartup),
+        {
+            fixture.Tasks.Create(new(
+                $"Cleanup{index}",
+                true,
+                new(TaskTriggerType.WinPilotStartup),
                 [new(TaskActionType.Extension, PluginId: "cleanup-test", ActionId: "block")]));
+        }
         try
         {
             await fixture.Tasks.StartAsync(CancellationToken.None);
             await serviceStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            for (var index = 0; index < 3; index++) fixture.Tasks.RunNow($"Cleanup{index}");
+            for (var index = 0; index < 3; index++)
+            {
+                fixture.Tasks.RunNow($"Cleanup{index}");
+            }
             await Task.WhenAll(started.Select(signal => signal.Task)).WaitAsync(TimeSpan.FromSeconds(5));
             var listenerField = typeof(TaskService).GetField("processListenerStarted", BindingFlags.NonPublic | BindingFlags.Instance)!;
             var pathsField = typeof(TaskService).GetField("processPaths", BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -229,7 +273,10 @@ public sealed class CancellationCallbackCleanupTest
             listenerField.SetValue(fixture.Tasks, true);
             processPaths[123456] = "cleanup-marker";
 
-            if (dispose) fixture.Tasks.Dispose();
+            if (dispose)
+            {
+                fixture.Tasks.Dispose();
+            }
             else
             {
                 var stopping = fixture.Tasks.StopAsync(CancellationToken.None);
@@ -246,18 +293,30 @@ public sealed class CancellationCallbackCleanupTest
             Assert.True(serviceToken.IsCancellationRequested);
             Assert.Contains(logger.Entries, entry => entry.Message == "任务触发所需的 Windows 进程监听已停止");
             AssertWarning(logger.Entries, failure, throwCallback);
-            if (throwCallback) Assert.Contains("Cleanup0", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            if (throwCallback)
+            {
+                Assert.Contains("Cleanup0", Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning)).Message);
+            }
         }
         finally
         {
-            foreach (var registration in registrations) registration.Dispose();
+            foreach (var registration in registrations)
+            {
+                registration.Dispose();
+            }
             release.TrySetResult();
             var running = (System.Collections.IDictionary)typeof(TaskService).GetField("runningTasks", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Tasks)!;
             var gate = typeof(TaskService).GetField("gate", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Tasks)!;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (true)
             {
-                lock (gate) if (running.Count == 0) break;
+                lock (gate)
+                {
+                    if (running.Count == 0)
+                    {
+                        break;
+                    }
+                }
                 timeout.Token.ThrowIfCancellationRequested();
                 await Task.Yield();
             }
@@ -288,7 +347,13 @@ public sealed class CancellationCallbackCleanupTest
         var changed = events.MoveNextAsync().AsTask();
         var failure = new InvalidOperationException("测试安全模式取消回调失败");
         var restricted = safeMode.RestrictedOperationsCancellation;
-        using var callback = restricted.Register(() => { if (throwCallback) throw failure; });
+        using var callback = restricted.Register(() =>
+        {
+            if (throwCallback)
+            {
+                throw failure;
+            }
+        });
         try
         {
             safeMode.SetEnabled(true);
@@ -309,16 +374,29 @@ public sealed class CancellationCallbackCleanupTest
         finally
         {
             watching.Cancel();
-            try { await changed; } catch (OperationCanceledException) when (watching.IsCancellationRequested) { }
+            try
+            {
+                await changed;
+            }
+            catch (OperationCanceledException) when (watching.IsCancellationRequested)
+            {
+            }
             ((CancellationTokenSource)typeof(SafeModeService).GetField("restrictedOperations", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(safeMode)!).Dispose();
         }
     }
 
-    private static void AssertWarning(IEnumerable<(LogLevel Level, string Message, Exception? Error)> entries, Exception failure, bool expected)
+    private static void AssertWarning(
+        IEnumerable<(LogLevel Level, string Message, Exception? Error)> entries,
+        Exception failure,
+        bool expected)
     {
         var warnings = entries.Where(entry => entry.Level == LogLevel.Warning).ToArray();
-        if (!expected) { Assert.Empty(warnings); return; }
+        if (!expected)
+        {
+            Assert.Empty(warnings);
+            return;
+        }
         var warning = Assert.Single(warnings);
         Assert.Same(failure, Assert.Single(Assert.IsType<AggregateException>(warning.Error).InnerExceptions));
     }
@@ -327,9 +405,17 @@ public sealed class CancellationCallbackCleanupTest
     {
         internal ConcurrentQueue<(LogLevel Level, string Message, Exception? Error)> Entries { get; } = new();
         internal Action<string>? OnMessage { get; set; }
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             var message = formatter(state, exception);
             Entries.Enqueue((level, message, exception));
@@ -344,12 +430,28 @@ public sealed class CancellationCallbackCleanupTest
         public int KillCount { get; private set; }
         public int DisposeCount { get; private set; }
         public int? ExitCode => KillCount == 0 ? null : 0;
+
         public bool HasExited() => KillCount != 0;
+
         public void Kill() => KillCount++;
+
         public Task WaitForExitAsync(CancellationToken token) => Task.CompletedTask;
-        public void Resize(short columns, short rows) { }
-        public void ClosePseudoConsoleHandle() { }
+
+        public void Resize(short columns, short rows)
+        {
+        }
+
+        public void ClosePseudoConsoleHandle()
+        {
+        }
+
         public ValueTask CloseOutputAsync() => Output.DisposeAsync();
-        public async ValueTask DisposeAsync() { DisposeCount++; await Input.DisposeAsync(); await Output.DisposeAsync(); }
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            await Input.DisposeAsync();
+            await Output.DisposeAsync();
+        }
     }
 }

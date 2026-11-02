@@ -32,14 +32,19 @@ public sealed class DesktopEndpointTest
         if (!fail)
         {
             Assert.Equal("image/jpeg", response.Content.Headers.ContentType?.MediaType);
-            Assert.Equal(new byte[] { 1, 2, 3 }, await response.Content.ReadAsByteArrayAsync());
+            Assert.Equal(new byte[] {
+                1,
+                2,
+                3
+}, await response.Content.ReadAsByteArrayAsync());
         }
     }
 
     private sealed class ScreenshotProvider(bool fail) : IDesktopScreenshotProvider
     {
-        public DesktopScreenshot Capture() => fail
-            ? throw new DesktopCaptureException("Capture failed")
-            : new(DateTimeOffset.UtcNow, [1, 2, 3], "image/jpeg");
+        public DesktopScreenshot Capture() =>
+            fail
+                ? throw new DesktopCaptureException("Capture failed")
+                : new(DateTimeOffset.UtcNow, [1, 2, 3], "image/jpeg");
     }
 }

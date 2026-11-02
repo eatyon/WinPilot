@@ -9,7 +9,13 @@ public static class SystemStatusEndpointRouteBuilderExtensions
         endpoints.MapGet("/api/system/status", (HttpContext context, ISystemResourceMonitor monitor) =>
         {
             var status = monitor.Capture(context.RequestAborted);
-            return new { cpuUsagePercent = status.CpuUsagePercent, memoryUsagePercent = status.MemoryUsagePercent, gpuUsages = status.GpuUsages, diskUsages = status.DiskUsages };
+            return new
+            {
+                cpuUsagePercent = status.CpuUsagePercent,
+                memoryUsagePercent = status.MemoryUsagePercent,
+                gpuUsages = status.GpuUsages,
+                diskUsages = status.DiskUsages
+            };
         });
 
         return endpoints;

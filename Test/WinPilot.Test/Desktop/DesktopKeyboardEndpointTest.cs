@@ -27,8 +27,14 @@ public sealed class DesktopKeyboardEndpointTest
         app.Use(async (context, next) =>
         {
             context.RequestAborted = new CancellationToken(true);
-            try { await next(context); }
-            catch (OperationCanceledException) { propagated = true; }
+            try
+            {
+                await next(context);
+            }
+            catch (OperationCanceledException)
+            {
+                propagated = true;
+            }
         });
         app.MapDesktopKeyboardEndpoints();
         await app.StartAsync();
@@ -47,7 +53,10 @@ public sealed class DesktopKeyboardEndpointTest
     [InlineData("missing", 0, HttpStatusCode.BadRequest)]
     [InlineData("system", 0, HttpStatusCode.InternalServerError)]
     [InlineData("system", 5, HttpStatusCode.InternalServerError)]
-    public async Task KeyboardEndpointDistinguishesValidationFromSystemFailure(string kind, int errorCode, HttpStatusCode expected)
+    public async Task KeyboardEndpointDistinguishesValidationFromSystemFailure(
+        string kind,
+        int errorCode,
+        HttpStatusCode expected)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Keyboard.Endpoint.Test", Guid.NewGuid().ToString("N"));
         try
@@ -92,27 +101,43 @@ public sealed class DesktopKeyboardEndpointTest
                     Assert.Equal(new[] { KeyboardKey.F11 }, simulator.Keys);
                     Assert.DoesNotContain(directory, body);
                     Assert.DoesNotContain("Win32Exception", body);
-                    using var logStream = new FileStream(Directory.GetFiles(directory, "winpilot*.log").Single(),
-                        FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var logStream = new FileStream(
+                        Directory.GetFiles(directory, "winpilot*.log").Single(),
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
                     using var logReader = new StreamReader(logStream);
                     var log = logReader.ReadToEnd();
                     Assert.Contains("发送键盘输入失败", log);
                     Assert.Contains(cause!.Message, log);
                     Assert.Contains("Win32Exception", log);
                 }
-                else Assert.Null(simulator.Keys);
+                else
+                {
+                    Assert.Null(simulator.Keys);
+                }
             }
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     private sealed class RecordingSimulator(Exception? error) : IKeyboardInputSimulator
     {
         internal IReadOnlyList<KeyboardKey>? Keys { get; private set; }
+
         public void Send(IReadOnlyList<KeyboardKey> keys)
         {
             Keys = keys.ToArray();
-            if (error is not null) throw error;
+            if (error is not null)
+            {
+                throw error;
+            }
         }
     }
 }

@@ -1,10 +1,5 @@
 namespace WinPilot.Core.SystemStatus;
 
-public interface ISystemResourceMonitor
-{
-    SystemResourceStatus Capture(CancellationToken cancellationToken);
-}
-
 public sealed record SystemResourceStatus(
     double CpuUsagePercent,
     double MemoryUsagePercent,

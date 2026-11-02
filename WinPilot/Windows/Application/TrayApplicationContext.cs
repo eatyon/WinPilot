@@ -16,7 +16,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly NativeTrayMenu trayMenu;
     private readonly Uri webAddress;
 
-    public TrayApplicationContext(Uri webAddress, ILogger<TrayApplicationContext> logger, SafeModeService safeMode, PortableDataPaths paths, Action beginShutdown)
+    public TrayApplicationContext(
+        Uri webAddress,
+        ILogger<TrayApplicationContext> logger,
+        SafeModeService safeMode,
+        PortableDataPaths paths,
+        Action beginShutdown)
     {
         this.webAddress = webAddress;
         this.logger = logger;
@@ -43,7 +48,10 @@ public sealed class TrayApplicationContext : ApplicationContext
         };
         notifyIcon.MouseUp += (_, eventArgs) =>
         {
-            if (eventArgs.Button == MouseButtons.Right) trayMenu.Show(Cursor.Position);
+            if (eventArgs.Button == MouseButtons.Right)
+            {
+                trayMenu.Show(Cursor.Position);
+            }
         };
         notifyIcon.DoubleClick += (_, _) => OpenWebPage();
         logger.LogInformation("系统托盘已启动");
@@ -67,6 +75,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         using var process = Process.Start(new ProcessStartInfo(webAddress.AbsoluteUri) { UseShellExecute = true });
     }
+
     private void OpenDirectory(string path)
     {
         try
@@ -100,7 +109,10 @@ public sealed class TrayApplicationContext : ApplicationContext
             using var icon = Icon.FromHandle(iconHandle);
             return (Icon)icon.Clone();
         }
-        finally { DestroyIcon(iconHandle); }
+        finally
+        {
+            DestroyIcon(iconHandle);
+        }
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -142,7 +154,10 @@ internal sealed class NativeTrayMenu(
     {
         EnsureHandle();
         var menu = CreatePopupMenu();
-        if (menu == IntPtr.Zero) return;
+        if (menu == IntPtr.Zero)
+        {
+            return;
+        }
         var directoryMenu = CreatePopupMenu();
         if (directoryMenu == IntPtr.Zero)
         {
@@ -172,13 +187,37 @@ internal sealed class NativeTrayMenu(
             AppendMenuW(menu, MfSeparator, 0, null);
             AppendMenuW(menu, MfString, (nuint)ExitCommand, "退出");
             SetForegroundWindow(Handle);
-            var command = TrackPopupMenuEx(menu, TpmLeftAlign | TpmBottomAlign | TpmRightButton | TpmReturnCommand, cursorPosition.X, cursorPosition.Y, Handle, IntPtr.Zero);
-            if (command == OpenApplicationCommand) openApplication();
-            else if (command == SafeModeCommand) toggleSafeMode();
-            else if (command == OpenApplicationDirectoryCommand) openApplicationDirectory();
-            else if (command == OpenDataDirectoryCommand) openDataDirectory();
-            else if (command == OpenLogsDirectoryCommand) openLogsDirectory();
-            else if (command == ExitCommand) exitApplication();
+            var command = TrackPopupMenuEx(
+                menu,
+                TpmLeftAlign | TpmBottomAlign | TpmRightButton | TpmReturnCommand,
+                cursorPosition.X,
+                cursorPosition.Y,
+                Handle,
+                IntPtr.Zero);
+            if (command == OpenApplicationCommand)
+            {
+                openApplication();
+            }
+            else if (command == SafeModeCommand)
+            {
+                toggleSafeMode();
+            }
+            else if (command == OpenApplicationDirectoryCommand)
+            {
+                openApplicationDirectory();
+            }
+            else if (command == OpenDataDirectoryCommand)
+            {
+                openDataDirectory();
+            }
+            else if (command == OpenLogsDirectoryCommand)
+            {
+                openLogsDirectory();
+            }
+            else if (command == ExitCommand)
+            {
+                exitApplication();
+            }
         }
         finally
         {
@@ -191,14 +230,47 @@ internal sealed class NativeTrayMenu(
 
     private void EnsureHandle()
     {
-        if (Handle != IntPtr.Zero) return;
-        CreateHandle(new CreateParams { Caption = "WinPilotTrayMenu", Style = 0, ExStyle = 0 });
+        if (Handle != IntPtr.Zero)
+        {
+            return;
+        }
+        CreateHandle(new CreateParams
+        {
+            Caption = "WinPilotTrayMenu",
+            Style = 0,
+            ExStyle = 0
+        });
     }
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool AppendMenuW(IntPtr menu, uint flags, nuint itemId, string? text);
-    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr CreatePopupMenu();
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool DestroyMenu(IntPtr menu);
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetForegroundWindow(IntPtr window);
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool PostMessageW(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll", SetLastError = true)] private static extern uint TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr window, IntPtr parameters);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool AppendMenuW(
+        IntPtr menu,
+        uint flags,
+        nuint itemId,
+        string? text);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyMenu(IntPtr menu);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostMessageW(
+        IntPtr window,
+        uint message,
+        IntPtr wParam,
+        IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint TrackPopupMenuEx(
+        IntPtr menu,
+        uint flags,
+        int x,
+        int y,
+        IntPtr window,
+        IntPtr parameters);
 }

@@ -2,6 +2,9 @@ using System.Text;
 
 namespace WinPilot.Features.Terminal;
 
+/// <summary>
+/// 管理一个终端进程的输入、输出转发与退出监控，并把所有结束入口汇入同一次收尾。
+/// </summary>
 internal sealed class TerminalSession : IAsyncDisposable
 {
     private readonly ITerminalProcess process;
@@ -21,7 +24,14 @@ internal sealed class TerminalSession : IAsyncDisposable
 
     public Guid ConnectionId { get; }
 
-    internal TerminalSession(Guid id, Guid connectionId, ITerminalProcess process, Func<TerminalEvent, Task> publish, Func<TerminalSession, Task> remove, ILogger logger, CancellationTokenSource? cancellation = null)
+    internal TerminalSession(
+        Guid id,
+        Guid connectionId,
+        ITerminalProcess process,
+        Func<TerminalEvent, Task> publish,
+        Func<TerminalSession, Task> remove,
+        ILogger logger,
+        CancellationTokenSource? cancellation = null)
     {
         Id = id;
         ConnectionId = connectionId;
@@ -46,7 +56,9 @@ internal sealed class TerminalSession : IAsyncDisposable
     public async Task WriteAsync(string data)
     {
         if (Volatile.Read(ref closed) != 0)
+        {
             return;
+        }
         await input.WriteAsync(data.AsMemory(), cancellation.Token);
         await input.FlushAsync(cancellation.Token);
     }
@@ -56,7 +68,9 @@ internal sealed class TerminalSession : IAsyncDisposable
     public void Resize(int columns, int rows)
     {
         if (columns is < 1 or > short.MaxValue || rows is < 1 or > short.MaxValue)
+        {
             throw new ArgumentOutOfRangeException();
+        }
         process.Resize((short)columns, (short)rows);
     }
 
@@ -64,14 +78,21 @@ internal sealed class TerminalSession : IAsyncDisposable
     {
         try
         {
-            using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+            using var reader = new StreamReader(
+                stream,
+                new UTF8Encoding(false),
+                detectEncodingFromByteOrderMarks: false,
+                bufferSize: 4096,
+                leaveOpen: true);
             var buffer = new char[4096];
             while (!cancellation.IsCancellationRequested)
             {
                 var read = await reader.ReadAsync(buffer.AsMemory(), cancellation.Token);
                 if (read == 0)
+                {
                     break;
-                await publish(new TerminalEvent("output", Id, kind, new string (buffer, 0, read)));
+                }
+                await publish(new TerminalEvent("output", Id, kind, new string(buffer, 0, read)));
             }
         }
         catch (Exception) when (Volatile.Read(ref closed) != 0 || cancellation.IsCancellationRequested)
@@ -87,7 +108,10 @@ internal sealed class TerminalSession : IAsyncDisposable
     private async Task CloseAfterReadFailureAsync(Task reading)
     {
         await reading;
-        if (Volatile.Read(ref outputReadFailed) != 0) await CloseAsync(fromWatchTask: false);
+        if (Volatile.Read(ref outputReadFailed) != 0)
+        {
+            await CloseAsync(fromWatchTask: false);
+        }
     }
 
     private async Task WatchAsync()
@@ -95,19 +119,33 @@ internal sealed class TerminalSession : IAsyncDisposable
         try
         {
             while (!cancellation.IsCancellationRequested && !process.HasExited())
+            {
                 await Task.Delay(200, cancellation.Token);
+            }
             if (Volatile.Read(ref closed) == 0 && Volatile.Read(ref outputReadFailed) == 0)
+            {
                 await publish(new TerminalEvent("exited", Id, null, "终端已退出", process.ExitCode));
+            }
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
         catch (Exception exception)
         {
-            logger.Log(Volatile.Read(ref closed) != 0 || cancellation.IsCancellationRequested ? LogLevel.Debug : LogLevel.Warning,
-                exception, "终端进程监控失败，会话 ID：{TerminalSessionId}", Id);
+            logger.Log(
+                Volatile.Read(ref closed) != 0 || cancellation.IsCancellationRequested
+                    ? LogLevel.Debug
+                    : LogLevel.Warning,
+                exception,
+                "终端进程监控失败，会话 ID：{TerminalSessionId}",
+                Id);
         }
         finally
         {
-            if (Volatile.Read(ref closed) == 0) await CloseAsync(fromWatchTask: true);
+            if (Volatile.Read(ref closed) == 0)
+            {
+                await CloseAsync(fromWatchTask: true);
+            }
         }
     }
 
@@ -117,39 +155,64 @@ internal sealed class TerminalSession : IAsyncDisposable
         await AwaitCompletionAsync(outputCloseTask, "等待输出故障收尾");
     }
 
+    // 监控任务也会发起关闭，因此它不能等待自身或等待另一条正在等待它的关闭路径。
     private async Task CloseAsync(bool fromWatchTask)
     {
+        // 只有第一个调用者执行资源释放，其他外部调用者等待同一份收尾结果。
         if (Interlocked.Exchange(ref closed, 1) != 0)
         {
-            if (!fromWatchTask) await closeCompleted.Task;
+            if (!fromWatchTask)
+            {
+                await closeCompleted.Task;
+            }
             return;
         }
         var failedOutput = Volatile.Read(ref outputReadFailed) != 0;
         try
         {
             if (failedOutput)
+            {
                 await CloseStageAsync("发送输出故障通知", () => new ValueTask(publish(new TerminalEvent("error", Id, null, "终端输出读取失败，正在关闭会话"))));
+            }
             CloseStage("取消会话操作", cancellation.Cancel);
             CloseStage("关闭输入", input.Dispose);
             var waitForExit = false;
             CloseStage("终止进程", () =>
             {
-                if (process.HasExited()) return;
+                if (process.HasExited())
+                {
+                    return;
+                }
                 process.Kill();
                 waitForExit = true;
             });
             if (waitForExit)
+            {
                 await CloseStageAsync("等待进程退出", () => new ValueTask(process.WaitForExitAsync(CancellationToken.None)));
-            if (!failedOutput) CloseStage("关闭伪控制台", process.ClosePseudoConsoleHandle);
+            }
+            // 输出正常时先关闭 ConPTY；读取已故障时先释放输出，避免关闭控制台被输出管道阻塞。
+            if (!failedOutput)
+            {
+                CloseStage("关闭伪控制台", process.ClosePseudoConsoleHandle);
+            }
             var outputClosed = await CloseStageAsync("关闭输出", process.CloseOutputAsync);
             if (!outputClosed)
+            {
                 await CloseStageAsync("释放底层资源", process.DisposeAsync);
-            if (failedOutput) CloseStage("关闭伪控制台", process.ClosePseudoConsoleHandle);
+            }
+            if (failedOutput)
+            {
+                CloseStage("关闭伪控制台", process.ClosePseudoConsoleHandle);
+            }
             await AwaitCompletionAsync(outputTask, "等待输出任务");
             if (!fromWatchTask)
+            {
                 await AwaitCompletionAsync(watchTask, "等待监控任务");
+            }
             if (outputClosed)
+            {
                 await CloseStageAsync("释放底层资源", process.DisposeAsync);
+            }
         }
         finally
         {
@@ -158,21 +221,37 @@ internal sealed class TerminalSession : IAsyncDisposable
                 CloseStage("释放取消源", cancellation.Dispose);
                 await CloseStageAsync("移除会话", () => new ValueTask(remove(this)));
                 if (failedOutput)
+                {
                     await CloseStageAsync("发送会话结束通知", () => new ValueTask(publish(new TerminalEvent("exited", Id, null, "终端会话已结束"))));
+                }
             }
-            finally { closeCompleted.TrySetResult(); }
+            finally
+            {
+                closeCompleted.TrySetResult();
+            }
         }
     }
 
+    // 某个阶段失败仍继续释放其余资源，按阶段记录异常以便定位残留资源。
     private void CloseStage(string stage, Action close)
     {
-        try { close(); }
-        catch (Exception exception) { logger.LogWarning(exception, "终端会话收尾失败，阶段：{Stage}，会话 ID：{TerminalSessionId}", stage, Id); }
+        try
+        {
+            close();
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "终端会话收尾失败，阶段：{Stage}，会话 ID：{TerminalSessionId}", stage, Id);
+        }
     }
 
     private async Task<bool> CloseStageAsync(string stage, Func<ValueTask> close)
     {
-        try { await close(); return true; }
+        try
+        {
+            await close();
+            return true;
+        }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "终端会话收尾失败，阶段：{Stage}，会话 ID：{TerminalSessionId}", stage, Id);
@@ -183,7 +262,9 @@ internal sealed class TerminalSession : IAsyncDisposable
     private async Task AwaitCompletionAsync(Task? task, string stage)
     {
         if (task is null)
+        {
             return;
+        }
         try
         {
             await task;

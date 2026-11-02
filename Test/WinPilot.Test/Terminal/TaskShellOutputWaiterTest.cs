@@ -15,7 +15,10 @@ public sealed class TaskShellOutputWaiterTest
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var waiting = waiter.WaitAsync(cancellation.Token);
         var prefix = "prompt echo " + begin + "\r\n\x1b[32m" + begin + "\x1b[0m\r\n";
-        foreach (var character in prefix) waiter.Observe(new("output", null, "stdout", character.ToString()));
+        foreach (var character in prefix)
+        {
+            waiter.Observe(new("output", null, "stdout", character.ToString()));
+        }
         Assert.False(waiting.IsCompleted);
         waiter.Observe(new("output", null, "stdout", "value"));
         var result = await waiting;

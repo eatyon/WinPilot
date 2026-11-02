@@ -4,22 +4,22 @@ using Microsoft.AspNetCore.ResponseCompression;
 using WinPilot.Core;
 using WinPilot.Core.Desktop;
 using WinPilot.Core.Input;
+using WinPilot.Core.Programs;
+using WinPilot.Core.SystemStatus;
 using WinPilot.Features.Desktop;
 using WinPilot.Features.Files;
 using WinPilot.Features.Logs;
-using WinPilot.Features.Programs;
-using WinPilot.Features.Tasks;
-using WinPilot.Features.Terminal;
-using WinPilot.Features.Updates;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Features.Notifications.CommandBots.Commands;
 using WinPilot.Features.Plugins;
+using WinPilot.Features.Programs;
 using WinPilot.Features.Security;
-using WinPilot.Core.Programs;
-using WinPilot.Core.SystemStatus;
-using WinPilot.PluginContract;
+using WinPilot.Features.Tasks;
+using WinPilot.Features.Terminal;
+using WinPilot.Features.Updates;
 using WinPilot.Infrastructure;
+using WinPilot.PluginContract;
 using WinPilot.Web;
 using WinPilot.Windows;
 
@@ -71,7 +71,16 @@ internal static class Program
         {
             options.Providers.Add<BrotliCompressionProvider>();
             options.Providers.Add<GzipCompressionProvider>();
-            options.MimeTypes = ["text/html", "text/plain", "text/css", "text/javascript", "application/javascript", "application/json", "application/problem+json", "image/svg+xml"];
+            options.MimeTypes = [
+                "text/html",
+                "text/plain",
+                "text/css",
+                "text/javascript",
+                "application/javascript",
+                "application/json",
+                "application/problem+json",
+                "image/svg+xml"
+];
         });
         builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
             options.Level = System.IO.Compression.CompressionLevel.Fastest);
@@ -105,7 +114,8 @@ internal static class Program
         builder.Services.AddSingleton<PluginNotificationVariableRegistry>();
         builder.Services.AddSingleton<PluginTaskActionRegistry>();
         builder.Services.AddSingleton<PluginTaskExtensionRegistry>();
-        builder.Services.AddSingleton(provider => new PluginCommandRegistry(CommandProcessor.IsSupportedCommand,
+        builder.Services.AddSingleton(provider =>
+            new PluginCommandRegistry(CommandProcessor.IsSupportedCommand,
             provider.GetRequiredService<ILogger<PluginCommandRegistry>>()));
         builder.Services.AddSingleton<TaskVariableCatalog>();
         builder.Services.AddSingleton<IPluginHostActionApi, PluginHostActionApi>();
@@ -144,6 +154,7 @@ internal static class Program
         {
             app.UseMiddleware<RequestCancellationMiddleware>();
             app.UseResponseCompression();
+            // 先解析端点，再执行认证与安全模式检查，让参数化黑名单可以匹配实际路由模板。
             app.UseRouting();
             app.UseMiddleware<AuthenticationMiddleware>();
             app.UseMiddleware<SafeModeMiddleware>();
@@ -153,9 +164,13 @@ internal static class Program
                 OnPrepareResponse = context =>
                 {
                     if (string.Equals(context.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
+                    {
                         context.Context.Response.Headers.CacheControl = "no-cache";
+                    }
                     else if (context.Context.Request.Path.StartsWithSegments("/assets"))
+                    {
                         context.Context.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+                    }
                 }
             };
             app.UseStaticFiles(staticFileOptions);
@@ -188,10 +203,13 @@ internal static class Program
             await app.StartAsync();
             webLogger.LogInformation("Web 服务已监听：http://{Host}:{Port}", listenHost, settings.Port);
 
+            // 插件初始化完成后才放行依赖扩展注册的任务启动与调度。
             _ = app.Services.GetRequiredService<PluginManager>();
             app.Services.GetRequiredService<TaskService>().NotifyPluginsLoaded();
             if (args.Length == 1 && args[0] == "--update-completed")
+            {
                 loggerFactory.CreateLogger<UpdateService>().LogInformation("更新完成，版本：{Version}", WinPilotVersion.DisplayVersion);
+            }
             Application.Run(trayContext);
         }
         catch (Exception exception) when (IsAddressAlreadyInUse(exception))
@@ -211,7 +229,10 @@ internal static class Program
                 await app.StopAsync();
                 logger.LogInformation("WinPilot 服务已停止");
             }
-            finally { await app.DisposeAsync(); }
+            finally
+            {
+                await app.DisposeAsync();
+            }
         }
     }
 

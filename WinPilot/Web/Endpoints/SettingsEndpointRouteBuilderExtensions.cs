@@ -1,13 +1,17 @@
 using WinPilot.Core;
-using WinPilot.Windows;
 using WinPilot.Features.Security;
+using WinPilot.Windows;
 
 namespace WinPilot.Web;
 
 public static class SettingsEndpointRouteBuilderExtensions
 {
     private static readonly object startupSettingsGate = new();
-    public static IEndpointRouteBuilder MapSettingsEndpoints(this IEndpointRouteBuilder endpoints, string configurationFile, StartupTaskService startupTasks)
+
+    public static IEndpointRouteBuilder MapSettingsEndpoints(
+        this IEndpointRouteBuilder endpoints,
+        string configurationFile,
+        StartupTaskService startupTasks)
     {
         endpoints.MapGet("/api/settings/advanced/unauthenticated-web-page", () =>
             Results.Ok(new { enabled = WinPilotSettings.LoadAndInitialize(configurationFile).UnauthenticatedWebPageEnabled }));
@@ -15,7 +19,10 @@ public static class SettingsEndpointRouteBuilderExtensions
         {
             try
             {
-                if (request.Enabled) facade.EnsureDefaultPage();
+                if (request.Enabled)
+                {
+                    facade.EnsureDefaultPage();
+                }
                 var settings = WinPilotSettings.Update(configurationFile, current => current with { UnauthenticatedWebPageEnabled = request.Enabled });
                 return Results.Ok(new { enabled = settings.UnauthenticatedWebPageEnabled });
             }
@@ -42,7 +49,10 @@ public static class SettingsEndpointRouteBuilderExtensions
                     changed = current.LanAccessEnabled != request.Enabled;
                     return current with { LanAccessEnabled = request.Enabled };
                 });
-                if (changed) securityEvents.Record(SecurityEventType.LanAccessChanged, enabled: request.Enabled);
+                if (changed)
+                {
+                    securityEvents.Record(SecurityEventType.LanAccessChanged, enabled: request.Enabled);
+                }
                 loggerFactory.CreateLogger(typeof(SettingsEndpointRouteBuilderExtensions).FullName!).LogDebug("局域网访问开关已更新");
                 return Results.Ok(ToResponse(settings));
             }
@@ -55,7 +65,10 @@ public static class SettingsEndpointRouteBuilderExtensions
 
         endpoints.MapPatch("/api/settings/general/port", (PortRequest request, ILoggerFactory loggerFactory) =>
         {
-            if (request.Port is < 1 or > 65535) return Results.ValidationProblem(new Dictionary<string, string[]> { ["port"] = ["端口必须在 1 到 65535 之间"] });
+            if (request.Port is < 1 or > 65535)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["port"] = ["端口必须在 1 到 65535 之间"] });
+            }
             try
             {
                 var settings = WinPilotSettings.Update(configurationFile, current => current with { Port = request.Port });
@@ -70,7 +83,10 @@ public static class SettingsEndpointRouteBuilderExtensions
 
         endpoints.MapPatch("/api/settings/general/startup-mode", (StartupModeRequest request, ILoggerFactory loggerFactory) =>
         {
-            if (!Enum.IsDefined(request.StartupMode)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["startupMode"] = ["开机启动模式无效"] });
+            if (!Enum.IsDefined(request.StartupMode))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["startupMode"] = ["开机启动模式无效"] });
+            }
             try
             {
                 var settings = UpdateStartupSettings(configurationFile, current => current with { StartupMode = request.StartupMode },
@@ -87,8 +103,14 @@ public static class SettingsEndpointRouteBuilderExtensions
         return endpoints;
     }
 
-    internal static WinPilotSettings UpdateStartupSettings(string configurationFile,
-        Func<WinPilotSettings, WinPilotSettings> update, Action<StartupMode> apply, ILogger logger)
+    /// <summary>
+    /// 串行更新计划任务与配置文件，任一步骤失败后尝试恢复先前的开机启动模式。
+    /// </summary>
+    internal static WinPilotSettings UpdateStartupSettings(
+        string configurationFile,
+        Func<WinPilotSettings, WinPilotSettings> update,
+        Action<StartupMode> apply,
+        ILogger logger)
     {
         lock (startupSettingsGate)
         {
@@ -100,7 +122,9 @@ public static class SettingsEndpointRouteBuilderExtensions
                 {
                     var next = update(current);
                     if (!Enum.IsDefined(next.StartupMode) || next.Port is < 1 or > 65535)
+                    {
                         throw new InvalidDataException("配置内容不符合当前 WinPilot 版本要求");
+                    }
                     previousMode = current.StartupMode;
                     attempted = true;
                     apply(next.StartupMode);
@@ -111,23 +135,33 @@ public static class SettingsEndpointRouteBuilderExtensions
             {
                 if (attempted)
                 {
-                    try { apply(previousMode); }
-                    catch (Exception exception) { logger.LogError(exception, "恢复原开机启动设置失败，请检查 Windows 计划任务"); }
+                    try
+                    {
+                        apply(previousMode);
+                    }
+                    catch (Exception exception)
+                    {
+                        logger.LogError(exception, "恢复原开机启动设置失败，请检查 Windows 计划任务");
+                    }
                 }
                 throw;
             }
         }
     }
 
-    private static object ToResponse(WinPilotSettings settings) => new
-    {
-        port = settings.Port,
-        lanAccessEnabled = settings.LanAccessEnabled,
-        startupMode = settings.StartupMode
-    };
+    private static object ToResponse(WinPilotSettings settings) =>
+        new
+        {
+            port = settings.Port,
+            lanAccessEnabled = settings.LanAccessEnabled,
+            startupMode = settings.StartupMode
+        };
 
     private sealed record LanAccessRequest(bool Enabled);
+
     private sealed record PortRequest(int Port);
+
     private sealed record StartupModeRequest(StartupMode StartupMode);
+
     private sealed record UnauthenticatedWebPageRequest(bool Enabled);
 }

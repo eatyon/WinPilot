@@ -7,13 +7,18 @@ public static class DesktopKeyboardEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapDesktopKeyboardEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/api/desktop/keyboard", (KeyboardInputRequest request, HttpContext context, KeyboardInputService keyboardInputService, ILoggerFactory loggerFactory) =>
+        endpoints.MapPost("/api/desktop/keyboard", (
+            KeyboardInputRequest request,
+            HttpContext context,
+            KeyboardInputService keyboardInputService,
+            ILoggerFactory loggerFactory) =>
         {
             try
             {
                 context.RequestAborted.ThrowIfCancellationRequested();
                 keyboardInputService.Send(request.Keys);
-                loggerFactory.CreateLogger(typeof(DesktopKeyboardEndpointRouteBuilderExtensions).FullName!)
+                loggerFactory
+                    .CreateLogger(typeof(DesktopKeyboardEndpointRouteBuilderExtensions).FullName!)
                     .LogDebug("已发送键盘输入：{Keys}", string.Join(" + ", request.Keys ?? []));
                 return Results.NoContent();
             }

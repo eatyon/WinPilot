@@ -60,9 +60,13 @@ public sealed class WebFallbackTest : IAsyncLifetime
                 OnPrepareResponse = context =>
                 {
                     if (string.Equals(context.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
+                    {
                         context.Context.Response.Headers.CacheControl = "no-cache";
+                    }
                     else if (context.Context.Request.Path.StartsWithSegments("/assets"))
+                    {
                         context.Context.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+                    }
                 }
             };
             app.UseStaticFiles(staticFileOptions);
@@ -72,9 +76,10 @@ public sealed class WebFallbackTest : IAsyncLifetime
             app.MapMethods("/api/items/{id}", ["GET", "PATCH"], ApiSuccess);
             app.MapPost("/api/items/options", ApiSuccess);
             app.Map("/api/unrestricted", (HttpContext context) => ApiSuccess().ExecuteAsync(context));
-            app.MapGet("/api/business-missing", (bool problem) => problem
-                ? Results.Problem(statusCode: 404, title: "配置不存在", detail: "未找到请求的配置")
-                : Results.NotFound(new { detail = "未找到请求的配置" }));
+            app.MapGet("/api/business-missing", (bool problem) =>
+                problem
+                    ? Results.Problem(statusCode: 404, title: "配置不存在", detail: "未找到请求的配置")
+                    : Results.NotFound(new { detail = "未找到请求的配置" }));
             app.MapGet("/api/files/protected", ApiSuccess);
             app.MapPost("/api/tasks", ApiSuccess);
             app.MapPut("/api/settings/protected", ApiSuccess);
@@ -105,7 +110,10 @@ public sealed class WebFallbackTest : IAsyncLifetime
     [InlineData("/api/items/item", "DELETE", "GET,PATCH")]
     [InlineData("/API/items/item.json/", "POST", "GET,PATCH")]
     [InlineData("/api/items/options", "DELETE", "GET,PATCH,POST")]
-    public async Task ExistingApiWithUnsupportedMethodReturns405AndOnlyRegisteredAllow(string path, string method, string allowed)
+    public async Task ExistingApiWithUnsupportedMethodReturns405AndOnlyRegisteredAllow(
+        string path,
+        string method,
+        string allowed)
     {
         using var request = new HttpRequestMessage(new HttpMethod(method), path);
         using var response = await client.SendAsync(request);
@@ -212,7 +220,11 @@ public sealed class WebFallbackTest : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal(Encoding.UTF8.GetByteCount(ScriptContent), response.Content.Headers.ContentLength);
-        Assert.Equal(new[] { "immutable", "max-age=31536000", "private" },
+        Assert.Equal(new[] {
+            "immutable",
+            "max-age=31536000",
+            "private"
+},
             response.Headers.CacheControl!.ToString().Split(',').Select(value => value.Trim()).Order());
         Assert.Equal(method == "HEAD" ? "" : ScriptContent, await response.Content.ReadAsStringAsync());
     }
@@ -238,11 +250,19 @@ public sealed class WebFallbackTest : IAsyncLifetime
     {
         using var response = await client.GetAsync($"/api/business-missing?problem={problem}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Equal(problem ? "application/problem+json" : "application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(
+            problem ? "application/problem+json" : "application/json",
+            response.Content.Headers.ContentType?.MediaType);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("未找到请求的配置", json.RootElement.GetProperty("detail").GetString());
-        if (problem) Assert.Equal("配置不存在", json.RootElement.GetProperty("title").GetString());
-        else Assert.False(json.RootElement.TryGetProperty("title", out _));
+        if (problem)
+        {
+            Assert.Equal("配置不存在", json.RootElement.GetProperty("title").GetString());
+        }
+        else
+        {
+            Assert.False(json.RootElement.TryGetProperty("title", out _));
+        }
         Assert.Empty(response.Content.Headers.Allow);
     }
 
@@ -314,7 +334,10 @@ public sealed class WebFallbackTest : IAsyncLifetime
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         Assert.Empty(response.Content.Headers.Allow);
         var body = await response.Content.ReadAsStringAsync();
-        if (head) Assert.Empty(body);
+        if (head)
+        {
+            Assert.Empty(body);
+        }
         else
         {
             using var json = JsonDocument.Parse(body);
@@ -330,10 +353,22 @@ public sealed class WebFallbackTest : IAsyncLifetime
         {
             if (app is not null)
             {
-                try { await app.StopAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
-                finally { await app.DisposeAsync(); }
+                try
+                {
+                    await app.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                finally
+                {
+                    await app.DisposeAsync();
+                }
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 }

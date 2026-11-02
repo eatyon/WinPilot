@@ -1,6 +1,6 @@
-using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using WinPilot.Windows;
 using Process = System.Diagnostics.Process;
 using ProcessStartInfo = System.Diagnostics.ProcessStartInfo;
@@ -33,7 +33,11 @@ public sealed class ConPtyTerminalProcessTest
         }
         finally
         {
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+            if (!process.HasExited)
+            {
+                process.Kill();
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
     }
 
@@ -53,7 +57,11 @@ public sealed class ConPtyTerminalProcessTest
         }
         finally
         {
-            if (!process.HasExited) { process.Kill(); await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+            if (!process.HasExited)
+            {
+                process.Kill();
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
     }
 
@@ -61,7 +69,8 @@ public sealed class ConPtyTerminalProcessTest
     public void ResizeAndClosePreserveHandleDimensionsAndSingleRelease()
     {
         var calls = new List<string>();
-        var console = new ConPtyTerminalProcess.PseudoConsoleHandle((IntPtr)123,
+        var console = new ConPtyTerminalProcess.PseudoConsoleHandle(
+            (IntPtr)123,
             (handle, columns, rows) => calls.Add($"resize:{handle}:{columns}:{rows}"),
             handle => calls.Add($"close:{handle}"));
 
@@ -89,7 +98,10 @@ public sealed class ConPtyTerminalProcessTest
             Interlocked.Increment(ref resizeCalls);
             entered.Set();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
-            if (failResize) throw failure;
+            if (failResize)
+            {
+                throw failure;
+            }
         }, handle =>
         {
             Assert.Equal((IntPtr)123, handle);
@@ -110,8 +122,14 @@ public sealed class ConPtyTerminalProcessTest
             Assert.Equal(1, Volatile.Read(ref resizeCalls));
             release.Set();
             await Task.WhenAll(resize.Completion, closing.Value.Completion).WaitAsync(TimeSpan.FromSeconds(5));
-            if (failResize) Assert.Same(failure, resizeFailure);
-            else Assert.Null(resizeFailure);
+            if (failResize)
+            {
+                Assert.Same(failure, resizeFailure);
+            }
+            else
+            {
+                Assert.Null(resizeFailure);
+            }
             Assert.Equal(1, closeCalls);
             Assert.Equal(closing.Value.Thread.ManagedThreadId, closeThread);
             Assert.NotEqual(resize.Thread.ManagedThreadId, closeThread);
@@ -202,11 +220,13 @@ public sealed class ConPtyTerminalProcessTest
     {
         var failure = new IOException("close-failure");
         var closed = 0;
-        var console = new ConPtyTerminalProcess.PseudoConsoleHandle((IntPtr)123, (_, _, _) => { }, _ =>
+        var console = new ConPtyTerminalProcess.PseudoConsoleHandle((IntPtr)123, (_, _, _) =>
         {
-            closed++;
-            throw failure;
-        });
+        }, _ =>
+                {
+                    closed++;
+                    throw failure;
+                });
 
         Assert.Same(failure, Assert.Throws<IOException>(console.Close));
         console.Close();
@@ -217,7 +237,8 @@ public sealed class ConPtyTerminalProcessTest
     [Fact]
     public void EmptyHandleDoesNotInvokeNativeOperations()
     {
-        var console = new ConPtyTerminalProcess.PseudoConsoleHandle(IntPtr.Zero,
+        var console = new ConPtyTerminalProcess.PseudoConsoleHandle(
+            IntPtr.Zero,
             (_, _, _) => throw new InvalidOperationException("不应进入原生 Resize"),
             _ => throw new InvalidOperationException("不应进入原生关闭"));
 
@@ -240,7 +261,10 @@ public sealed class ConPtyTerminalProcessTest
         void Release(int index)
         {
             stages.Add(index);
-            if ((failureMask & (1 << index)) != 0) throw failures[index];
+            if ((failureMask & (1 << index)) != 0)
+            {
+                throw failures[index];
+            }
         }
         var input = new ReleaseStream(() => Release(0));
         var output = new ReleaseStream(() => Release(1));
@@ -248,38 +272,64 @@ public sealed class ConPtyTerminalProcessTest
 
         var error = await Record.ExceptionAsync(() => ConPtyTerminalProcess.ReleaseResourcesAsync(input, output, handle, () => Release(3)).AsTask());
 
-        Assert.Equal(new[] { 0, 1, 2, 3 }, stages);
+        Assert.Equal(new[] {
+            0,
+            1,
+            2,
+            3
+}, stages);
         var expected = failures.Where((_, index) => (failureMask & (1 << index)) != 0).ToArray();
-        if (expected.Length == 0) Assert.Null(error);
-        else if (expected.Length == 1) Assert.Same(expected[0], error);
+        if (expected.Length == 0)
+        {
+            Assert.Null(error);
+        }
+        else if (expected.Length == 1)
+        {
+            Assert.Same(expected[0], error);
+        }
         else
         {
             var aggregate = Assert.IsType<AggregateException>(error);
             Assert.Equal(expected.Length, aggregate.InnerExceptions.Count);
-            for (var index = 0; index < expected.Length; index++) Assert.Same(expected[index], aggregate.InnerExceptions[index]);
+            for (var index = 0; index < expected.Length; index++)
+            {
+                Assert.Same(expected[index], aggregate.InnerExceptions[index]);
+            }
         }
     }
 
-    private static Process StartWaitingProcess() => Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/d /q")
-    {
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        RedirectStandardInput = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true
-    })!;
+    private static Process StartWaitingProcess() =>
+        Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/d /q")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        })!;
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
+    private static extern SafeProcessHandle OpenProcess(
+        uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        int processId);
 
     private static (Thread Thread, Task Completion) StartThread(Action action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            try { action(); completion.TrySetResult(); }
-            catch (Exception exception) { completion.TrySetException(exception); }
-        }) { IsBackground = true };
+            try
+            {
+                action();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        })
+        { IsBackground = true };
         thread.Start();
         return (thread, completion.Task);
     }

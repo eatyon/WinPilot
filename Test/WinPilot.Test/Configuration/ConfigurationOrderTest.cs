@@ -39,10 +39,16 @@ public sealed class ConfigurationOrderTest
                   "port": 9123
                 }
                 """)!.AsObject();
-            if (initialize) source.Remove("startupMode");
+            if (initialize)
+            {
+                source.Remove("startupMode");
+            }
             File.WriteAllText(file, source.ToJsonString());
             var settings = WinPilotSettings.LoadAndInitialize(file);
-            if (initialize) Assert.Equal(source.ToJsonString(), File.ReadAllText(file));
+            if (initialize)
+            {
+                Assert.Equal(source.ToJsonString(), File.ReadAllText(file));
+            }
             settings.Save(file);
             var saved = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
             var commands = saved["commandBots"]!.AsObject();
@@ -54,13 +60,28 @@ public sealed class ConfigurationOrderTest
             var commandOrder = commands.Select(property => property.Key).ToArray();
             string[] expectedRootOrder =
             [
-                "port", "lanAccessEnabled", "startupMode", "unauthenticatedWebPageEnabled",
-                "notifications", "commandBots", "safeModeEnabled", "securityNotifications", "updates"
+                "port",
+                "lanAccessEnabled",
+                "startupMode",
+                "unauthenticatedWebPageEnabled",
+                "notifications",
+                "commandBots",
+                "safeModeEnabled",
+                "securityNotifications",
+                "updates"
             ];
             string[] expectedCommandOrder =
             [
-                "TelegramEnabled", "TelegramPrefix", "FeishuEnabled", "FeishuPrefix",
-                "OneBotEnabled", "OneBotPrefix", "OneBotWebSocketUrl", "OneBotToken", "QQBotEnabled", "QQBotPrefix"
+                "TelegramEnabled",
+                "TelegramPrefix",
+                "FeishuEnabled",
+                "FeishuPrefix",
+                "OneBotEnabled",
+                "OneBotPrefix",
+                "OneBotWebSocketUrl",
+                "OneBotToken",
+                "QQBotEnabled",
+                "QQBotPrefix"
             ];
             Assert.Equal(expectedRootOrder, rootOrder.Where(expectedRootOrder.Contains));
             Assert.Equal(Array.IndexOf(rootOrder, "commandBots") + 1, Array.IndexOf(rootOrder, "safeModeEnabled"));
@@ -78,6 +99,9 @@ public sealed class ConfigurationOrderTest
             settings.Save(file);
             Assert.Equal(firstSave, File.ReadAllText(file));
         }
-        finally { Directory.Delete(directory, true); }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
     }
 }

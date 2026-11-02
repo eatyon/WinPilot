@@ -1,5 +1,8 @@
 namespace WinPilot.Features.Terminal;
 
+/// <summary>
+/// 用随机起止标记区分命令回显与实际输出，等待首段输出或超时，不负责判定命令执行成功。
+/// </summary>
 internal sealed class TaskShellOutputWaiter : IDisposable
 {
     private static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(60);
@@ -24,26 +27,35 @@ internal sealed class TaskShellOutputWaiter : IDisposable
     public TaskShellOutputWaiter(string shell, string command)
     {
         this.shell = shell == "cmd" ? "CMD" : "PowerShell";
-        WrappedCommand = shell == "cmd" ? $"echo {beginMarker}& {command} & echo {endMarker}\r\n" : $"Write-Output '{beginMarker}'; & {{ {command} }}; Write-Output '{endMarker}'\r\n";
+        WrappedCommand = shell == "cmd"
+            ? $"echo {beginMarker}& {command} & echo {endMarker}\r\n"
+            : $"Write-Output '{beginMarker}'; & {{ {command} }}; Write-Output '{endMarker}'\r\n";
     }
 
     public void Observe(TerminalEvent item)
     {
         if (item.Type != "output")
+        {
             return;
+        }
         lock (gate)
         {
             if (disposed || ended)
+            {
                 return;
+            }
             foreach (var character in item.Data)
             {
                 ConsumeCharacter(character);
                 if (ended || outputReceived.Task.IsCompleted)
+                {
                     break;
+                }
             }
         }
     }
 
+    // 按字符保留 ANSI 解析状态，使颜色与终端控制序列即使跨输出块也不会被当成命令正文。
     private void ConsumeCharacter(char character)
     {
         if (ansiState == 1)
@@ -55,16 +67,22 @@ internal sealed class TaskShellOutputWaiter : IDisposable
         if (ansiState == 2)
         {
             if (character is >= '@' and <= '~')
+            {
                 ansiState = 0;
+            }
             return;
         }
 
         if (ansiState == 3)
         {
             if (character == '\a')
+            {
                 ansiState = 0;
+            }
             else if (character == '\x1b')
+            {
                 ansiState = 4;
+            }
             return;
         }
 
@@ -81,9 +99,13 @@ internal sealed class TaskShellOutputWaiter : IDisposable
         }
 
         if (!began)
+        {
             ConsumeBeforeBegin(character);
+        }
         else
+        {
             ConsumeCommandOutput(character);
+        }
     }
 
     public async Task<ShellCommandResult> WaitAsync(CancellationToken cancellationToken)
@@ -154,7 +176,9 @@ internal sealed class TaskShellOutputWaiter : IDisposable
             {
                 endIndex++;
                 if (endIndex == endMarker.Length)
+                {
                     ended = true;
+                }
                 return;
             }
 
@@ -171,6 +195,7 @@ internal sealed class TaskShellOutputWaiter : IDisposable
         }
 
         skipDelimiter = false;
+        // 结束标记不能算实际输出；前缀匹配失败才说明收到真实命令内容。
         if (atLineStart && character == endMarker[0])
         {
             matchingEnd = true;
@@ -187,6 +212,8 @@ internal sealed class TaskShellOutputWaiter : IDisposable
     public void Dispose()
     {
         lock (gate)
+        {
             disposed = true;
+        }
     }
 }

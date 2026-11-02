@@ -24,12 +24,20 @@ public sealed class TerminalSessionManagerTest
         Task Publish(TerminalEvent item)
         {
             if (item.Type == "exited")
+            {
                 received.TrySetException(new InvalidOperationException($"终端提前退出，退出码：{item.ExitCode}"));
-            if (item.Type != "output") return Task.CompletedTask;
+            }
+            if (item.Type != "output")
+            {
+                return Task.CompletedTask;
+            }
             lock (output)
             {
                 output.Append(item.Data);
-                if (output.ToString().Contains(expected, StringComparison.Ordinal)) received.TrySetResult();
+                if (output.ToString().Contains(expected, StringComparison.Ordinal))
+                {
+                    received.TrySetResult();
+                }
             }
             return Task.CompletedTask;
         }
@@ -42,7 +50,10 @@ public sealed class TerminalSessionManagerTest
         }
         catch (TimeoutException)
         {
-            lock (output) Assert.Fail($"{shell} 未返回命令结果，终端输出：{output}");
+            lock (output)
+            {
+                Assert.Fail($"{shell} 未返回命令结果，终端输出：{output}");
+            }
         }
         Assert.Equal(1, manager.ActiveSessionCount);
         await manager.CloseAsync(owner, session.SessionId);
@@ -92,14 +103,22 @@ public sealed class TerminalSessionManagerTest
         await using var manager = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
         var owner = Guid.NewGuid();
         var events = new ConcurrentQueue<TerminalEvent>();
-        Task Publish(TerminalEvent item) { events.Enqueue(item); return Task.CompletedTask; }
+        Task Publish(TerminalEvent item)
+        {
+            events.Enqueue(item);
+            return Task.CompletedTask;
+        }
         TerminalSessionInfo first = null!;
         for (var index = 0; index < TerminalSessionManager.MaxSessionsPerConnection; index++)
         {
             var session = await manager.CreateAsync(owner, "cmd", Path.GetTempPath(), Publish, CancellationToken.None);
-            if (index == 0) first = session;
+            if (index == 0)
+            {
+                first = session;
+            }
         }
-        Assert.True(manager.ActiveSessionCount == TerminalSessionManager.MaxSessionsPerConnection,
+        Assert.True(
+            manager.ActiveSessionCount == TerminalSessionManager.MaxSessionsPerConnection,
             $"活动会话：{manager.ActiveSessionCount}，事件：{string.Join("; ", events.Select(item => $"{item.Type}:{item.ExitCode}:{item.Data}"))}");
         await Assert.ThrowsAsync<InvalidOperationException>(() => manager.CreateAsync(owner, "cmd", Path.GetTempPath(), _ => Task.CompletedTask, CancellationToken.None));
         await manager.CreateAsync(Guid.NewGuid(), "cmd", Path.GetTempPath(), _ => Task.CompletedTask, CancellationToken.None);
@@ -111,7 +130,8 @@ public sealed class TerminalSessionManagerTest
     [Fact]
     public void NativeAttributeListSizeUsesPointerWidth()
     {
-        var method = typeof(ConPtyTerminalProcess).GetMethod("InitializeProcThreadAttributeList",
+        var method = typeof(ConPtyTerminalProcess).GetMethod(
+            "InitializeProcThreadAttributeList",
             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
         Assert.Equal(typeof(nuint).MakeByRefType(), method.GetParameters()[3].ParameterType);
     }
@@ -178,7 +198,13 @@ public sealed class TerminalSessionManagerTest
         await using var manager = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
         var owner = Guid.NewGuid();
         await Assert.ThrowsAsync<InvalidOperationException>(() => manager.CreateAsync(owner, "unsupported", Path.GetTempPath(), _ => Task.CompletedTask, CancellationToken.None));
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => manager.CreateAsync(owner, "cmd", Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), _ => Task.CompletedTask, CancellationToken.None));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() =>
+            manager.CreateAsync(
+                owner,
+                "cmd",
+                Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")),
+                _ => Task.CompletedTask,
+                CancellationToken.None));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.CreateAsync(owner, "cmd", Path.GetTempPath(), _ => Task.CompletedTask, new CancellationToken(true)));
         await manager.CloseConnectionAsync(owner);
     }
