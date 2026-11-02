@@ -14,7 +14,9 @@ public sealed class SafeModeConcurrencyTest
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public async Task SupersededProtectionCannotDisposeActiveCancellationOrCloseNewTerminals(bool authentication, bool reopen)
+    public async Task SupersededProtectionCannotDisposeActiveCancellationOrCloseNewTerminals(
+        bool authentication,
+        bool reopen)
     {
         await using var fixture = new TaskServiceFixture();
         var safeMode = new SafeModeService(fixture.Paths, fixture.Terminals, NullLogger<SafeModeService>.Instance);
@@ -30,8 +32,14 @@ public sealed class SafeModeConcurrencyTest
         var protection = authentication ? safeMode.EnableForAuthenticationFailure() : null;
         var enabling = Task.Run(() =>
         {
-            if (authentication) protection!();
-            else safeMode.SetEnabled(true);
+            if (authentication)
+            {
+                protection!();
+            }
+            else
+            {
+                safeMode.SetEnabled(true);
+            }
         });
         Task? closing = null;
         ProcessDouble? currentProcess = null;
@@ -41,7 +49,10 @@ public sealed class SafeModeConcurrencyTest
             closing = Task.Run(() => safeMode.SetEnabled(false));
             await closing.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.NotNull(token.WaitHandle);
-            if (reopen) safeMode.SetEnabled(true);
+            if (reopen)
+            {
+                safeMode.SetEnabled(true);
+            }
             var currentToken = safeMode.RestrictedOperationsCancellation;
             currentProcess = AddTerminal(fixture.Terminals);
             await using (var watching = safeMode.WatchAsync(CancellationToken.None).GetAsyncEnumerator())
@@ -91,8 +102,14 @@ public sealed class SafeModeConcurrencyTest
         var protection = authentication ? safeMode.EnableForAuthenticationFailure() : null;
         var enabling = Task.Run(() =>
         {
-            if (authentication) protection!();
-            else safeMode.SetEnabled(true);
+            if (authentication)
+            {
+                protection!();
+            }
+            else
+            {
+                safeMode.SetEnabled(true);
+            }
         });
         Task<bool>? late = null;
         Task? closing = null;
@@ -121,8 +138,23 @@ public sealed class SafeModeConcurrencyTest
             release.Set();
             await Task.WhenAll(enabling, closing ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
             watchingCancellation.Cancel();
-            try { await changed; } catch (OperationCanceledException) { }
-            if (late is not null) try { await late; } catch (OperationCanceledException) { }
+            try
+            {
+                await changed;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            if (late is not null)
+            {
+                try
+                {
+                    await late;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
             safeMode.SetEnabled(false);
             CurrentSource(safeMode).Dispose();
         }
@@ -156,7 +188,11 @@ public sealed class SafeModeConcurrencyTest
             Assert.False(WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).SafeModeEnabled);
             Assert.False(safeMode.RestrictedOperationsCancellation.IsCancellationRequested);
         }
-        finally { complete(); CurrentSource(safeMode).Dispose(); }
+        finally
+        {
+            complete();
+            CurrentSource(safeMode).Dispose();
+        }
     }
 
     [Theory]
@@ -173,8 +209,14 @@ public sealed class SafeModeConcurrencyTest
             using var blocked = new FileStream(paths.ConfigurationFile + ".tmp", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var failure = Assert.Throws<AggregateException>(() =>
             {
-                if (authentication) safeMode.EnableForAuthenticationFailure()!();
-                else safeMode.SetEnabled(true);
+                if (authentication)
+                {
+                    safeMode.EnableForAuthenticationFailure()!();
+                }
+                else
+                {
+                    safeMode.SetEnabled(true);
+                }
             });
             Assert.All(failure.InnerExceptions, error => Assert.IsType<IOException>(error));
             Assert.Equal(authentication, safeMode.Enabled);
@@ -198,7 +240,11 @@ public sealed class SafeModeConcurrencyTest
             .GetField("sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(manager)!;
         var process = new ProcessDouble();
         var session = new TerminalSession(Guid.NewGuid(), Guid.NewGuid(), process, _ => Task.CompletedTask,
-            item => { sessions.TryRemove(item.Id, out _); return Task.CompletedTask; }, NullLogger.Instance);
+            item =>
+            {
+                sessions.TryRemove(item.Id, out _);
+                return Task.CompletedTask;
+            }, NullLogger.Instance);
         Assert.True(sessions.TryAdd(session.Id, session));
         return process;
     }
@@ -209,12 +255,28 @@ public sealed class SafeModeConcurrencyTest
         public Stream Output { get; } = new MemoryStream();
         public int Kills { get; private set; }
         public int? ExitCode => Kills > 0 ? 0 : null;
+
         public bool HasExited() => Kills > 0;
+
         public void Kill() => Kills++;
+
         public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        public void Resize(short columns, short rows) { }
-        public void ClosePseudoConsoleHandle() { }
+
+        public void Resize(short columns, short rows)
+        {
+        }
+
+        public void ClosePseudoConsoleHandle()
+        {
+        }
+
         public ValueTask CloseOutputAsync() => Output.DisposeAsync();
-        public ValueTask DisposeAsync() { Input.Dispose(); Output.Dispose(); return ValueTask.CompletedTask; }
+
+        public ValueTask DisposeAsync()
+        {
+            Input.Dispose();
+            Output.Dispose();
+            return ValueTask.CompletedTask;
+        }
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import AppIcon from '../../components/AppIcon.vue';
 import { readApiError, apiFetch, userErrorMessage } from '../../api/client';
@@ -9,14 +9,33 @@ const password = ref('');
 const passwordVisible = ref(false);
 const error = ref('');
 const isSubmitting = ref(false);
+const lockSeconds = ref(0);
+const loginError = computed(() => {
+  if (lockSeconds.value === 0) return error.value;
+  const minutes = Math.floor(lockSeconds.value / 60);
+  const seconds = lockSeconds.value % 60;
+  return `登录已锁定，请 ${minutes > 0 ? `${minutes} 分 ` : ''}${seconds} 秒后重试`;
+});
+let lockedUntil = 0;
+let lockTimer: ReturnType<typeof setInterval> | undefined;
+function stopLockTimer() {
+  if (lockTimer !== undefined) clearInterval(lockTimer);
+  lockTimer = undefined;
+}
+function updateLockSeconds() {
+  lockSeconds.value = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+  if (lockSeconds.value === 0) stopLockTimer();
+}
 let active = true;
 let controller: AbortController | undefined;
-onBeforeUnmount(() => { active = false; controller?.abort(); });
+watch(password, () => { error.value = ''; }, { flush: 'sync' });
+onBeforeUnmount(() => { active = false; controller?.abort(); stopLockTimer(); });
 async function submit() {
   if (!active || isSubmitting.value) return;
+  updateLockSeconds();
+  if (lockSeconds.value > 0) return;
   controller = new AbortController();
   const request = controller;
-  error.value = '';
   isSubmitting.value = true;
   try {
     const response = await apiFetch('/login', {
@@ -25,9 +44,21 @@ async function submit() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: password.value }),
     });
+    if (!active || request.signal.aborted) return;
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        error.value = '';
+        lockedUntil = Date.now() + retryAfter * 1000;
+        stopLockTimer();
+        updateLockSeconds();
+        lockTimer = setInterval(updateLockSeconds, 1000);
+        return;
+      }
+    }
     if (!response.ok) {
       throw new Error(await readApiError(response,
-        response.status === 429 ? '登录尝试过多，请 5 分钟后重试' : '密码不正确或请求已失效'));
+        response.status === 429 ? '登录已锁定，请稍后重试' : '密码不正确或请求已失效'));
     }
     if (active && !request.signal.aborted) await router.replace('/home');
   } catch (cause) {
@@ -76,8 +107,8 @@ async function submit() {
           </span>
         </label>
 
-        <p v-if="error" class="login-error" role="alert">{{ error }}</p>
-        <button class="button button-primary login-submit" type="submit" :disabled="isSubmitting">
+        <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
+        <button class="button button-primary login-submit" type="submit" :disabled="isSubmitting || lockSeconds > 0">
           {{ isSubmitting ? '请稍候' : '登录' }}
           <AppIcon name="arrow" />
         </button>

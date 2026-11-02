@@ -25,17 +25,28 @@ public sealed class SessionManagerTest
             entered.TrySetResult();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
         });
-        if (operation is "create" or "validate") Expire(sessions, id);
-        var revoking = Task.Run(() =>
+        if (operation is "create" or "validate")
         {
-            switch (operation)
-            {
-                case "revoke": sessions.RevokeAll(); break;
-                case "dispose": sessions.Dispose(); break;
-                case "create": Assert.True(sessions.Validate(sessions.Create())); break;
-                case "validate": Assert.False(sessions.Validate(id)); break;
-            }
-        });
+            Expire(sessions, id);
+        }
+        var revoking = Task.Run(() =>
+                {
+                    switch (operation)
+                    {
+                        case "revoke":
+                            sessions.RevokeAll();
+                            break;
+                        case "dispose":
+                            sessions.Dispose();
+                            break;
+                        case "create":
+                            Assert.True(sessions.Validate(sessions.Create()));
+                            break;
+                        case "validate":
+                            Assert.False(sessions.Validate(id));
+                            break;
+                    }
+                });
         Task? probing = null;
         try
         {
@@ -43,8 +54,14 @@ public sealed class SessionManagerTest
             probing = Task.Run(() =>
             {
                 Assert.False(sessions.Validate(id));
-                if (operation == "dispose") Assert.Throws<ObjectDisposedException>(() => sessions.Create());
-                else Assert.True(sessions.Validate(sessions.Create()));
+                if (operation == "dispose")
+                {
+                    Assert.Throws<ObjectDisposedException>(() => sessions.Create());
+                }
+                else
+                {
+                    Assert.True(sessions.Validate(sessions.Create()));
+                }
             });
             await probing.WaitAsync(TimeSpan.FromSeconds(5));
         }
@@ -52,7 +69,10 @@ public sealed class SessionManagerTest
         {
             release.Set();
             await revoking.WaitAsync(TimeSpan.FromSeconds(5));
-            if (probing is not null) await probing.WaitAsync(TimeSpan.FromSeconds(5));
+            if (probing is not null)
+            {
+                await probing.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         Assert.Equal(1, callbacks);
         Assert.True(token.IsCancellationRequested);
@@ -71,8 +91,16 @@ public sealed class SessionManagerTest
         var counts = new int[tokens.Length];
         var registrations = tokens.Select((token, index) => token.Register(() => Interlocked.Increment(ref counts[index]))).ToArray();
         using var start = new Barrier(3);
-        var first = Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); sessions.RevokeAll(); });
-        var second = Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); sessions.Dispose(); });
+        var first = Task.Run(() =>
+        {
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+            sessions.RevokeAll();
+        });
+        var second = Task.Run(() =>
+        {
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+            sessions.Dispose();
+        });
         try
         {
             Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
@@ -83,7 +111,13 @@ public sealed class SessionManagerTest
             Assert.All(tokens, token => Assert.Throws<ObjectDisposedException>(() => token.WaitHandle));
             Assert.Throws<ObjectDisposedException>(() => sessions.Create());
         }
-        finally { foreach (var registration in registrations) registration.Dispose(); }
+        finally
+        {
+            foreach (var registration in registrations)
+            {
+                registration.Dispose();
+            }
+        }
     }
 
     private static void Expire(SessionManager manager, string id)

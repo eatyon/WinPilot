@@ -20,7 +20,9 @@ public static class SafeModeEndpointRouteBuilderExtensions
                     await context.Response.Body.FlushAsync(context.RequestAborted);
                 }
             }
-            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+            }
         });
         return endpoints;
     }

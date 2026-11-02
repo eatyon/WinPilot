@@ -3,9 +3,12 @@ using System.Security.Cryptography;
 
 namespace WinPilot.Features.Security;
 
+/// <summary>
+/// 管理内存中的登录会话；有效访问会续期，过期或撤销会通过取消令牌通知正在执行的请求。
+/// </summary>
 public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDisposable
 {
-    private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
     private readonly ConcurrentDictionary<string, SessionState> sessions = new(StringComparer.Ordinal);
     private readonly object sessionGate = new();
     private bool disposed;
@@ -24,20 +27,34 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
                 revoked = RemoveSessions(expiredOnly: true);
-                if (auth is not null && !auth.IsCurrentVersion(authenticationVersion)) return null;
+                // 密码验证期间可能发生修改；版本已变时不能再凭旧验证结果创建会话。
+                if (auth is not null && !auth.IsCurrentVersion(authenticationVersion))
+                {
+                    return null;
+                }
                 sessions[id] = new SessionState(Lifetime);
             }
             return id;
         }
-        finally { CancelSessions(revoked); }
+        // 取消回调可能执行外部逻辑，离开会话锁后再触发。
+        finally
+        {
+            CancelSessions(revoked);
+        }
     }
 
     public bool Validate(string? id) => TryValidate(id, out _);
 
+    /// <summary>
+    /// 验证并续期会话；成功时返回用于中断该会话关联请求的失效令牌。
+    /// </summary>
     public bool TryValidate(string? id, out CancellationToken invalidated)
     {
         invalidated = default;
-        if (string.IsNullOrWhiteSpace(id)) return false;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
         SessionState? revoked = null;
         lock (sessionGate)
         {
@@ -46,17 +63,30 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                 invalidated = state.Invalidated;
                 return true;
             }
-            if (sessions.TryRemove(id, out var removed) && removed.TryRevoke()) revoked = removed;
+            if (sessions.TryRemove(id, out var removed) && removed.TryRevoke())
+            {
+                revoked = removed;
+            }
         }
         revoked?.CancelAndDispose(logger);
         return false;
     }
 
+    /// <summary>
+    /// 撤销当前所有会话，并通知关联的长连接和请求结束。
+    /// </summary>
     public void RevokeAll()
     {
         List<SessionState> revoked;
-        lock (sessionGate) revoked = RemoveSessions(expiredOnly: false);
+        lock (sessionGate)
+        {
+            revoked = RemoveSessions(expiredOnly: false);
+        }
         CancelSessions(revoked);
+        if (revoked.Count > 0)
+        {
+            logger?.LogDebug("登录会话已撤销，数量：{Count}", revoked.Count);
+        }
     }
 
     public void Dispose()
@@ -64,7 +94,10 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         List<SessionState> revoked;
         lock (sessionGate)
         {
-            if (disposed) return;
+            if (disposed)
+            {
+                return;
+            }
             disposed = true;
             revoked = RemoveSessions(expiredOnly: false);
         }
@@ -75,17 +108,26 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
     {
         List<SessionState> revoked = [];
         foreach (var item in sessions)
-            if ((!expiredOnly || item.Value.IsExpired) &&
-                ((ICollection<KeyValuePair<string, SessionState>>)sessions).Remove(item) && item.Value.TryRevoke())
+        {
+            if ((!expiredOnly || item.Value.IsExpired)
+                && ((ICollection<KeyValuePair<string, SessionState>>)sessions).Remove(item)
+                && item.Value.TryRevoke())
+            {
                 revoked.Add(item.Value);
+            }
+        }
         return revoked;
     }
 
     private void CancelSessions(List<SessionState> revoked)
     {
-        foreach (var state in revoked) state.CancelAndDispose(logger);
+        foreach (var state in revoked)
+        {
+            state.CancelAndDispose(logger);
+        }
     }
 
+    // 单个会话的续期与撤销共用同一把锁，避免已失效的会话被并发请求重新激活。
     private sealed class SessionState
     {
         private readonly object gate = new();
@@ -104,13 +146,26 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         }
 
         public CancellationToken Invalidated => invalidated;
-        public bool IsExpired { get { lock (gate) return revoked || invalidated.IsCancellationRequested || expiresAt <= DateTimeOffset.UtcNow; } }
+
+        public bool IsExpired
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return revoked || invalidated.IsCancellationRequested || expiresAt <= DateTimeOffset.UtcNow;
+                }
+            }
+        }
 
         public bool TryRefresh()
         {
             lock (gate)
             {
-                if (revoked || invalidated.IsCancellationRequested || expiresAt <= DateTimeOffset.UtcNow) return false;
+                if (revoked || invalidated.IsCancellationRequested || expiresAt <= DateTimeOffset.UtcNow)
+                {
+                    return false;
+                }
                 expiresAt = DateTimeOffset.UtcNow.Add(lifetime);
                 invalidation.CancelAfter(lifetime);
                 return true;
@@ -121,7 +176,10 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         {
             lock (gate)
             {
-                if (revoked) return false;
+                if (revoked)
+                {
+                    return false;
+                }
                 revoked = true;
                 return true;
             }
@@ -131,10 +189,19 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         {
             try
             {
-                if (!invalidated.IsCancellationRequested) invalidation.Cancel();
+                if (!invalidated.IsCancellationRequested)
+                {
+                    invalidation.Cancel();
+                }
             }
-            catch (AggregateException exception) { logger?.LogWarning(exception, "撤销登录会话时，取消回调失败"); }
-            finally { invalidation.Dispose(); }
+            catch (AggregateException exception)
+            {
+                logger?.LogWarning(exception, "撤销登录会话时，取消回调失败");
+            }
+            finally
+            {
+                invalidation.Dispose();
+            }
         }
     }
 }

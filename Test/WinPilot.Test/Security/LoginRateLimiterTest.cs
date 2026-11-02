@@ -7,6 +7,28 @@ namespace WinPilot.Test;
 
 public sealed class LoginRateLimiterTest
 {
+    [Fact]
+    public void RemainingLockTimeCountsDownWithoutExtendingAndExpiresAtTheBoundary()
+    {
+        var clock = new Clock();
+        var limiter = Create(clock);
+        Assert.Equal(TimeSpan.Zero, limiter.GetRemainingLockTime("source"));
+        for (var index = 0; index < 5; index++)
+        {
+            limiter.Failure("source");
+        }
+        Assert.Equal(TimeSpan.FromMinutes(5), limiter.GetRemainingLockTime("source"));
+        clock.Advance(TimeSpan.FromSeconds(28));
+        Assert.Equal(TimeSpan.FromSeconds(272), limiter.GetRemainingLockTime("source"));
+        Assert.False(limiter.Failure("source"));
+        Assert.Equal(TimeSpan.FromSeconds(272), limiter.GetRemainingLockTime("source"));
+        Assert.Equal(TimeSpan.Zero, limiter.GetRemainingLockTime("other"));
+        clock.Advance(TimeSpan.FromSeconds(272) - TimeSpan.FromTicks(1));
+        Assert.Equal(TimeSpan.FromTicks(1), limiter.GetRemainingLockTime("source"));
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.Equal(TimeSpan.Zero, limiter.GetRemainingLockTime("source"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -14,13 +36,19 @@ public sealed class LoginRateLimiterTest
     {
         var clock = new Clock();
         var limiter = Create(clock);
-        for (var index = 0; index < 4; index++) Assert.False(limiter.Failure("source"));
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.False(limiter.Failure("source"));
+        }
         clock.Advance(TimeSpan.FromMinutes(5) - (expired ? TimeSpan.Zero : TimeSpan.FromTicks(1)));
         Assert.Equal(!expired, limiter.Failure("source"));
         Assert.Equal(!expired, limiter.IsLocked("source"));
         if (expired)
         {
-            for (var index = 0; index < 3; index++) Assert.False(limiter.Failure("source"));
+            for (var index = 0; index < 3; index++)
+            {
+                Assert.False(limiter.Failure("source"));
+            }
             Assert.True(limiter.Failure("source"));
         }
     }
@@ -46,7 +74,10 @@ public sealed class LoginRateLimiterTest
     {
         var clock = new Clock();
         var limiter = Create(clock);
-        for (var index = 0; index < 4; index++) Assert.False(limiter.Failure("source"));
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.False(limiter.Failure("source"));
+        }
         Assert.True(limiter.Failure("source"));
         clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
         for (var index = 0; index < 20; index++)
@@ -58,8 +89,29 @@ public sealed class LoginRateLimiterTest
         clock.Advance(TimeSpan.FromTicks(1));
         Assert.False(limiter.IsLocked("source"));
         Assert.False(limiter.Failure("source"));
-        for (var index = 0; index < 3; index++) Assert.False(limiter.Failure("source"));
+        for (var index = 0; index < 3; index++)
+        {
+            Assert.False(limiter.Failure("source"));
+        }
         Assert.True(limiter.Failure("source"));
+    }
+
+    [Fact]
+    public void ResetClearsFailuresAndLocksForAllSources()
+    {
+        var limiter = Create(new Clock());
+        for (var index = 0; index < 4; index++)
+        {
+            limiter.Failure("partial");
+        }
+        for (var index = 0; index < 5; index++)
+        {
+            limiter.Failure("locked");
+        }
+        limiter.Reset();
+        Assert.Empty(Attempts(limiter).Keys.Cast<object>());
+        Assert.False(limiter.IsLocked("locked"));
+        Assert.False(limiter.Failure("partial"));
     }
 
     [Fact]
@@ -68,12 +120,18 @@ public sealed class LoginRateLimiterTest
         var clock = new Clock();
         var limiter = Create(clock);
         Assert.False(limiter.Failure("partial"));
-        for (var index = 0; index < 5; index++) limiter.Failure("locked");
+        for (var index = 0; index < 5; index++)
+        {
+            limiter.Failure("locked");
+        }
         limiter.Success("partial");
         limiter.Success("locked");
         Assert.Empty(Attempts(limiter).Keys.Cast<object>());
         Assert.False(limiter.IsLocked("locked"));
-        for (var index = 0; index < 4; index++) Assert.False(limiter.Failure("locked"));
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.False(limiter.Failure("locked"));
+        }
         Assert.True(limiter.Failure("locked"));
     }
 
@@ -84,7 +142,10 @@ public sealed class LoginRateLimiterTest
         var limiter = Create(clock);
         limiter.Failure("expired");
         clock.Advance(TimeSpan.FromMinutes(4));
-        for (var index = 0; index < 5; index++) limiter.Failure("locked");
+        for (var index = 0; index < 5; index++)
+        {
+            limiter.Failure("locked");
+        }
         clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(2, Attempts(limiter).Count);
         limiter.IsLocked("other");
@@ -137,15 +198,29 @@ public sealed class LoginRateLimiterTest
         for (var iteration = 0; iteration < 50; iteration++)
         {
             limiter.Success("source");
-            for (var index = 0; index < 4; index++) Assert.False(limiter.Failure("source"));
+            for (var index = 0; index < 4; index++)
+            {
+                Assert.False(limiter.Failure("source"));
+            }
             clock.Advance(TimeSpan.FromMinutes(5));
             using var start = new Barrier(2);
-            var updating = Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); return limiter.Failure("source"); });
-            var cleaning = Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); limiter.IsLocked("other"); });
+            var updating = Task.Run(() =>
+            {
+                Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+                return limiter.Failure("source");
+            });
+            var cleaning = Task.Run(() =>
+            {
+                Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+                limiter.IsLocked("other");
+            });
             await Task.WhenAll(updating, cleaning).WaitAsync(TimeSpan.FromSeconds(10));
             Assert.False(await updating);
             Assert.Single(Attempts(limiter).Keys.Cast<object>());
-            for (var index = 0; index < 3; index++) Assert.False(limiter.Failure("source"));
+            for (var index = 0; index < 3; index++)
+            {
+                Assert.False(limiter.Failure("source"));
+            }
             Assert.True(limiter.Failure("source"));
         }
     }
@@ -162,7 +237,9 @@ public sealed class LoginRateLimiterTest
     private sealed class Clock : TimeProvider
     {
         private long ticks = new DateTimeOffset(2026, 10, 14, 0, 0, 0, TimeSpan.Zero).UtcTicks;
+
         public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+
         internal void Advance(TimeSpan interval) => Interlocked.Add(ref ticks, interval.Ticks);
     }
 }

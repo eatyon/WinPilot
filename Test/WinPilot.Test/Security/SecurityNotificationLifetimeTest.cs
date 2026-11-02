@@ -13,7 +13,9 @@ namespace WinPilot.Test;
 public sealed class SecurityNotificationLifetimeTest : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "WinPilot.SecurityNotificationLifetime.Test", Guid.NewGuid().ToString("N"));
-    private static SecurityNotificationSettings Settings => new() { Events = [SecurityEventType.LoginSucceeded], Channel = "telegram" };
+
+    private static SecurityNotificationSettings Settings =>
+        new() { Events = [SecurityEventType.LoginSucceeded], Channel = "telegram" };
 
     [Theory]
     [InlineData(false)]
@@ -32,11 +34,23 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         var callback = stopping.Token.Register(() =>
         {
             entered.Set();
-            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("停止回调握手未解除");
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("停止回调握手未解除");
+            }
             callbackAcquired = Monitor.TryEnter(gate);
-            if (!callbackAcquired) return;
-            try { typeof(SecurityEventNotifier).GetMethod("RequestStop", flags)!.Invoke(notifier, null); }
-            finally { Monitor.Exit(gate); }
+            if (!callbackAcquired)
+            {
+                return;
+            }
+            try
+            {
+                typeof(SecurityEventNotifier).GetMethod("RequestStop", flags)!.Invoke(notifier, null);
+            }
+            finally
+            {
+                Monitor.Exit(gate);
+            }
         });
         typeof(SecurityEventNotifier).GetField("stoppingRegistration", flags)!.SetValue(notifier, callback);
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,17 +62,26 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
                 DisposeNotifier(notifier, asynchronous);
                 completed.TrySetResult();
             }
-            catch (Exception exception) { completed.TrySetException(exception); }
-        }) { IsBackground = true };
+            catch (Exception exception)
+            {
+                completed.TrySetException(exception);
+            }
+        })
+        { IsBackground = true };
         var cancelled = Task.Run(stopping.Cancel);
         try
         {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             thread.Start();
             Assert.True(disposing.Wait(TimeSpan.FromSeconds(5)));
-            Assert.True(SpinWait.SpinUntil(() => thread.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin), TimeSpan.FromSeconds(5)));
+            Assert.True(SpinWait.SpinUntil(
+                () => thread.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin),
+                TimeSpan.FromSeconds(5)));
             var available = Monitor.TryEnter(gate);
-            if (available) Monitor.Exit(gate);
+            if (available)
+            {
+                Monitor.Exit(gate);
+            }
             Task? concurrent = null;
             if (available)
             {
@@ -78,7 +101,10 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         {
             release.Set();
             await cancelled.WaitAsync(TimeSpan.FromSeconds(5));
-            if (!thread.ThreadState.HasFlag(System.Threading.ThreadState.Unstarted)) await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!thread.ThreadState.HasFlag(System.Threading.ThreadState.Unstarted))
+            {
+                await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
             await notifier.DisposeAsync();
         }
     }
@@ -94,10 +120,23 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         var failure = new InvalidOperationException("测试通知取消回调失败");
         var sender = new Sender(async token =>
         {
-            using var callback = token.Register(() => { if (throwingCallback) throw failure; });
+            using var callback = token.Register(() =>
+            {
+                if (throwingCallback)
+                {
+                    throw failure;
+                }
+            });
             entered.TrySetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            finally { cancelled.TrySetResult(); await release.Task; }
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            finally
+            {
+                cancelled.TrySetResult();
+                await release.Task;
+            }
             return [];
         });
         var logger = new NotificationLogger();
@@ -119,10 +158,25 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
             await notifier.StopAsync();
             await notifier.DisposeAsync();
             var warnings = logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToArray();
-            if (throwingCallback) Assert.Same(failure, Assert.Single(Assert.IsType<AggregateException>(Assert.Single(warnings).Error).InnerExceptions));
-            else Assert.Empty(warnings);
+            if (throwingCallback)
+            {
+                Assert.Same(
+                    failure,
+                    Assert.Single(Assert.IsType<AggregateException>(Assert.Single(warnings).Error).InnerExceptions));
+            }
+            else
+            {
+                Assert.Empty(warnings);
+            }
         }
-        finally { release.TrySetResult(); if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            if (stopping is not null)
+            {
+                await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
     }
 
     [Fact]
@@ -153,7 +207,11 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         Task stop;
         lock (gate)
         {
-            record = Task.Run(() => { entered.Set(); notifier.Record(SecurityEventType.LoginSucceeded, notificationSettings: Settings); });
+            record = Task.Run(() =>
+            {
+                entered.Set();
+                notifier.Record(SecurityEventType.LoginSucceeded, notificationSettings: Settings);
+            });
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             stop = notifier.StopAsync();
         }
@@ -171,8 +229,15 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
         var sender = new Sender(async token =>
         {
             entered.TrySetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            finally { cancelled.TrySetResult(); await release.Task; }
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            finally
+            {
+                cancelled.TrySetResult();
+                await release.Task;
+            }
             return [];
         });
         var builder = Host.CreateApplicationBuilder();
@@ -196,40 +261,71 @@ public sealed class SecurityNotificationLifetimeTest : IDisposable
             await disposal.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(sender.Disposed);
         }
-        finally { release.TrySetResult(); await (disposal ?? ((IAsyncDisposable)host).DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            await (disposal ?? ((IAsyncDisposable)host).DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private static void DisposeNotifier(SecurityEventNotifier notifier, bool asynchronous)
     {
-        if (asynchronous) notifier.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        else notifier.Dispose();
+        if (asynchronous)
+        {
+            notifier.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        else
+        {
+            notifier.Dispose();
+        }
     }
 
     private static IEnumerable<Task> Deliveries(SecurityEventNotifier notifier) =>
         (HashSet<Task>)typeof(SecurityEventNotifier).GetField("deliveries", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(notifier)!;
 
-    public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    public void Dispose()
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, true);
+        }
+    }
 
     private sealed class Sender(Func<CancellationToken, Task<IReadOnlyList<NotificationChannelResult>>> send) : INotificationService, IDisposable
     {
         private int calls;
+
         internal int Calls => Volatile.Read(ref calls);
         internal bool Disposed { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
         {
             Assert.False(Disposed);
             Assert.Equal("telegram", channel);
             Interlocked.Increment(ref calls);
             return send(cancellationToken);
         }
+
         public void Dispose() => Disposed = true;
     }
+
     private sealed class NotificationLogger : ILogger<SecurityEventNotifier>
     {
         internal ConcurrentQueue<(LogLevel Level, string Message, Exception? Error)> Entries { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
             Entries.Enqueue((level, formatter(state, exception), exception));
     }
 }

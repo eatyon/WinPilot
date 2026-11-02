@@ -20,6 +20,7 @@
 除本节注明的例外外，以下接口在设置密码后均要求携带有效的 `WinPilot.Session` Cookie；首次未设密码时无需登录。
 
 - `GET /health`、`POST /login` 不要求已有会话；登录成功通过 `Set-Cookie` 建立会话。
+- 有效认证请求将会话与 Cookie 续期至 30 分钟；SSE、WebSocket 建立后的流内活动不续期，过期会话不能恢复。
 - `POST /_manage` 受伪装页及访客 Cookie 策略控制，不是普通登录接口。
 - 未认证的 `/api`、`/plugin-assets` 请求返回空正文 `401`，不重定向；网页导航与静态资源另见文末。
 - 安全模式下，受限操作返回 `403`；由安全模式中间件拒绝时含 `code: "safe_mode_restricted"`。只读配置可能被遮罩或裁剪，不应将其当作完整设置覆盖保存。

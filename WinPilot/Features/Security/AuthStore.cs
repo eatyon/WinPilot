@@ -1,5 +1,5 @@
-using System.Security.Cryptography;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,6 +7,9 @@ using WinPilot.Core;
 
 namespace WinPilot.Features.Security;
 
+/// <summary>
+/// 读取、验证并安全保存管理员密码摘要，不保存明文密码。
+/// </summary>
 public sealed class AuthStore(PortableDataPaths paths)
 {
     private const int Iterations = 600_000;
@@ -24,13 +27,19 @@ public sealed class AuthStore(PortableDataPaths paths)
         this.applyAcl = applyAcl ?? throw new ArgumentNullException(nameof(applyAcl));
     }
 
+    /// <summary>
+    /// 仅当磁盘上的认证记录存在且格式有效时，视为已设置密码。
+    /// </summary>
     public bool IsConfigured => HasValidRecord(paths.AuthenticationFile);
 
     public static bool HasValidRecord(string path)
     {
         try
         {
-            if (!File.Exists(path)) return false;
+            if (!File.Exists(path))
+            {
+                return false;
+            }
             var record = JsonSerializer.Deserialize<AuthRecord>(File.ReadAllText(path), SerializationOptions);
             return IsValidRecord(record);
         }
@@ -44,7 +53,10 @@ public sealed class AuthStore(PortableDataPaths paths)
     {
         lock (gate)
         {
-            if (IsConfigured) throw new InvalidOperationException("管理员密码已设置，不能再次初始化");
+            if (IsConfigured)
+            {
+                throw new InvalidOperationException("管理员密码已设置，不能再次初始化");
+            }
             Save(password);
         }
     }
@@ -53,14 +65,25 @@ public sealed class AuthStore(PortableDataPaths paths)
 
     internal bool IsCurrentVersion(long version) => Volatile.Read(ref authenticationVersion) == version;
 
+    /// <summary>
+    /// 验证密码并返回所读取记录的版本，供创建会话时检测并发密码修改。
+    /// </summary>
     internal bool Verify(string password, out long version)
     {
         version = 0;
-        if (!IsValidPasswordInput(password)) return false;
+        if (!IsValidPasswordInput(password))
+        {
+            return false;
+        }
         AuthRecord record;
-        lock (gate) { record = Read(); version = authenticationVersion; }
+        lock (gate)
+        {
+            record = Read();
+            version = authenticationVersion;
+        }
         var salt = Convert.FromBase64String(record.Salt);
         var expected = Convert.FromBase64String(record.Hash);
+        // 摘要比较使用固定时间算法，避免比较耗时泄露匹配程度。
         var actual = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA512, expected.Length);
         return CryptographicOperations.FixedTimeEquals(actual, expected);
     }
@@ -69,29 +92,49 @@ public sealed class AuthStore(PortableDataPaths paths)
     {
         lock (gate)
         {
-            if (!Verify(currentPassword)) throw new InvalidOperationException("当前密码不正确");
+            if (!Verify(currentPassword))
+            {
+                throw new InvalidOperationException("当前密码不正确");
+            }
             Save(newPassword);
         }
     }
 
     public static void ValidateNewPassword(string password, string confirmation)
     {
-        if (!IsValidPasswordInput(password)) throw new InvalidOperationException("密码至少需要 6 位，且不能以空白字符开头或结尾");
-        if (!string.Equals(password, confirmation, StringComparison.Ordinal)) throw new InvalidOperationException("两次输入的密码不一致");
+        if (!IsValidPasswordInput(password))
+        {
+            throw new InvalidOperationException("密码至少需要 6 位，且不能以空白字符开头或结尾");
+        }
+        if (!string.Equals(password, confirmation, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("两次输入的密码不一致");
+        }
     }
 
-    private static bool IsValidPasswordInput(string? password) => password is { Length: >= 6 } && password == password.Trim() && !string.IsNullOrWhiteSpace(password);
+    private static bool IsValidPasswordInput(string? password) =>
+        password is { Length: >= 6 } && password == password.Trim() && !string.IsNullOrWhiteSpace(password);
 
     private AuthRecord Read()
     {
-        if (!File.Exists(paths.AuthenticationFile)) throw new InvalidOperationException("管理员密码尚未设置");
+        if (!File.Exists(paths.AuthenticationFile))
+        {
+            throw new InvalidOperationException("管理员密码尚未设置");
+        }
         try
         {
             var record = JsonSerializer.Deserialize<AuthRecord>(File.ReadAllText(paths.AuthenticationFile), SerializationOptions) ?? throw new InvalidDataException();
-            if (!IsValidRecord(record)) throw new InvalidDataException();
+            if (!IsValidRecord(record))
+            {
+                throw new InvalidDataException();
+            }
             return record;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or FormatException or InvalidDataException)
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or JsonException
+            or FormatException
+            or InvalidDataException)
         {
             throw new InvalidOperationException("认证配置文件无效", exception);
         }
@@ -107,43 +150,72 @@ public sealed class AuthStore(PortableDataPaths paths)
         var record = new AuthRecord(Convert.ToBase64String(salt), Convert.ToBase64String(hash));
         try
         {
+            // 先写临时文件并限制访问权限，全部成功后才替换原认证记录。
             File.WriteAllText(temporary, JsonSerializer.Serialize(record, SerializationOptions));
-            try { applyAcl(temporary); }
-            catch (OperationCanceledException) { throw; }
+            try
+            {
+                applyAcl(temporary);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception exception)
             {
                 throw new IOException("无法为认证配置文件设置安全访问权限", exception);
             }
             File.Move(temporary, paths.AuthenticationFile, true);
+            // 文件替换成功后才推进版本，让尚未完成的旧密码验证结果失效。
             Interlocked.Increment(ref authenticationVersion);
         }
         finally
         {
-            try { File.Delete(temporary); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 
     private static void ApplyAcl(string path)
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("当前运行环境不支持 Windows ACL");
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("当前运行环境不支持 Windows ACL");
+        }
         using var identity = WindowsIdentity.GetCurrent();
         var currentUser = identity.User ?? throw new InvalidOperationException("无法读取当前 Windows 用户");
         var security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new FileSystemAccessRule(currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            FileSystemRights.FullControl,
+            AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            FileSystemRights.FullControl,
+            AccessControlType.Allow));
         new FileInfo(path).SetAccessControl(security);
     }
 
     private static bool IsValidRecord(AuthRecord? record)
     {
-        if (record is null || string.IsNullOrWhiteSpace(record.Salt) || string.IsNullOrWhiteSpace(record.Hash)) return false;
+        if (record is null || string.IsNullOrWhiteSpace(record.Salt) || string.IsNullOrWhiteSpace(record.Hash))
+        {
+            return false;
+        }
         Span<byte> decoded = stackalloc byte[32];
-        return Convert.TryFromBase64String(record.Salt, decoded, out var saltLength) && saltLength == 32
-            && Convert.TryFromBase64String(record.Hash, decoded, out var hashLength) && hashLength == 32;
+        return Convert.TryFromBase64String(record.Salt, decoded, out var saltLength)
+            && saltLength == 32
+            && Convert.TryFromBase64String(record.Hash, decoded, out var hashLength)
+            && hashLength == 32;
     }
 
     private sealed record AuthRecord(string Salt, string Hash);
