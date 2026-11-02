@@ -817,4 +817,4 @@ Host.Actions 和 Host.Processes 为可空接口，调用前检查是否可用。
 | 上传失败 | command、参数对象、单块大小、上传处理器与分块清理 |
 | 返回前台后页面状态重置 | 会话是否已重建，重要状态是否持久化，业务操作是否重复启动 |
 
-接口定义见 [PluginContracts.cs](../WinPilot.PluginContract/PluginContracts.cs) 和 [PluginCommandContracts.cs](../WinPilot.PluginContract/PluginCommandContracts.cs)，加载行为见 [CSharpPluginRuntime.cs](../WinPilot/Features/Plugins/CSharpPluginRuntime.cs)
+接口定义见 [PluginContracts.cs](../WinPilot.PluginContract/PluginContracts.cs) 和 [PluginCommandContracts.cs](../WinPilot.PluginContract/PluginCommandContracts.cs)，加载行为见 [CSharpPluginRuntime.cs](../WinPilot/Features/Plugins/Runtime/CSharpPluginRuntime.cs)
