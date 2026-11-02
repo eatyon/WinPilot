@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { combinePageSignal, createPluginPageLifetime } from '../../src/features/plugins/page/PluginPageLifetime.ts';
+import { combinePageSignal, createPluginPageLifetime } from '../../src/features/plugins/page/pluginPageLifetime.ts';
 
 test('page cleanup runs once, can unregister, and continues after failure', () => {
   const errors = [];

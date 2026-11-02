@@ -1,0 +1,29 @@
+:root { --page-card-row-gap: clamp(16px, 3vw, 18px); }
+html:has(.app-shell) { overflow: hidden; scrollbar-gutter: auto; }
+.app-frame { height: 100svh; }
+.app-shell { display: grid; height: 100svh; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: 60px minmax(0, 1fr); }
+.app-header { z-index: 20; grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding-inline: 16px; border-bottom: 1px solid var(--border); }
+.app-workspace { min-width: 0; flex: 1; }
+.app-shell .app-workspace { align-self: stretch; height: 100%; min-height: 0; overflow: hidden; padding-bottom: 0; }
+.page-content { width: 100%; padding: clamp(16px, 3vw, 24px); }
+.page-content > .route-page { width: 100%; max-width: 1440px; margin-inline: auto; }
+[data-page-scroller] > .n-scrollbar-container { overscroll-behavior: contain; }
+.app-sidebar-layout { display: none; }
+.appearance-settings-trigger { margin-left: auto; }
+.app-brand-group { display: inline-flex; align-items: center; gap: 10px; }
+.app-brand { transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.mobile-page-title { display: flex; flex: 1; align-items: center; min-width: 0; margin: 0; overflow: hidden; font-size: 16px; font-weight: 500; line-height: 24px; white-space: nowrap; }
+.mobile-page-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-content { display: flex; min-height: 100%; flex-direction: column; }
+@media (min-width: 600px) {
+  .app-shell { --sidebar-width: 240px; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); transition: grid-template-columns .3s ease; }
+  .app-shell.sidebar-collapsed { --sidebar-width: 64px; }
+  .app-shell .app-sidebar-layout { display: block; min-height: 0; }
+  .app-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--accent-text); font-size: 26px; font-weight: 600; letter-spacing: .5px; text-decoration: none; }
+  .app-shell .sidebar { height: 100%; min-height: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell { transition: none; }
+  .app-shell .sidebar { transition: none; }
+}
+.route-page { min-width: 0; }

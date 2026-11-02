@@ -1,3 +1,4 @@
+// 按需渲染外部说明，禁用原始 HTML 和远程图片，并在输出前再次净化 HTML。
 export async function renderMarkdown(source: string) {
   const [{ default: MarkdownIt }, { default: DOMPurify }] = await Promise.all([
     import('markdown-it'),

@@ -1,10 +1,59 @@
+import { readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
+import { modalStateModule } from '../support/modalState.mjs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
+import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
+
+test('port save button stays in the input row above validation feedback', () => {
+  const source = readFileSync(new URL('../../src/features/settings/tabs/GeneralSettings.vue', import.meta.url), 'utf8');
+  assert.match(source, /<NFormItem[^>]*label="Web 服务端口"[\s\S]*?<div class="settings-port-control">[\s\S]*?class="settings-port-save"[\s\S]*?<\/NFormItem>/);
+  const css = readFeatureStyles();
+  assert.match(css, /\.settings-port-control \{[^}]*align-items: center;/);
+});
+
+test('available commands allow the modal default backdrop dismissal', () => {
+  const source = readFileSync(new URL('../../src/features/settings/AvailableCommandsModal.vue', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /:dismiss-on-backdrop="false"/);
+  assert.match(source, /@close="emit\('close'\)"/);
+  assert.match(source, /<NCard[^>]*embedded/);
+  assert.match(source, /<NList[^>]*:theme-overrides="\{ color: 'transparent', colorModal: 'transparent' \}"/);
+});
+
+test('about links make only their value clickable rather than the whole row', () => {
+  const source = readFileSync(new URL('../../src/features/settings/tabs/AboutSettings.vue', import.meta.url), 'utf8');
+  assert.equal((source.match(/<div class="about-link-row">/g) ?? []).length, 5);
+  for (const text of ['GitHub', '提交 Issue', '查看 Releases', 'AGPL-3.0-only', '查看声明']) {
+    assert.ok(source.includes(`>${text}</NButton>`));
+  }
+  assert.equal((source.match(/<NButton text tag="a"[^>]*target="_blank" rel="noopener noreferrer"/g) ?? []).length, 5);
+  assert.doesNotMatch(source, /<a :href="(?:repositoryUrl|issueUrl|releaseUrl|noticesUrl)"/);
+  const styles = readFeatureStyles();
+  assert.match(styles, /\.about-link-row\s*\{[^}]*min-height: 46px;[^}]*justify-content: space-between/);
+  assert.doesNotMatch(styles, /\.about-link-list a/);
+});
+
+test('notification cards use public header slots and library transitions without internal overrides', () => {
+  const source = readFileSync(new URL('../../src/features/settings/tabs/NotificationSettings.vue', import.meta.url), 'utf8');
+  assert.match(source, /<NCard[^>]*:content-style="\{ padding: 0 \}"/);
+  assert.match(source, /:header-style="\{ padding: 0 \}"/);
+  assert.match(source, /<template #header>/);
+  assert.match(source, /<NCollapseTransition :show="Boolean\(expanded\[channel.key\]\)"/);
+  assert.match(source, /@click="toggleChannel\(channel.key\)"/);
+  assert.match(source, /\.notification-channel-trigger\s*\{[^}]*padding: var\(--n-padding-top\) var\(--n-padding-left\) var\(--n-padding-bottom\);/);
+  assert.match(source, /\.notification-channel-content\s*\{[^}]*padding: 0 var\(--n-padding-left\) var\(--n-padding-bottom\);/);
+  const styles = readFeatureStyles();
+  assert.match(styles, /\.notification-inline-field\s*\{[^}]*width: 100%;[^}]*min-width: 0;/);
+  assert.match(source, /<NButton[^>]*class="notification-channel-trigger"/);
+  assert.match(source, /:aria-expanded="Boolean\(expanded\[channel.key\]\)"/);
+  assert.doesNotMatch(source, /notification-chevron|@keydown|class="notification-channel-header"/);
+  assert.doesNotMatch(source, /:deep\(|n-collapse-item|n-button__content|<NCollapseItem/);
+});
 
 function evaluate(path, require, members = '', extra = {}) {
   const code = loadScriptModule(new URL(path, import.meta.url), members);
@@ -14,24 +63,30 @@ function evaluate(path, require, members = '', extra = {}) {
 }
 
 function fixture(page, members, props = {}, extra = {}) {
+  if (page === 'tabs/AboutSettings.vue') members = ['updateNotesOpenModal', members].filter(Boolean).join(',');
   if (page === 'tabs/NotificationSettings.vue') members = ['toggleChannel', members].filter(Boolean).join(',');
   const calls = [], toasts = [], events = [], emitted = [], renders = [], timers = new Map();
   const safeModeEnabled = vue.ref(false);
+  const route = vue.reactive({ query: { ...extra.query } });
   let mounted, unmount, timerId = 0;
   const client = {
     ...apiErrors,
-    apiFetch: (url, init) => url === '/api/settings/notifications/command-bots'
+    apiFetch: (url, init) => url === '/api/settings/notifications/command-bots' && !extra.deferBotReads
       ? Promise.resolve({ ok: true, json: async () => ({ telegram: true, feishu: false, onebot: false, qqbot: false }) })
       : new Promise((resolve, reject) => calls.push({ url, init, resolve, reject })),
     isAbortError: error => error?.name === 'AbortError',
     userErrorMessage: (error, fallback) => error.message || fallback,
     WinPilotConnectionError: class extends Error {},
   };
-  const requests = evaluate('../../src/features/settings/SettingsRequests.ts', () => client);
+  const requests = evaluate('../../src/features/settings/settingsRequests.ts', () => client);
   const imports = name => {
-    if (name === 'vue') return { ...vue, onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
-    if (name === 'vue-router') return { useRoute: () => ({ query: {} }), useRouter: () => ({ push() {} }) };
-    if (name.endsWith('/SettingsRequests')) return requests;
+    if (name.endsWith('/useDelayedLoading')) return delayedLoading;
+    if (name.endsWith('/useModalState')) return modalStateModule;
+    if (name.endsWith('/panelEffects')) return { usePanelEffects: () => ({ pageTransitionEnabled: vue.ref(false) }) };
+    if (name === 'vue') return { ...vue, useId: () => 'settings-test', onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
+    if (name === 'vue-router') return { useRoute: () => route, useRouter: () => ({ push() {} }) };
+    if (name.endsWith('/ui/theme')) return { useTheme: () => ({ resolvedTheme: vue.ref('light'), accentColor: vue.ref('blue') }) };
+    if (name.endsWith('/settingsRequests')) return requests;
     if (name.endsWith('/client')) return client;
     if (name.endsWith('/toast')) return { showToast: (message, type = 'error') => { if (message) toasts.push([message, type]); } };
     if (name.endsWith('/markdown')) return { renderMarkdown: source => new Promise((resolve, reject) => renders.push({ source, resolve, reject })) };
@@ -47,9 +102,151 @@ function fixture(page, members, props = {}, extra = {}) {
     EventSource: class { constructor(url) { events.push(this); this.url = url; this.closed = false; } close() { this.closed = true; } },
     ...extra,
   }); });
-  return { subject, calls, toasts, events, emitted, renders, timers, safeModeEnabled, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted?.(), dispose() { unmount(); scope.stop(); } };
+  return { subject, calls, toasts, events, emitted, renders, timers, route, safeModeEnabled, connectionError: () => new client.WinPilotConnectionError(), mount: () => mounted?.(), dispose() { unmount(); scope.stop(); } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
+
+test('command bot entries load before opening, exclude competing actions and allow retry after failure', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'openBotSettings,loadingBotChannel,botDialogModal,botConfiguration,settingsLoaded,botsLoaded,save,test');
+  try {
+    f.subject.settingsLoaded.value = true;
+    f.subject.botsLoaded.value = true;
+    const loading = f.subject.openBotSettings('telegram');
+    await f.subject.openBotSettings('qqbot');
+    await f.subject.save('telegram');
+    await f.subject.test('telegram');
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.subject.loadingBotChannel.value, 'telegram');
+    assert.equal(f.subject.botDialogModal.show, false);
+    f.calls[0].reject(new Error('读取失败'));
+    await loading;
+    assert.equal(f.subject.loadingBotChannel.value, '');
+    assert.equal(f.toasts.at(-1)[0], '读取失败');
+    const retry = f.subject.openBotSettings('telegram');
+    await f.subject.openBotSettings('telegram');
+    assert.equal(f.calls.length, 2);
+    f.calls[1].resolve(response({ enabled: false, prefix: '/' }));
+    await retry;
+    assert.equal(f.subject.botDialogModal.show, true);
+    assert.equal(f.subject.botConfiguration.value.prefix, '/');
+  } finally { f.dispose(); }
+});
+async function loadSecurity(f, configured = true) {
+  const loading = f.mount();
+  f.calls.find(call => call.url === '/api/settings/security/password').resolve(response({ configured }));
+  f.calls.find(call => call.url === '/api/settings/security/notifications').resolve(response({ channel: '', events: [] }));
+  f.calls.find(call => call.url === '/api/notifications/channels').resolve(response([]));
+  await loading;
+}
+
+test('available commands wait for data, block duplicate requests and saving, and recover after failure', async () => {
+  const f = fixture('CommandBotSettingsModal.vue', 'openCommands,loadingCommands,showCommandsModal,commandGroups,update', {
+    channel: 'telegram', initialConfiguration: { enabled: false }, connectionDirty: false,
+  });
+  try {
+    f.mount();
+    const first = f.subject.openCommands();
+    await f.subject.openCommands();
+    await f.subject.update();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.subject.showCommandsModal.show, false);
+    f.calls[0].reject(new Error('读取失败'));
+    await first;
+    assert.equal(f.subject.loadingCommands.value, false);
+    assert.equal(f.subject.showCommandsModal.show, false);
+    assert.equal(f.toasts.at(-1)[0], '读取失败');
+    const retry = f.subject.openCommands();
+    f.calls[1].resolve(response([{ name: '命令', commands: [{ usage: 'help', description: '说明' }] }]));
+    await retry;
+    assert.equal(f.subject.showCommandsModal.show, true);
+    assert.equal(f.subject.commandGroups.value[0].commands[0].usage, 'help');
+  } finally { f.dispose(); }
+});
+
+test('closing bot settings during command loading aborts without opening a late modal', async () => {
+  const f = fixture('CommandBotSettingsModal.vue', 'openCommands,showCommandsModal', {
+    channel: 'telegram', initialConfiguration: { enabled: false }, connectionDirty: false,
+  });
+  f.mount();
+  const loading = f.subject.openCommands();
+  f.dispose();
+  assert.equal(f.calls[0].init.signal.aborted, true);
+  f.calls[0].resolve(response([]));
+  await loading;
+  assert.equal(f.subject.showCommandsModal.show, false);
+  assert.equal(f.toasts.length, 0);
+});
+
+test('a command response arriving during the parent leave transition cannot open another modal', async () => {
+  const props = vue.reactive({ channel: 'telegram', initialConfiguration: { enabled: false }, connectionDirty: false, show: true });
+  const f = fixture('CommandBotSettingsModal.vue', 'openCommands,showCommandsModal', props);
+  try {
+    f.mount();
+    const loading = f.subject.openCommands();
+    props.show = false;
+    f.calls[0].resolve(response([]));
+    await loading;
+    assert.equal(f.subject.showCommandsModal.show, false);
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('loading update settings excludes checking for updates until completion', async () => {
+  const f = fixture('tabs/AboutSettings.vue', 'openUpdateSettings,checkForUpdates,updateSettingsOpenModal');
+  try {
+    const opening = f.subject.openUpdateSettings();
+    await f.subject.checkForUpdates();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.subject.updateSettingsOpenModal.show, false);
+    f.calls[0].resolve(response({ source: 'GitHub', channel: 'Stable' }));
+    await opening;
+    assert.equal(f.subject.updateSettingsOpenModal.show, true);
+  } finally { f.dispose(); }
+});
+
+test('security password validation uses field feedback without parsing error wording or changing the request', async () => {
+  for (const [password, confirmation, field] of [
+    ['short', 'short', 'newPassword'], [' leading', ' leading', 'newPassword'],
+    ['valid-password', 'different', 'confirmation'], ['valid-password', 'valid-password', 'currentPassword'],
+  ]) {
+    const f = fixture('tabs/SecuritySettings.vue', 'savePassword,currentPassword,newPassword,confirmation,passwordFeedback,passwordFieldError,error');
+    try {
+      await loadSecurity(f);
+      f.subject.currentPassword.value = 'fake-old-password';
+      f.subject.newPassword.value = password;
+      f.subject.confirmation.value = confirmation;
+      const pending = f.subject.savePassword();
+      const call = f.calls.at(-1);
+      assert.deepEqual(JSON.parse(call.init.body), { currentPassword: 'fake-old-password', newPassword: password, confirmation });
+      call.resolve({ ...response({ errors: { password: ['服务端校验信息'] } }, false), status: 400 });
+      await pending;
+      assert.equal(f.subject.passwordFieldError(field), '服务端校验信息');
+      assert.equal(f.subject.error.value, '');
+      f.subject.confirmation.value += 'edited';
+      assert.equal(f.subject.passwordFeedback.value, undefined);
+    } finally { f.dispose(); }
+  }
+});
+
+test('security write failures use toast and late validation cannot overwrite edited values', async () => {
+  const f = fixture('tabs/SecuritySettings.vue', 'savePassword,newPassword,confirmation,passwordFeedback,error');
+  try {
+    await loadSecurity(f);
+    f.subject.newPassword.value = f.subject.confirmation.value = 'fake-password';
+    const pending = f.subject.savePassword();
+    f.calls.at(-1).resolve({ ...response({ detail: '无法保存密码，请检查数据目录权限' }, false), status: 500 });
+    await pending;
+    assert.equal(f.subject.error.value, '');
+    assert.deepEqual(f.toasts, [['无法保存密码，请检查数据目录权限', 'error']]);
+    assert.equal(f.subject.passwordFeedback.value, undefined);
+    const retry = f.subject.savePassword();
+    f.subject.newPassword.value = 'edited-password';
+    f.calls.at(-1).resolve({ ...response({ errors: { password: ['旧校验结果'] } }, false), status: 400 });
+    await retry;
+    assert.equal(f.subject.error.value, '');
+    assert.equal(f.subject.passwordFeedback.value, undefined);
+  } finally { f.dispose(); }
+});
 async function loadNotifications(f) {
   const loading = f.subject.toggleChannel('telegram');
   f.calls[0].resolve(response({ telegramChatId: 'saved' }));
@@ -97,19 +294,23 @@ test('safe notification page keeps channel headings without loading configuratio
   } finally { f.dispose(); }
 });
 
-test('notification configuration loads on first expansion and is reused by other channels', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'expanded');
+test('notification marks the clicked header busy and expands only after loading, then reuses configuration', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'expanded,loading,loadingChannel');
   try {
     await f.mount();
     assert.equal(f.calls.length, 0);
     const opening = f.subject.toggleChannel('telegram');
     assert.equal(f.calls.length, 1);
     assert.equal(f.subject.expanded.telegram, false);
+    assert.equal(f.subject.loadingChannel.value, 'telegram');
+    assert.equal(f.subject.loading.value, true);
     await f.subject.toggleChannel('telegram');
+    assert.equal(f.subject.expanded.telegram, false);
     assert.equal(f.calls.length, 1);
     f.calls[0].resolve(response({ telegramChatId: 'saved' }));
     await opening;
     assert.equal(f.subject.expanded.telegram, true);
+    assert.equal(f.subject.loadingChannel.value, '');
     await f.subject.toggleChannel('telegram');
     assert.equal(f.subject.expanded.telegram, false);
     await f.subject.toggleChannel('webhook');
@@ -120,13 +321,14 @@ test('notification configuration loads on first expansion and is reused by other
   } finally { f.dispose(); }
 });
 
-test('failed notification loading stays collapsed and can be retried on the next click', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'expanded,loading,error');
+test('failed notification loading keeps the card collapsed and clears the busy header for retry', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'expanded,loading,error,loadingChannel');
   try {
     const opening = f.subject.toggleChannel('telegram');
     f.calls[0].resolve(response({ message: '无法读取' }, false));
     await opening;
     assert.equal(f.subject.expanded.telegram, false);
+    assert.equal(f.subject.loadingChannel.value, '');
     assert.equal(f.subject.loading.value, false);
     assert.equal(f.subject.error.value, '无法读取');
     const retry = f.subject.toggleChannel('telegram');
@@ -134,6 +336,29 @@ test('failed notification loading stays collapsed and can be retried on the next
     await retry;
     assert.equal(f.subject.expanded.telegram, true);
     assert.equal(f.subject.error.value, '');
+  } finally { f.dispose(); }
+});
+
+test('notification configuration and bot switches load in parallel without duplicate requests', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'expanded,loading,botsLoaded,settingsLoaded,loadSettings', {}, { deferBotReads: true });
+  try {
+    const opening = f.subject.toggleChannel('telegram');
+    assert.deepEqual(f.calls.map(call => call.url), [
+      '/api/settings/notifications', '/api/settings/notifications/command-bots',
+    ]);
+    assert.equal(f.subject.expanded.telegram, false);
+    await f.subject.toggleChannel('webhook');
+    assert.equal(f.subject.expanded.webhook, false);
+    await f.subject.loadSettings();
+    assert.equal(f.calls.length, 2);
+    f.calls[1].resolve(response({ telegram: true }));
+    await setImmediate();
+    assert.equal(f.subject.loading.value, true);
+    f.calls[0].resolve(response({ telegramChatId: 'saved' }));
+    await opening;
+    assert.equal(f.subject.settingsLoaded.value, true);
+    assert.equal(f.subject.botsLoaded.value, true);
+    assert.equal(f.subject.loading.value, false);
   } finally { f.dispose(); }
 });
 
@@ -148,7 +373,7 @@ test('notification page reads command bot enablement without opening status stre
 });
 
 test('unmounting notifications aborts pending reads and ignores private late responses', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'form');
+  const f = fixture('tabs/NotificationSettings.vue', 'form,expanded,loadingChannel,loadSettings');
   try {
     const loading = f.subject.toggleChannel('telegram');
     f.dispose();
@@ -156,6 +381,10 @@ test('unmounting notifications aborts pending reads and ignores private late res
     f.calls[0].resolve(response({ telegramBotToken: 'late-read' }));
     await loading;
     assert.equal(f.subject.form.telegramBotToken, '');
+    assert.equal(f.subject.expanded.telegram, false);
+    assert.equal(f.subject.loadingChannel.value, '');
+    await f.subject.loadSettings();
+    assert.equal(f.calls.length, 1);
     assert.equal(f.events.length, 0);
     assert.equal(f.toasts.length, 0);
   } finally { f.dispose(); }
@@ -174,6 +403,24 @@ test('unmounting notifications aborts saves without applying late configuration'
     assert.equal(f.subject.form.telegramBotToken, 'draft');
     assert.equal(f.toasts.length, 0);
   } finally { f.dispose(); }
+});
+
+test('cancelling QQBot acquisition clears its status and ignores late failures', async () => {
+  for (const target of ['user', 'group']) {
+    const f = fixture('tabs/NotificationSettings.vue', 'bindQQBot,binding,qqbotOpenIdStatus');
+    try {
+      await loadNotifications(f);
+      const pending = f.subject.bindQQBot(target);
+      await f.subject.bindQQBot(target);
+      assert.equal(f.calls[1].init.signal.aborted, true);
+      assert.equal(f.subject.binding.value, '');
+      assert.equal(f.subject.qqbotOpenIdStatus[target], null);
+      f.calls[1].reject(new Error('late connection failure'));
+      await pending;
+      assert.equal(f.subject.qqbotOpenIdStatus[target], null);
+      assert.equal(f.toasts.length, 0);
+    } finally { f.dispose(); }
+  }
 });
 
 test('unmounting notifications cancels OpenID acquisition and ignores its late failure', async () => {
@@ -195,19 +442,22 @@ test('unmounting notifications cancels OpenID acquisition and ignores its late f
 
 for (const channel of ['telegram', 'feishu', 'onebot', 'qqbot']) {
   test(channel + ' settings owns one status stream and closes it with the modal', async () => {
-    const f = fixture('CommandBotSettingsModal.vue', 'enabled,update,connectionStatus', { channel, initialEnabled: true, connectionDirty: false });
-    const loading = f.mount();
-    f.calls[0].resolve(response({ enabled: true, prefix: '' }));
-    await loading;
+    const f = fixture('CommandBotSettingsModal.vue', 'enabled,update,connectionStatus', { channel, initialConfiguration: { enabled: true, prefix: '' }, connectionDirty: false });
+    f.mount();
+    assert.equal(f.calls.length, 0);
     assert.equal(f.events.length, 1);
     assert.equal(f.events[0].url, '/api/notifications/command-bots/' + channel + '/events');
     f.events[0].onmessage({ data: JSON.stringify({ enabled: true, state: 'connected' }) });
     assert.equal(f.subject.connectionStatus.value.tone, 'connected');
     f.subject.enabled.value = true;
+    const failedSave = f.subject.update();
+    f.calls[0].resolve(response({ detail: '保存失败' }, false));
+    await failedSave;
+    assert.equal(f.emitted.some(([name]) => name === 'close'), false);
     const saving = f.subject.update();
     f.calls[1].resolve(response({ enabled: true, state: 'connecting' }));
     await saving;
-    assert.deepEqual(f.emitted.at(-1), ['enabled-change', true]);
+    assert.deepEqual(f.emitted.slice(-2), [['enabled-change', true], ['close']]);
     f.dispose();
     assert.equal(f.events[0].closed, true);
     const count = f.emitted.length;
@@ -216,33 +466,33 @@ for (const channel of ['telegram', 'feishu', 'onebot', 'qqbot']) {
   });
 }
 
-test('closing command bot settings during loading cannot create a late status stream', async () => {
-  const f = fixture('CommandBotSettingsModal.vue', 'enabled', { channel: 'telegram', initialEnabled: false, connectionDirty: false });
-  const loading = f.mount();
+test('leaving notifications during bot settings loading cannot open a late modal', async () => {
+  const f = fixture('tabs/NotificationSettings.vue', 'openBotSettings,settingsLoaded,botsLoaded,botDialogModal');
+  f.subject.settingsLoaded.value = true;
+  f.subject.botsLoaded.value = true;
+  const loading = f.subject.openBotSettings('telegram');
   f.dispose();
   f.calls[0].resolve(response({ enabled: true, prefix: '' }));
   await loading;
   assert.equal(f.events.length, 0);
-  assert.equal(f.emitted.length, 0);
+  assert.equal(f.subject.botDialogModal.show, false);
 });
 
 test('status subscriptions follow saved enablement, not unsaved checkbox changes', async () => {
-  const f = fixture('CommandBotSettingsModal.vue', 'enabled,update', { channel: 'onebot', initialEnabled: false, connectionDirty: false });
+  const f = fixture('CommandBotSettingsModal.vue', 'enabled,update', { channel: 'onebot', initialConfiguration: { enabled: false, prefix: '' }, connectionDirty: false });
   try {
-    const loading = f.mount();
-    f.calls[0].resolve(response({ enabled: false, prefix: '' }));
-    await loading;
+    f.mount();
     assert.equal(f.events.length, 0);
     f.subject.enabled.value = true;
     assert.equal(f.events.length, 0);
     const enabling = f.subject.update();
-    f.calls[1].resolve(response({ enabled: true, state: 'connecting' }));
+    f.calls[0].resolve(response({ enabled: true, state: 'connecting' }));
     await enabling;
     assert.equal(f.events.length, 1);
     const stream = f.events[0];
     f.subject.enabled.value = false;
     const disabling = f.subject.update();
-    f.calls[2].resolve(response({ enabled: false, state: 'disabled' }));
+    f.calls[1].resolve(response({ enabled: false, state: 'disabled' }));
     await disabling;
     assert.equal(stream.closed, true);
     const count = f.emitted.length;
@@ -284,17 +534,57 @@ test('notification body arriving after unmount cannot create SSE connections', a
 });
 
 test('notification save failure preserves the draft and duplicate saves are blocked', async () => {
-  const f = fixture('tabs/NotificationSettings.vue', 'form,save');
+  const f = fixture('tabs/NotificationSettings.vue', 'form,save,savingChannel');
   try {
     await loadNotifications(f);
     f.subject.form.webhookUrl = 'draft-url';
     const saving = f.subject.save('webhook');
+    assert.equal(f.subject.savingChannel.value, 'webhook');
     await f.subject.save('webhook');
     assert.equal(f.calls.length, 2);
     f.calls[1].resolve(response({ message: 'failed' }, false));
     await saving;
     assert.equal(f.subject.form.webhookUrl, 'draft-url');
+    assert.equal(f.subject.savingChannel.value, '');
     assert.equal(f.toasts.length, 1);
+  } finally { f.dispose(); }
+});
+
+test('notification tests identify only the active channel and clear it after success or failure', async () => {
+  for (const succeeds of [true, false]) {
+    const f = fixture('tabs/NotificationSettings.vue', 'test,testingChannel');
+    try {
+      await loadNotifications(f);
+      const sending = f.subject.test('telegram');
+      assert.equal(f.subject.testingChannel.value, 'telegram');
+      await f.subject.test('webhook');
+      assert.equal(f.calls.length, 2);
+      assert.equal(f.subject.testingChannel.value, 'telegram');
+      if (succeeds) f.calls[1].resolve(response([]));
+      else f.calls[1].reject(new Error('send failed'));
+      await sending;
+      assert.equal(f.subject.testingChannel.value, '');
+    } finally { f.dispose(); }
+  }
+});
+
+test('security event display shares the selection count without changing password event storage', () => {
+  const f = fixture('tabs/SecuritySettings.vue', 'notifications,selectedEvents,eventsLabel,toggleEvent');
+  try {
+    const s = f.subject;
+    assert.equal(s.eventsLabel.value, '请选择事件');
+    s.notifications.events = ['PasswordChanged', 'LoginFailed'];
+    assert.deepEqual(Array.from(s.selectedEvents.value), ['PasswordSet', 'LoginFailed']);
+    assert.equal(s.eventsLabel.value, '2 个事件');
+    s.toggleEvent('PasswordSet', true);
+    assert.equal(s.eventsLabel.value, '2 个事件');
+    assert.deepEqual(Array.from(s.notifications.events), ['PasswordChanged', 'LoginFailed', 'PasswordSet']);
+    s.toggleEvent('PasswordSet', false);
+    assert.deepEqual(Array.from(s.notifications.events), ['LoginFailed']);
+    assert.deepEqual(Array.from(s.selectedEvents.value), ['LoginFailed']);
+    assert.equal(s.eventsLabel.value, '1 个事件');
+    s.toggleEvent('LoginFailed', false);
+    assert.equal(s.eventsLabel.value, '请选择事件');
   } finally { f.dispose(); }
 });
 
@@ -350,12 +640,143 @@ test('general settings serialize saves and suppress late success notifications',
   f.calls[0].resolve(response({ port: 9123, lanAccessEnabled: false, startupMode: 'Disabled' }));
   await setImmediate();
   const saving = f.subject.saveLanAccess(true);
-  await f.subject.savePort();
+  const queued = f.subject.savePort();
   assert.equal(f.calls.length, 2);
   f.dispose();
   f.calls[1].resolve(response({}));
-  await saving;
+  await Promise.all([saving, queued]);
   assert.equal(f.toasts.length, 0);
+});
+
+async function generalSettingsFixture() {
+  const f = fixture('SettingsView.vue', 'savePort,saveLanAccess,saveStartupMode,port,lanAccessEnabled,startupMode,savingKey,errorMessage');
+  await f.mount();
+  f.calls[0].resolve(response({ port: 9123, lanAccessEnabled: false, startupMode: 'Disabled' }));
+  await setImmediate();
+  return f;
+}
+
+test('general saves queue different fields without changing unrelated values or save states', async () => {
+  const f = await generalSettingsFixture();
+  try {
+    f.subject.port.value = '12345';
+    const lan = f.subject.saveLanAccess(true);
+    const port = f.subject.savePort();
+    const startup = f.subject.saveStartupMode('Enabled');
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.subject.savingKey.value, 'lanAccess');
+    f.calls[1].resolve(response({}));
+    await setImmediate();
+    assert.equal(f.subject.savingKey.value, 'port');
+    assert.deepEqual(JSON.parse(f.calls[2].init.body), { port: 12345 });
+    f.calls[2].resolve(response({ port: 12345, lanAccessEnabled: false, startupMode: 'Disabled' }));
+    await setImmediate();
+    assert.equal(f.subject.lanAccessEnabled.value, true);
+    assert.equal(f.subject.startupMode.value, 'Enabled');
+    assert.equal(f.subject.savingKey.value, 'startupMode');
+    f.calls[3].resolve(response({ startupMode: 'Enabled' }));
+    await Promise.all([lan, port, startup]);
+    assert.equal(f.subject.savingKey.value, '');
+  } finally { f.dispose(); }
+});
+
+test('queued saves coalesce to the latest field value and a failure does not block the next field', async () => {
+  const f = await generalSettingsFixture();
+  try {
+    const port = f.subject.savePort();
+    const enabled = f.subject.saveStartupMode('Enabled');
+    const delayed = f.subject.saveStartupMode('Delayed');
+    const lan = f.subject.saveLanAccess(true);
+    f.calls[1].resolve(response({ port: 9123 }));
+    await setImmediate();
+    assert.deepEqual(JSON.parse(f.calls[2].init.body), { startupMode: 'Delayed' });
+    f.calls[2].reject(new Error('startup failed'));
+    await setImmediate();
+    assert.equal(f.subject.startupMode.value, 'Disabled');
+    assert.equal(f.subject.lanAccessEnabled.value, true);
+    assert.equal(f.subject.errorMessage.value, '');
+    assert.deepEqual(f.toasts.at(-1), ['startup failed', 'error']);
+    assert.equal(f.calls[3].url, '/api/settings/general/lan-access');
+    f.calls[3].resolve(response({}));
+    await Promise.all([port, enabled, delayed, lan]);
+    assert.equal(f.calls.length, 4);
+    assert.equal(f.subject.savingKey.value, '');
+  } finally { f.dispose(); }
+});
+
+test('old save replies cannot overwrite newer selections or an unsaved port draft', async () => {
+  const f = await generalSettingsFixture();
+  try {
+    const first = f.subject.saveStartupMode('Enabled');
+    const latest = f.subject.saveStartupMode('Delayed');
+    f.calls[1].resolve(response({ startupMode: 'Enabled' }));
+    await setImmediate();
+    assert.equal(f.subject.startupMode.value, 'Delayed');
+    f.calls[2].reject(new Error('latest failed'));
+    await Promise.all([first, latest]);
+    assert.equal(f.subject.startupMode.value, 'Enabled');
+    f.subject.port.value = '12345';
+    const saving = f.subject.savePort();
+    f.subject.port.value = '23456';
+    f.calls[3].resolve(response({ port: 12345 }));
+    await saving;
+    assert.equal(f.subject.port.value, '23456');
+  } finally { f.dispose(); }
+});
+
+test('safe mode prevents queued general settings writes from starting', async () => {
+  const f = await generalSettingsFixture();
+  try {
+    const active = f.subject.saveLanAccess(true);
+    const queued = f.subject.savePort();
+    f.safeModeEnabled.value = true;
+    f.calls[1].resolve(response({}));
+    await Promise.all([active, queued]);
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.subject.savingKey.value, '');
+  } finally { f.dispose(); }
+});
+
+test('general settings load only when visiting their tab and retain data across tab switches', async () => {
+  for (const tab of ['notification', 'security', 'advanced', 'about']) {
+    const f = fixture('SettingsView.vue', 'settingsLoaded,loadSettings', {}, { query: { tab } });
+    try {
+      f.mount();
+      assert.equal(f.calls.length, 0);
+      f.route.query.tab = 'general';
+      await vue.nextTick();
+      assert.equal(f.calls.length, 1);
+      await f.subject.loadSettings();
+      assert.equal(f.calls.length, 1);
+      f.calls[0].resolve(response({ port: 9123, lanAccessEnabled: false, startupMode: 'Disabled' }));
+      await setImmediate();
+      assert.equal(f.subject.settingsLoaded.value, true);
+      f.route.query.tab = tab;
+      await vue.nextTick();
+      f.route.query.tab = 'general';
+      await vue.nextTick();
+      assert.equal(f.calls.length, 1);
+    } finally { f.dispose(); }
+  }
+});
+
+test('failed general settings read can retry on returning and late results are ignored after leaving', async () => {
+  const f = fixture('SettingsView.vue', 'settingsLoaded,port');
+  try {
+    f.mount();
+    f.calls[0].reject(new Error('读取失败'));
+    await setImmediate();
+    f.route.query.tab = 'about';
+    await vue.nextTick();
+    f.route.query.tab = 'general';
+    await vue.nextTick();
+    assert.equal(f.calls.length, 2);
+    f.dispose();
+    f.calls[1].resolve(response({ port: 9999 }));
+    await setImmediate();
+    assert.equal(f.subject.settingsLoaded.value, false);
+    assert.equal(f.subject.port.value, '9123');
+  } finally { f.dispose(); }
 });
 
 test('general settings become loaded only after a successful read and retain saved values on refresh failure', async () => {
@@ -405,13 +826,16 @@ test('update notes use check result without requests and discard stale rendering
   await second;
   assert.equal(f.subject.updateNotesHtml.value, '<h2>改进</h2>');
   f.subject.closeUpdateNotes();
+  assert.equal(f.subject.updateNotesOpenModal.show, false);
+  assert.equal(f.subject.updateNotesHtml.value, '<h2>改进</h2>');
+  f.subject.updateNotesOpenModal.afterLeave();
   assert.equal(f.subject.updateNotesHtml.value, '');
   assert.equal(f.subject.updateNotes.value, '## 改进');
   const third = f.subject.openUpdateNotes();
   f.dispose();
   f.renders[2].resolve('<h2>晚到结果</h2>');
   await third;
-  assert.equal(f.subject.updateNotesOpen.value, false);
+  assert.equal(f.subject.updateNotesOpenModal.show, false);
   assert.equal(f.subject.updateNotesHtml.value, '');
   assert.equal(f.calls.length, 1);
 });
@@ -428,6 +852,8 @@ test('saving update settings clears notes and empty notes open without rendering
     const saving = f.subject.saveUpdateSettings();
     f.calls[1].resolve(response({ source: 'Cnb', channel: 'Preview' }));
     await saving;
+    assert.equal(f.subject.updateNotesOpenModal.show, false);
+    f.subject.updateNotesOpenModal.afterLeave();
     assert.equal(f.subject.updateNotesOpen.value, false);
     assert.equal(f.subject.updateNotes.value, '');
     assert.equal(f.subject.updateReleaseUrl.value, '');

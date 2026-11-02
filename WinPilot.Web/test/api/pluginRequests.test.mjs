@@ -19,7 +19,7 @@ function trackedRequestFixture() {
   };
   const executor = evaluate('../../src/api/requestExecutor.ts', name =>
     name.endsWith('/client') ? client : { combineRequestSignal });
-  const module = evaluate('../../src/features/plugins/PluginRequests.ts', () => executor, {
+  const module = evaluate('../../src/features/plugins/pluginRequests.ts', () => executor, {
     Map: class extends Map {
       constructor(...args) { super(...args); maps.push(this); }
     },

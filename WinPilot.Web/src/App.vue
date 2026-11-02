@@ -1,218 +1,160 @@
 <script setup lang="ts">
+import AppTooltip from './components/AppTooltip.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { RouterLink, RouterView, useRoute } from 'vue-router';
+import { RouterView, useRoute } from 'vue-router';
+import { NBackTop, NButton, NLayout, NLayoutHeader, NLayoutSider, NScrollbar } from 'naive-ui';
+import { readSidebarCollapsed, saveSidebarCollapsed } from './ui/navigationLayout';
+import AppearanceSettingsDrawer from './components/AppearanceSettingsDrawer.vue';
+import AppPageView from './components/AppPageView.vue';
+import AppTheme from './components/AppTheme.vue';
+import AppNavigation from './components/AppNavigation.vue';
 import AppIcon from './components/AppIcon.vue';
-import { getPageScroller, lockScroll } from './ui/scrollLock';
-import { connectionStatus, markConnectionRestored } from './features/connection/connectionStatus';
+import { getPageScroller } from './ui/scrollLock';
+import { createBackTopVisibility } from './ui/backTopVisibility';
 import {
   safeModeEnabled,
-  safeModeMessage,
   startSafeModeSync,
   stopSafeModeSync,
 } from './features/security/safeMode';
-const route = useRoute(),
-  mobileMenuOpen = ref(false);
+const route = useRoute();
+function handleBackTopClick(event: MouseEvent) {
+  if (!document.documentElement.classList.contains('interaction-animations-disabled')) return;
+  event.stopImmediatePropagation();
+  getPageScroller().scrollTo({ top: 0, behavior: 'instant' });
+}
+const backTopVisibility = createBackTopVisibility();
+const backTopShown = ref(false);
+function updateBackTop(event: Event) {
+  const scroller = event.target as HTMLElement;
+  backTopShown.value = backTopVisibility.update(Math.min(scroller.scrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight)));
+}
+watch(() => route.path, () => {
+  backTopVisibility.reset();
+  backTopShown.value = false;
+});
 const pageTitle = computed(() => String(route.meta.title ?? 'WinPilot'));
-const pageDescription = computed(() => String(route.meta.description ?? '本机控制与自动化'));
-const isPluginsSection = computed(() => route.path === '/plugins' || route.path.startsWith('/plugins/'));
+const desktopMedia = window.matchMedia('(min-width: 600px)');
+const isDesktop = ref(desktopMedia.matches);
+const appearanceSettingsOpen = ref(false);
+const sidebarMedia = window.matchMedia('(max-width: 1023px)');
+let preferredSidebarCollapsed = readSidebarCollapsed();
+const sidebarCollapsed = ref(sidebarMedia.matches || preferredSidebarCollapsed);
+function updateSidebarWidth() {
+  sidebarCollapsed.value = sidebarMedia.matches || preferredSidebarCollapsed;
+}
+function setSidebarCollapsed(collapsed: boolean) {
+  sidebarCollapsed.value = preferredSidebarCollapsed = collapsed;
+  saveSidebarCollapsed(collapsed);
+}
+function updateViewport() { isDesktop.value = desktopMedia.matches; }
 const isPublicPage = computed(() => route.meta.public === true);
-const showPageTitleLock = computed(
-  () => safeModeEnabled.value && ['/terminal', '/files', '/settings'].includes(route.path),
-);
-const toasts = ref<{ id: number; message: string; type: 'success' | 'error' }[]>([]);
-let releaseMobileMenuScroll: (() => void) | undefined;
-watch(mobileMenuOpen, (open) => {
-  releaseMobileMenuScroll?.();
-  releaseMobileMenuScroll = open ? lockScroll(getPageScroller()) : undefined;
-}, { flush: 'sync' });
-let toastSequence = 0;
-function showToast(event: Event) {
-  const detail = (event as CustomEvent<{ message: string; type?: 'success' | 'error' }>).detail;
-  if (!detail?.message) return;
-  const item = { id: ++toastSequence, message: detail.message, type: detail.type ?? ('error' as const) };
-  toasts.value.push(item);
-  window.setTimeout(() => {
-    toasts.value = toasts.value.filter((toast) => toast.id !== item.id);
-  }, 4200);
-}
-function handleSessionExpired() {
-  markConnectionRestored();
-  window.location.assign('/login');
-}
 watch(
-  isPublicPage,
+  () => route.matched.length ? isPublicPage.value : undefined,
   (publicPage) => {
+    if (publicPage === undefined) return;
     if (publicPage) stopSafeModeSync();
     else startSafeModeSync();
   },
   { immediate: true },
 );
 onMounted(() => {
-  window.addEventListener('winpilot:toast', showToast);
-  window.addEventListener('winpilot:session-expired', handleSessionExpired);
+  desktopMedia.addEventListener('change', updateViewport);
+  sidebarMedia.addEventListener('change', updateSidebarWidth);
 });
 onUnmounted(() => {
-  releaseMobileMenuScroll?.();
-  window.removeEventListener('winpilot:toast', showToast);
-  window.removeEventListener('winpilot:session-expired', handleSessionExpired);
+  desktopMedia.removeEventListener('change', updateViewport);
+  sidebarMedia.removeEventListener('change', updateSidebarWidth);
   stopSafeModeSync();
 });
 </script>
 <template>
-  <div
-    v-if="isPublicPage && connectionStatus === 'disconnected'"
-    class="connection-notice connection-notice-public"
-    role="alert"
-  >
-    与 WinPilot 的连接已中断
-  </div>
-  <RouterView v-if="isPublicPage" />
-  <div v-else class="app-shell">
-    <aside class="sidebar" aria-label="主导航">
-      <RouterLink class="product-mark" to="/settings?tab=about">
-        <span class="product-symbol">W</span>
-        <span>WinPilot</span>
-        <span v-if="safeModeEnabled" class="safe-mode-brand-lock" title="安全模式已开启，可通过本机托盘关闭">
-          <AppIcon name="lock" />
-        </span>
-      </RouterLink>
-      <nav class="sidebar-nav">
-        <p class="nav-section-label">工作区</p>
-        <RouterLink exact-active-class="active" to="/home">
-          <AppIcon name="home" />
-          <span>首页</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/desktop">
-          <AppIcon name="desktop" />
-          <span>桌面</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/programs">
-          <AppIcon name="apps" />
-          <span>程序</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/tasks">
-          <AppIcon name="schedule" />
-          <span>任务</span>
-        </RouterLink>
-        <RouterLink :class="{ active: isPluginsSection }" to="/plugins">
-          <AppIcon name="plugins" />
-          <span>插件</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/terminal">
-          <AppIcon name="terminal" />
-          <span>终端</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/files">
-          <AppIcon name="files" />
-          <span>文件</span>
-        </RouterLink>
-        <RouterLink exact-active-class="active" to="/logs">
-          <AppIcon name="logs" />
-          <span>日志</span>
-        </RouterLink>
-      </nav>
-      <div class="sidebar-footer">
-        <RouterLink exact-active-class="active" to="/settings">
-          <AppIcon name="settings" />
-          <span>设置</span>
-        </RouterLink>
-      </div>
-    </aside>
-    <div class="workspace">
-      <header class="workspace-header">
-        <div>
-          <p class="page-context">WinPilot</p>
-          <h1 class="workspace-title">
-            {{ pageTitle }}
-            <span v-if="showPageTitleLock" class="safe-mode-title-lock" :title="safeModeMessage">
+  <AppTheme>
+    <RouterView v-if="isPublicPage" />
+    <NLayout v-else-if="route.matched.length" class="app-frame" :content-class="`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`">
+      <NLayoutHeader class="app-header" role="banner">
+        <AppTooltip v-if="isDesktop" :text="sidebarCollapsed ? '展开导航栏' : '收起导航栏'">
+          <NButton
+            quaternary
+            class="app-icon-button"
+            :aria-label="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
+            :aria-expanded="!sidebarCollapsed"
+            aria-controls="desktop-navigation"
+            @click="setSidebarCollapsed(!sidebarCollapsed)"
+          >
+            <template #icon><AppIcon :name="sidebarCollapsed ? 'menu-expand' : 'menu-collapse'" /></template>
+          </NButton>
+        </AppTooltip>
+        <AppNavigation v-else mobile :collapsed="false" />
+        <h1 v-if="!isDesktop" class="mobile-page-title">
+          <span class="mobile-page-title-text">{{ pageTitle }}</span>
+          <AppTooltip v-if="safeModeEnabled" text="安全模式已开启，部分功能不可用">
+            <span class="safe-mode-indicator" role="img" aria-label="安全模式已开启">
               <AppIcon name="lock" />
             </span>
-          </h1>
-          <p class="page-description">{{ pageDescription }}</p>
+          </AppTooltip>
+        </h1>
+        <div v-if="isDesktop" class="app-brand-group">
+          <span class="app-brand">
+            <span class="product-symbol" aria-hidden="true"></span>
+            WinPilot
+          </span>
+          <AppTooltip v-if="safeModeEnabled" text="安全模式已开启，部分功能不可用">
+            <span class="safe-mode-indicator" role="img" aria-label="安全模式已开启">
+              <AppIcon name="lock" />
+            </span>
+          </AppTooltip>
         </div>
-      </header>
-      <main class="page-content">
-        <div v-if="connectionStatus === 'disconnected'" class="connection-notice" role="alert">
-          与 WinPilot 的连接已中断
-        </div>
-        <RouterView />
-      </main>
-    </div>
-    <nav class="mobile-nav" aria-label="移动导航">
-      <RouterLink exact-active-class="active" to="/home">
-        <AppIcon name="home" />
-        <span>首页</span>
-      </RouterLink>
-      <RouterLink exact-active-class="active" to="/desktop">
-        <AppIcon name="desktop" />
-        <span>桌面</span>
-      </RouterLink>
-      <button type="button" :class="{ active: mobileMenuOpen }" @click="mobileMenuOpen = true">
-        <AppIcon name="more" />
-        <span>更多</span>
-      </button>
-    </nav>
-    <div v-if="mobileMenuOpen" class="mobile-menu-backdrop" @click.self="mobileMenuOpen = false">
-      <section class="mobile-menu">
-        <div class="mobile-menu-header">
-          <strong>更多功能</strong>
-          <button class="modal-close" type="button" aria-label="关闭" @click="mobileMenuOpen = false">
-            <AppIcon name="close" />
-          </button>
-        </div>
-        <RouterLink to="/programs" @click="mobileMenuOpen = false">
-          <AppIcon name="apps" />
-          <span>程序</span>
-        </RouterLink>
-        <RouterLink to="/tasks" @click="mobileMenuOpen = false">
-          <AppIcon name="schedule" />
-          <span>任务</span>
-        </RouterLink>
-        <RouterLink to="/plugins" @click="mobileMenuOpen = false">
-          <AppIcon name="plugins" />
-          <span>插件</span>
-        </RouterLink>
-        <RouterLink to="/terminal" @click="mobileMenuOpen = false">
-          <AppIcon name="terminal" />
-          <span>终端</span>
-        </RouterLink>
-        <RouterLink to="/files" @click="mobileMenuOpen = false">
-          <AppIcon name="files" />
-          <span>文件</span>
-        </RouterLink>
-        <RouterLink to="/logs" @click="mobileMenuOpen = false">
-          <AppIcon name="logs" />
-          <span>日志</span>
-        </RouterLink>
-        <div class="mobile-menu-divider"></div>
-        <RouterLink to="/settings" @click="mobileMenuOpen = false">
-          <AppIcon name="settings" />
-          <span>设置</span>
-        </RouterLink>
-      </section>
-    </div>
-  </div>
-  <div class="toast-stack" aria-live="polite">
-    <div v-for="toast in toasts" :key="toast.id" class="toast" :class="`toast-${toast.type}`">
-      {{ toast.message }}
-    </div>
-  </div>
+        <AppTooltip text="外观设置">
+          <NButton quaternary class="app-icon-button appearance-settings-trigger" aria-label="外观设置" @click="appearanceSettingsOpen = true">
+            <template #icon><AppIcon name="palette" /></template>
+          </NButton>
+        </AppTooltip>
+      </NLayoutHeader>
+      <AppearanceSettingsDrawer v-model:show="appearanceSettingsOpen" />
+      <NLayout has-sider class="app-sidebar-layout">
+        <NLayoutSider
+          id="desktop-navigation"
+          :collapsed="sidebarCollapsed"
+          class="sidebar"
+          role="complementary"
+          aria-label="主导航"
+          collapse-mode="width"
+          :width="240"
+          :collapsed-width="64"
+          :native-scrollbar="false"
+          content-class="sidebar-content"
+          bordered
+        >
+          <AppNavigation :collapsed="sidebarCollapsed" />
+        </NLayoutSider>
+      </NLayout>
+      <NScrollbar class="app-workspace" data-page-scroller @scroll="updateBackTop">
+        <AppTooltip text="回到顶部">
+          <NBackTop
+            :listen-to="getPageScroller"
+            :right="isDesktop ? 100 : 50"
+            :bottom="isDesktop ? 40 : 20"
+            :show="backTopShown"
+            role="button"
+            tabindex="0"
+            aria-label="回到顶部"
+            @click.capture="handleBackTopClick"
+            @keydown.enter.prevent="($event.currentTarget as HTMLElement).click()"
+            @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+          />
+        </AppTooltip>
+        <main class="page-content" :aria-label="`${pageTitle}内容`">
+          <AppPageView />
+        </main>
+      </NScrollbar>
+    </NLayout>
+  </AppTheme>
 </template>
 
-<style scoped>
-.mobile-menu-header {
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-.mobile-menu-header .modal-close {
-  padding: 0;
-  color: var(--text-muted);
-}
-.mobile-menu-header .modal-close:hover {
-  color: var(--text);
-}
-.mobile-menu-header .modal-close .app-icon {
-  width: 18px;
-  height: 18px;
-}
+<style>
+.product-symbol { width: 28px; height: 28px; flex: 0 0 28px; }
+.safe-mode-indicator { display: inline-flex; flex: none; align-items: center; margin-inline-start: 6px; color: var(--text-muted); vertical-align: middle; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.safe-mode-indicator .app-icon { width: 15px; height: 15px; }
+
+.n-back-top:focus-visible { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
 </style>

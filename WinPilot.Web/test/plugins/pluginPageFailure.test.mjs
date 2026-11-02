@@ -5,8 +5,8 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { ref, shallowRef, computed } from 'vue';
-import { createPluginPageLifetime } from '../../src/features/plugins/page/PluginPageLifetime.ts';
-import { createPluginModalStack } from '../../src/features/plugins/page/PluginPageModalStack.ts';
+import { createPluginPageLifetime } from '../../src/features/plugins/page/pluginPageLifetime.ts';
+import { loadScriptModule } from '../support/scriptModule.mjs';
 
 function setup(file, bindings, exposed) {
   const source = readFileSync(new URL(`../../src/features/plugins/${file === 'PluginPageView.vue' ? '' : 'page/'}${file}`, import.meta.url), 'utf8');
@@ -24,7 +24,7 @@ function setup(file, bindings, exposed) {
     ref, shallowRef, computed,
     onMounted: callback => mounted.push(callback),
     onBeforeUnmount: callback => unmounted.push(callback),
-    watch() {},
+    watch() {}, nextTick: async () => {}, onErrorCaptured() {},
     ...bindings,
   };
   runInNewContext(code + `\nglobalThis.subject = { ${exposed.join(', ')} };`, context);
@@ -46,12 +46,17 @@ test('page readiness rejects stale sessions and failure resets readiness and rel
       setTimeout: () => ++nextTimer,
       clearTimeout() {},
     },
-    apiFetch: async () => ({ ok: true, json: async () => ({
-      id: 'session', pluginName: 'test', webVersion: 'v1', feature: { mode: 'page', entry: 'index.js' },
-    }) }),
+    apiFetch: async (url, options) => {
+      if (url.endsWith('/heartbeat')) {
+        heartbeatSignal = options.signal;
+        return { ok: true, status: 200 };
+      }
+      return { ok: true, json: async () => ({
+        id: 'session', pluginName: 'test', webVersion: 'v1', feature: { mode: 'page', entry: 'index.js' },
+      }) };
+    },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      if (url.endsWith('/heartbeat')) heartbeatSignal = options.signal;
       return { ok: true, status: 200 };
     },
     userErrorMessage: (error, fallback) => error.message || fallback,
@@ -143,12 +148,13 @@ test('foreground checks keep valid sessions and rebuild only on confirmed expiry
       useRoute: () => ({ params: { pluginId: 'test', featureId: 'page' } }),
       useRouter: () => ({}), AbortController, document,
       window: { clearInterval() {}, setInterval() {}, setTimeout() {}, clearTimeout() {} },
-      fetch: async () => {
-        checks++;
-        if (status === 'network-error') throw new Error('offline');
-        return { status };
-      },
-      apiFetch: async () => {
+      fetch: async () => ({ ok: true }),
+      apiFetch: async (url) => {
+        if (url.endsWith('/heartbeat')) {
+          checks++;
+          if (status === 'network-error') throw new Error('offline');
+          return { status };
+        }
         opened++;
         return { ok: true, json: async () => ({ id: 'new', feature: { mode: 'page', entry: 'index.js' } }) };
       },
@@ -196,11 +202,12 @@ test('foreground listener is removed and late heartbeats cannot reopen an unmoun
     },
     sessionStorage: { getItem: () => null },
     window: { clearInterval() {}, setInterval() {}, setTimeout() {}, clearTimeout() {} },
-    apiFetch: async () => {
+    apiFetch: async (url) => {
+      if (url.endsWith('/heartbeat')) return new Promise(resolve => finishHeartbeat = resolve);
       opened++;
       return { ok: true, json: async () => ({ id: 'session', feature: { mode: 'page', entry: 'index.js' } }) };
     },
-    fetch: (url, options) => options.method === 'DELETE' ? Promise.resolve({ ok: true }) : new Promise(resolve => finishHeartbeat = resolve),
+    fetch: async () => ({ ok: true }),
     userErrorMessage: error => error.message, isAbortError: () => false,
   }, ['checkSession']);
   mounted[0]();
@@ -214,12 +221,41 @@ test('foreground listener is removed and late heartbeats cannot reopen an unmoun
   assert.equal(opened, 1);
 });
 
+test('an unauthorized plugin heartbeat uses the shared login redirect without rebuilding the plugin session', async () => {
+  const requests = [], navigations = [];
+  const location = new URL('http://127.0.0.1:5186/plugins/test/features/page');
+  location.assign = path => navigations.push(path);
+  const client = {
+    exports: {}, URL, DOMException,
+    window: { location },
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return new Response(null, { status: 401 });
+    },
+  };
+  runInNewContext(loadScriptModule(new URL('../../src/api/client.ts', import.meta.url)), client);
+  const { subject } = setup('PluginPageView.vue', {
+    useRoute: () => ({ params: { pluginId: 'test', featureId: 'page' } }),
+    useRouter: () => ({}), AbortController,
+    window: { setTimeout() {}, clearTimeout() {} },
+    apiFetch: client.exports.apiFetch,
+  }, ['checkSession', 'pageSessionId']);
+  subject.pageSessionId.value = 'session';
+  subject.checkSession('session');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/plugin-page-sessions/session/heartbeat');
+  assert.equal(requests[0].options.method, 'POST');
+  assert.deepEqual(navigations, ['/login']);
+  assert.equal(subject.pageSessionId.value, 'session');
+});
+
 test('host initialization failure remains visible when connection text is suppressed', () => {
   const events = [];
   const { subject } = setup('PluginPageHost.vue', {
     defineProps: () => ({ sessionId: 'session' }),
     defineEmits: () => (...args) => events.push(args),
-    createPluginPageLifetime, createPluginModalStack,
+    createPluginPageLifetime,
     userErrorMessage: () => '',
     isAbortError: () => false,
     console,
@@ -234,7 +270,7 @@ test('host failure disposes page resources and reports the captured session once
   const { subject } = setup('PluginPageHost.vue', {
     defineProps: () => ({ sessionId: 'session' }),
     defineEmits: () => (...args) => events.push(args),
-    createPluginPageLifetime, createPluginModalStack,
+    createPluginPageLifetime,
     userErrorMessage: (error, fallback) => error.message || fallback,
     isAbortError: error => error.name === 'AbortError',
     console,
@@ -256,7 +292,8 @@ test('renderer reports initialization cancellation unless the parent actually cl
     const { subject, mounted } = setup('PluginPageRenderer.vue', {
       defineProps: () => ({ signal: parent.signal, view: {} }),
       defineEmits: () => (...args) => events.push(args),
-      mountPluginView: () => ({
+      preparePluginView: () => ({
+        signal: parent.signal,
         ready: Promise.reject(new DOMException('初始化已取消', 'AbortError')),
         dispose() {},
       }),
@@ -270,21 +307,52 @@ test('renderer reports initialization cancellation unless the parent actually cl
   }
 });
 
-test('host owns modal cleanup and closes all dialogs when page initialization fails', async () => {
+test('host shares UI without defining modal behavior or compatibility interfaces', () => {
+  const host = readFileSync(new URL('../../src/features/plugins/page/PluginPageHost.vue', import.meta.url), 'utf8');
+  const types = readFileSync(new URL('../../src/features/plugins/page/pluginPageTypes.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(host, /PluginPageModal|modalStack|handleDocumentKeydown|openModal:|confirm:|notify:/);
+  assert.doesNotMatch(types, /PluginModal|PluginConfirmation|openModal:|confirm:|notify:/);
+  assert.match(host, /\.\.\.scope/);
+  assert.match(types, /loadUI: PluginUILoader/);
+});
+
+test('renderer captures component errors, disposes resources and removes the component', async () => {
+  const parent = new AbortController();
+  const runtime = new AbortController();
   const events = [];
-  const { subject } = setup('PluginPageHost.vue', {
-    defineProps: () => ({ sessionId: 'session' }),
+  let capture;
+  const component = { render() {} };
+  const { subject, mounted } = setup('PluginPageRenderer.vue', {
+    defineProps: () => ({ signal: parent.signal, view: {} }),
     defineEmits: () => (...args) => events.push(args),
-    createPluginPageLifetime, createPluginModalStack,
-    userErrorMessage: error => error.message,
-    isAbortError: error => error.name === 'AbortError',
+    onErrorCaptured: callback => { capture = callback; },
+    preparePluginView: () => ({ signal: runtime.signal, ready: Promise.resolve(component), dispose: () => runtime.abort() }),
     console,
-  }, ['handleFailure', 'modalStack']);
-  const parent = subject.modalStack.openModal({ title: 'parent', mount() {} });
-  const child = subject.modalStack.openModal({ title: 'child', mount() {} });
-  subject.handleFailure(new Error('初始化失败'));
-  await Promise.all([parent.closed, child.closed]);
-  assert.equal(subject.modalStack.entries.length, 0);
-  assert.ok(parent.signal.aborted && child.signal.aborted);
-  assert.deepEqual(events, [['failed', 'session', '初始化失败']]);
+  }, ['container', 'component']);
+  subject.container.value = {};
+  await mounted[0]();
+  assert.equal(subject.component.value, component);
+  assert.equal(events[0][0], 'ready');
+  const error = new Error('组件渲染失败');
+  assert.equal(capture(error), false);
+  assert.equal(runtime.signal.aborted, true);
+  assert.equal(subject.component.value, undefined);
+  assert.deepEqual(events[1], ['failed', error]);
+});
+
+test('renderer never mounts a prepared component after cancellation', async () => {
+  const runtime = new AbortController();
+  const events = [];
+  const { subject, mounted } = setup('PluginPageRenderer.vue', {
+    defineProps: () => ({ signal: runtime.signal, view: {} }),
+    defineEmits: () => (...args) => events.push(args),
+    preparePluginView: () => ({ signal: runtime.signal, ready: Promise.resolve({}), dispose() {} }),
+    console,
+  }, ['container', 'component']);
+  subject.container.value = {};
+  const mounting = mounted[0]();
+  runtime.abort();
+  await mounting;
+  assert.equal(subject.component.value, undefined);
+  assert.equal(events.length, 0);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPluginPageScroll } from '../../src/features/plugins/page/PluginPageScroll.ts';
+import { createPluginPageScroll } from '../../src/features/plugins/page/pluginPageScroll.ts';
 
 test('scroll helpers restore positions and account for the scroller border and offset', () => {
   const element = { isConnected: true, getBoundingClientRect: () => ({ top: 180 }) };

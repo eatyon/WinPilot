@@ -1,9 +1,48 @@
+import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import * as vue from 'vue';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import { readApiError, userErrorMessage } from '../support/apiErrors.mjs';
+
+test('login uses a desktop card and centered mobile form with program control styling', () => {
+  const source = readFileSync(new URL('../../src/features/auth/LoginView.vue', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
+  assert.match(source, /<h1 id="login-title">管理员登录<\/h1>/);
+  assert.match(source, /autocomplete: 'current-password'/);
+  assert.match(source, /<AppPasswordInput/);
+  assert.doesNotMatch(source, /本机控制台|login-security-note|尽在掌握/);
+  const panel = css.match(/\.login-panel\s*\{([^}]+)\}/)?.[1];
+  assert.match(panel, /width: min\(100%, 360px\)/);
+  assert.doesNotMatch(panel, /box-shadow|background:|border:/);
+  assert.match(source, /<NCard[\s\S]*?class="login-panel"[\s\S]*?content-class="login-panel-content"/);
+  assert.match(css, /@media \(min-width: 641px\)\s*\{\s*\.login-panel\s*\{\s*width: min\(100%, 418px\);/);
+  assert.match(css, /\.login-panel-content\s*\{\s*display: grid; gap: 30px;/);
+  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.login-view\s*\{\s*position: relative;\s*padding: 108px 28px;/);
+  assert.match(css, /\.login-brand\s*\{\s*position: absolute; top: 32px;/);
+  assert.match(css, /\.login-view \.login-panel\.n-card\s*\{\s*position: static;[^}]*border: 0;/);
+  assert.match(css, /\.login-view \.login-panel > \.login-panel-content:first-child\s*\{ padding: 0; \}/);
+  assert.doesNotMatch(css, /\.login-view\s*\{[^}]*align-items: start/);
+  assert.match(css, /\.login-form \.login-submit\s*\{\s*width: 100%;\s*\}/);
+  assert.equal((css.match(/\.login-form \.login-submit\s*\{/g) ?? []).length, 1);
+  assert.match(css, /\.login-footer\s*\{[^}]*border-top: 1px solid var\(--border\);[^}]*text-align: center;/);
+  assert.match(css, /\.login-footer\s*\{\s*position: absolute;[^}]*bottom: max\(24px, env\(safe-area-inset-bottom\)\);/);
+});
+
+test('login uses the library scrollbar without reserving a native scrollbar gutter', () => {
+  const source = readFileSync(new URL('../../src/features/auth/LoginView.vue', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
+  const base = readStylesheet(new URL('../../src/styles/base.css', import.meta.url));
+  assert.match(base, /html\s*\{[^}]*scrollbar-gutter: stable;/);
+  assert.match(source, /<NScrollbar class="login-scrollbar">\s*<main class="login-view">/);
+  assert.match(css, /html:has\(\.login-view\)\s*\{\s*overflow: hidden; scrollbar-gutter: auto;/);
+  assert.match(css, /body:has\(\.login-view\)\s*\{\s*overflow: hidden; scrollbar-gutter: auto;/);
+  assert.match(css, /\.login-scrollbar\s*\{\s*height: 100dvh;/);
+  assert.match(css, /\.login-view\s*\{[^}]*min-height: 100dvh;/);
+  assert.match(base, /body\s*\{[^}]*background: var\(--canvas\);/);
+});
 
 const code = loadScriptModule(new URL('../../src/features/auth/LoginView.vue', import.meta.url),
   'password, error, isSubmitting, submit, lockSeconds, loginError');
@@ -19,8 +58,9 @@ function fixture() {
     Date: class extends Date { static now() { return now; } },
     setInterval: callback => { timers.set(callback, callback); return callback; },
     clearInterval: timer => timers.delete(timer),
-    require: name => name === 'vue' ? { ...vue, onBeforeUnmount: callback => { unmount = callback; } }
+    require: name => name === 'vue' ? { ...vue, useId: () => 'login-test', onBeforeUnmount: callback => { unmount = callback; } }
       : name === 'vue-router' ? { useRouter: () => ({ replace: path => navigations.push(path) }) }
+      : name.endsWith('/ui/theme') ? { useTheme: () => ({ themeMode: vue.ref('system'), setTheme() {} }) }
       : name.endsWith('/client') ? {
         readApiError, userErrorMessage,
         apiFetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),

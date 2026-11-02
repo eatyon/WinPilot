@@ -6,7 +6,7 @@ export type Trigger = {
   keys: string[];
   pluginId?: string;
   triggerId?: string;
-  parameters?: Record<string, any>;
+  parameters?: Record<string, unknown>;
 };
 export type RegisteredTrigger = {
   pluginId: string;
@@ -70,7 +70,7 @@ export type Action = {
   state: '' | 'Toggle' | 'Enable' | 'Disable';
   pluginId?: string;
   actionId?: string;
-  parameters?: Record<string, any>;
+  parameters?: Record<string, unknown>;
   continueOnFailure: boolean;
 };
 export type Task = {
@@ -95,7 +95,6 @@ export const actionOptions = [
   ['Extension', '插件扩展'],
 ] as const;
 export const taskStateOptions = [
-  { value: '', label: '请选择状态' },
   { value: 'Toggle', label: '切换' },
   { value: 'Enable', label: '启用' },
   { value: 'Disable', label: '禁用' },
@@ -134,7 +133,7 @@ export const createAction = (): Action => ({
   parameters: {},
   continueOnFailure: false,
 });
-export function parameterDefaults(parameters: ParameterDefinition[] = []) {
+export function parameterDefaults(parameters: ParameterDefinition[] = []): Record<string, unknown> {
   return Object.fromEntries(parameters.map(parameter => [
     parameter.key,
     parameter.defaultValue == null

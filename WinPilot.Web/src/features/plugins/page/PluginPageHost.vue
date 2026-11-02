@@ -1,37 +1,18 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, shallowRef } from 'vue';
-import { apiFetch, isAbortError, userErrorMessage } from '../../../api/client';
+import { apiFetch, userErrorMessage } from '../../../api/client';
 import { getPageScroller } from '../../../ui/scrollLock';
-import { showToast } from '../../../ui/toast';
-import PluginPageModal from './PluginPageModal.vue';
 import PluginPageRenderer from './PluginPageRenderer.vue';
-import type { PluginPageHost, PluginPageModule, PluginView } from './PluginPageTypes';
-import { validatePluginView } from './PluginPageMount';
-import { createPluginModalStack, type PluginModalEntry } from './PluginPageModalStack';
-import { combinePageSignal, createPluginPageLifetime } from './PluginPageLifetime';
-import { createPluginPageScroll } from './PluginPageScroll';
-import { PluginPageSessionExpiredError, readPluginResponse } from './PluginPageResponse';
+import type { PluginPageHost, PluginPageModule, PluginView } from './pluginPageTypes';
+import { validatePluginView } from './pluginPageRuntime';
+import { combinePageSignal, createPluginPageLifetime } from './pluginPageLifetime';
+import { createPluginPageScroll } from './pluginPageScroll';
+import { PluginPageSessionExpiredError, readPluginResponse } from './pluginPageResponse';
 
 const props = defineProps<{ pluginId: string; entry: string; version: string; sessionId: string }>();
 const emit = defineEmits<{ sessionExpired: []; failed: [sessionId: string, message: string]; ready: [sessionId: string] }>();
 const view = shallowRef<PluginView>();
-const modals = shallowRef<PluginModalEntry[]>([]);
 const lifetime = createPluginPageLifetime(cause => console.error('插件页面清理失败', cause));
-const reportError = (cause: unknown) => {
-  if (!lifetime.signal.aborted && !isAbortError(cause)) showToast(userErrorMessage(cause, '插件操作失败'), 'error');
-};
-const modalStack = createPluginModalStack(
-  () => { modals.value = [...modalStack.entries]; },
-  reportError,
-);
-lifetime.onDispose(modalStack.dispose);
-
-function handleDocumentKeydown(event: KeyboardEvent) {
-  const top = modalStack.entries.at(-1);
-  if (event.key !== 'Escape' || !top || event.defaultPrevented) return;
-  event.preventDefault();
-  modalStack.dismiss(top);
-}
 
 function handleFailure(cause: unknown) {
   if (lifetime.signal.aborted) return;
@@ -41,7 +22,6 @@ function handleFailure(cause: unknown) {
 }
 
 onMounted(async () => {
-  document.addEventListener('keydown', handleDocumentKeydown, { signal: lifetime.signal });
   const entry = props.entry.split('/').map(encodeURIComponent).join('/');
   const base = `/plugin-assets/${encodeURIComponent(props.pluginId)}/v/${encodeURIComponent(props.version)}/`;
   try {
@@ -51,7 +31,7 @@ onMounted(async () => {
     const definition = module.default;
     view.value = {
       styles: definition.styles,
-      mount(root, scope) {
+      create(scope, root) {
         const requestPlugin = async (path: string, options: RequestInit, signal?: AbortSignal) => {
           const request = combinePageSignal(scope.signal, signal);
           try {
@@ -62,6 +42,7 @@ onMounted(async () => {
             });
             return await readPluginResponse(response);
           } catch (cause) {
+            // 会话失效需销毁当前页面资源，由外层重新创建会话和页面。
             if (cause instanceof PluginPageSessionExpiredError && !lifetime.signal.aborted) {
               lifetime.dispose();
               emit('sessionExpired');
@@ -73,12 +54,7 @@ onMounted(async () => {
           ...scope,
           sessionId: props.sessionId,
           assetUrl: path => base + path.split('/').map(encodeURIComponent).join('/'),
-          confirm: modalStack.confirm,
-          openModal: options => modalStack.openModal({ ...options, styles: options.styles ?? definition.styles }),
           scroll: createPluginPageScroll(root, scope.signal, getPageScroller),
-          notify: (message, type = 'success') => {
-            if (!scope.signal.aborted) showToast(message, type);
-          },
           send: (command, parameters = {}, signal) => requestPlugin('messages', {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ command, parameters }),
@@ -91,7 +67,7 @@ onMounted(async () => {
             }, signal);
           },
         };
-        return definition.mount(root, host);
+        return definition.create(host, root);
       },
     };
   } catch (cause) {
@@ -103,15 +79,4 @@ onBeforeUnmount(lifetime.dispose);
 
 <template>
   <PluginPageRenderer v-if="view" :view="view" :signal="lifetime.signal" @ready="emit('ready', props.sessionId)" @failed="handleFailure" />
-  <PluginPageModal
-    v-for="(modal, index) in modals"
-    :key="modal.id"
-    :modal="{ ...modal }"
-    :active="index === modals.length - 1"
-    :depth="index"
-    @dismiss="modalStack.dismiss(modal)"
-    @accept="modalStack.close(modal, true)"
-    @action="actionIndex => modalStack.runAction(modal, actionIndex)"
-    @failed="cause => { reportError(cause); modalStack.close(modal); }"
-  />
 </template>

@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
+import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 
 export function loadScriptModule(url, members) {
   const raw = readFileSync(url, 'utf8');
   const source = url.pathname.endsWith('.vue')
-    ? raw.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
+    ? parse(raw, { filename: url.pathname }).descriptor.scriptSetup?.content
     : raw;
   if (source === undefined) throw new Error(`Missing TypeScript setup script: ${url}`);
   return ts.transpileModule(source + (members ? `\nexport { ${members} };` : ''), {

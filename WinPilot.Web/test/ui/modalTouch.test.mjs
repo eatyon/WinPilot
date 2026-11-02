@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { manageModalTouch } from '../../src/ui/modalTouch.ts';
-import { registerModalPortal } from '../../src/ui/modalFocus.ts';
 
 class Element {
   scrollTop = 0;
@@ -79,18 +78,13 @@ test('nested modals block their parent content and restore it after closing', t 
   releaseParent();
 });
 
-test('ShadowRoot paths, registered menus and horizontal scroll retain their own scrolling', t => {
+test('ShadowRoot paths and horizontal scroll retain their own scrolling', t => {
   const { modal, gesture } = fixture();
   const release = manageModalTouch(modal);
-  let unregister;
-  t.after(() => { unregister?.(); release(); });
+  t.after(release);
   const content = new Element();
   assert.equal(gesture([content, {}, modal], 80), false);
-  const portal = new Element();
-  unregister = registerModalPortal(portal, modal);
-  assert.equal(gesture([portal], 80), false);
-  unregister();
-  assert.equal(gesture([portal], 80), true);
+  assert.equal(gesture([new Element()], 80), true);
   content.overflowX = 'auto';
   content.scrollWidth = 300;
   assert.equal(gesture([content, modal], 100, 1, -20), false);

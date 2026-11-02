@@ -1,0 +1,33 @@
+.status-message { margin: 0; }
+.content-section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.content-section-header h2 { margin: 0; font-size: 18px; }
+.content-section-header p { margin: 6px 0 0; color: var(--text-muted); font-size: 13px; }
+.content-empty { margin: 18px 0 0; }
+.content-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.content-section-header p, .field-hint, .form-field:not(.n-form-item) { transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.field-hint { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 767px) {
+  .content-section-header > .content-actions { width: 100%; }
+  .content-actions { width: 100%; }
+}
+.load-error-layout { --load-error-layout-gap: var(--page-card-row-gap); }
+:where(h1, h2, h3, h4, h5, h6, strong, b) { font-weight: 500; }
+.form-field { min-width: 0; }
+.form-field:not(.n-form-item) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; color: var(--text-muted); }
+.field-label-with-hint { display: inline-flex; align-items: center; gap: 2px; }
+.app-pagination { display: flex; flex-flow: row wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.app-pagination .page-size-control { grid-template-columns: auto 76px; align-items: center; width: auto; flex: none; }
+.app-pagination > .n-pagination { flex: none; }
+.app-confirm-dialog { max-width: calc(100vw - 32px); }
+.app-modal > .n-card__content-scrollbar, .app-detail-dialog > .n-card__content-scrollbar { min-height: 0; height: auto; flex: 1; }
+.app-icon-button.n-button { width: var(--n-height); padding: 0; }
+.n-button[aria-busy="true"]:disabled:not(.n-button--loading) { cursor: pointer; }
+@media (hover: none), (pointer: coarse) {
+  .n-button:not(:disabled):not(.n-button--pressed):not(:active):not(:focus-visible):is(:hover, :focus) { background-color: var(--n-color, transparent); color: var(--n-text-color, currentColor); }
+  .n-button:not(:disabled):not(.n-button--pressed):not(:active):not(:focus-visible):is(:hover, :focus) > .n-button__state-border { border: var(--n-border, none); border-color: transparent; }
+  .n-base-close:not(.n-base-close--disabled):not(:active):not(:focus-visible):is(:hover, :focus) { color: var(--n-close-icon-color, currentColor); }
+  .n-base-close:not(.n-base-close--disabled):not(:active):not(:focus-visible):is(:hover, :focus)::before { background-color: transparent; }
+}
+.n-base-selection--disabled .n-base-suffix { cursor: not-allowed; }
+.n-modal-mask, .n-drawer-mask:not(.n-drawer-mask--invisible) { background-color: rgba(0, 0, 0, .3); }
+.dialog-blur-enabled :is(.n-modal-mask, .n-drawer-mask, .n-image-preview-overlay) { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }

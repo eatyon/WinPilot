@@ -67,8 +67,8 @@ test('program action exposes launch checkboxes with the existing process options
   const source = readFileSync(new URL('../../src/features/tasks/TaskActionEditor.vue', import.meta.url), 'utf8');
   const section = source.match(/<template v-else-if="action.type === 'StartProgram'">([\s\S]*?)<\/template>/)?.[1];
   assert.match(section, /<div class="task-process-options">/);
-  assert.match(section, /<input v-model="action.runElevated" type="checkbox" \/>\s*<span>使用最高权限运行<\/span>/);
-  assert.match(section, /<input v-model="action.silent" type="checkbox" \/>\s*<span>静默执行<\/span>/);
+  assert.match(section, /<NCheckbox v-model:checked="action.runElevated"\s*>使用最高权限运行<\/NCheckbox>/);
+  assert.match(section, /<NCheckbox v-model:checked="action.silent"\s*>静默执行<\/NCheckbox>/);
   const action = { ...models.createAction(), type: 'StartProgram' };
   assert.equal(action.runElevated, false);
   assert.equal(action.silent, false);

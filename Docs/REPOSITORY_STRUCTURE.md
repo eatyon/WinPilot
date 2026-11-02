@@ -1,23 +1,17 @@
-# 仓库结构
+# 仓库结构与构建
 
 ## 目录
 
 | 路径 | 用途 |
 | --- | --- |
-| `WinPilot/` | 主程序：`Core/` 为配置和模型，`Features/` 为业务，`Web/` 为接口，`Windows/` 为平台实现，`Infrastructure/` 为基础设施 |
+| `WinPilot/` | 主程序 |
 | `WinPilot.PluginContract/` | 通用插件接口与共享类型 |
 | `WinPilot.Updater/` | 独立更新程序 |
-| `WinPilot.Web/` | 前端：`src/` 为页面和组件，`public/` 为静态资源，`test/` 为测试 |
-| `Test/WinPilot.Test/` | 按功能分类的 C# 测试 |
-| `Build/Build.ps1` | 构建前端和 C# 项目 |
-| `Build/Publish-Portable.ps1` | 生成便携版 ZIP |
-| `Build/Sync-CnbRelease.ps1` | 同步发布附件与说明到 CNB |
-| `.github/workflows/build.yml` | 提交与 PR 构建、测试 |
-| `.github/workflows/publish.yml` | 打包与 GitHub Release 草稿 |
-| `.github/workflows/sync-cnb-repository.yml` | 同步代码和标签到 CNB |
-| `.github/workflows/sync-cnb-release.yml` | GitHub Release 发布后同步 CNB |
-| `Docs/REPOSITORY_STRUCTURE.md` | 仓库结构与构建说明 |
-| `Docs/PLUGIN_DEVELOPMENT.md` | 插件开发指南 |
+| `WinPilot.Web/` | Web 前端、静态资源与前端测试 |
+| `Test/WinPilot.Test/` | C# 测试，按功能分类 |
+| `Build/` | 构建、便携版打包与 CNB 发布同步脚本 |
+| `.github/workflows/` | 构建测试、发布及 CNB 同步流程 |
+| `Docs/` | 仓库结构、HTTP API 与插件开发文档 |
 | `WinPilot.sln` | C# 项目与测试的解决方案 |
 | `Directory.Build.props` | C# 构建输出和中间文件路径 |
 
@@ -41,17 +35,41 @@
 
 插件共享契约位于 `WinPilot.PluginContract/`，按能力组织。
 
+### 前端目录
+
+以下路径相对 `WinPilot.Web/`：
+
+| 路径 | 用途 |
+| --- | --- |
+| `src/features/` | 页面、业务逻辑及业务共用样式；`plugins/page/` 为插件页面宿主 |
+| `src/components/` | 公共组件及控件适配 |
+| `src/ui/` | 主题、焦点、滚动及加载反馈等通用 UI 逻辑 |
+| `src/styles/` | 全局与跨业务样式、业务样式导入入口 |
+| `src/api/` | 请求、错误和取消信号处理 |
+| `test/` | API、插件宿主和 UI 测试；`support/` 为测试辅助 |
+| `public/` | 静态资源；`licenses/` 为随包许可文本 |
+
+## 相关文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [README](../README.md) | 功能、安装、使用和问题反馈 |
+| [前端维护](../WinPilot.Web/README.md) | 源码约定、样式归属、共享 UI 维护与本地验证 |
+| [HTTP API](HTTP_API.md) | HTTP 接口和请求、响应约定 |
+| [插件开发](PLUGIN_DEVELOPMENT.md) | 插件契约、声明、宿主接口及调用示例 |
+| [第三方组件声明](../THIRD_PARTY_NOTICES.md) | 第三方组件及许可证 |
+
 ## 构建与测试
 
-环境：Windows、.NET 10 SDK 或更新版本、Node.js 22.12 或更新版本。以下命令在仓库根目录执行
+环境：Windows、.NET 10 SDK 或更新版本、Node.js 22.12 或更新版本。以下命令在仓库根目录执行。
 
-构建默认使用 Release；调试构建添加 `-Configuration Debug`
+安装前端依赖并构建全部项目，默认使用 Release；调试构建添加 `-Configuration Debug`：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Build\Build.ps1
 ```
 
-构建脚本已安装前端依赖，随后运行测试：
+完整测试命令如下，局部验证按改动范围筛选：
 
 ```powershell
 dotnet test .\Test\WinPilot.Test\WinPilot.Test.csproj -c Release

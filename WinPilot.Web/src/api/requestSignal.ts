@@ -1,3 +1,4 @@
+// 任一来源取消都会中断请求；调用方完成后须 dispose，解除仍未触发的监听。
 export function combineRequestSignal(owner: AbortSignal, request?: AbortSignal) {
   if (!request || request === owner) return { signal: owner, dispose: () => {} };
   const controller = new AbortController();

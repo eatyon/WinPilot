@@ -1,18 +1,26 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue';
-import { createSettingsRequests } from '../SettingsRequests';
+import AppLoadError from '../../../components/AppLoadError.vue';
+import { useModalState } from '../../../ui/useModalState';
+import { useDelayedLoading } from '../../../ui/useDelayedLoading';
+import AppTooltip from '../../../components/AppTooltip.vue';
+import AppPasswordInput from '../../../components/AppPasswordInput.vue';
+import { NFormItem, NButton, NCheckbox, NInput, NCard, NCollapseTransition, NSpin } from 'naive-ui';
+import { useId, computed, onBeforeUnmount, reactive, ref } from 'vue';
+import { createSettingsRequests } from '../settingsRequests';
 import { readApiError, apiFetch, isAbortError, userErrorMessage } from '../../../api/client';
 import { showToast } from '../../../ui/toast';
 import AppIcon from '../../../components/AppIcon.vue';
 import AppSelect from '../../../components/AppSelect.vue';
 import CommandBotSettingsModal from '../CommandBotSettingsModal.vue';
+import type { CommandBotChannel as BotChannel, CommandBotConfiguration } from '../commandBotModels';
 import { safeModeEnabled } from '../../security/safeMode';
 
-type NotificationSettings = Record<string, any>;
+const formId = useId();
+
 type QQBotOpenIdTarget = 'user' | 'group';
 type QQBotOpenIdStatus = { text: string; tone: 'info' | 'success' | 'error' } | null;
 const requests = createSettingsRequests();
-const form = reactive<NotificationSettings>({
+const formDefaults = {
   webhookUrl: '',
   webhookSendTo: '',
   telegramBotToken: '',
@@ -35,7 +43,9 @@ const form = reactive<NotificationSettings>({
   qqBotGroupOpenId: '',
   qqBotSendTarget: 'auto',
   qqBotMessageFormat: 'text',
-});
+};
+type NotificationSettings = typeof formDefaults & Record<string, string | boolean>;
+const form = reactive<NotificationSettings>({ ...formDefaults });
 const expanded = reactive<Record<string, boolean>>({
   windows: false,
   webhook: false,
@@ -45,32 +55,72 @@ const expanded = reactive<Record<string, boolean>>({
   onebot: false,
   qqbot: false,
 });
-const passwordVisible = reactive<Record<string, boolean>>({
-  telegramBotToken: false,
-  feishuAppSecret: false,
-  oneBotToken: false,
-  qqBotClientSecret: false,
-});
 const loading = ref(false),
   saving = ref(false),
   testing = ref(false),
   error = ref(''),
   binding = ref('');
-const qqbotOpenIdStatus = reactive<Record<QQBotOpenIdTarget, QQBotOpenIdStatus>>({ user: null, group: null });
+const qqbotOpenIdStatus = reactive<Record<QQBotOpenIdTarget, QQBotOpenIdStatus>>({
+  user: null,
+  group: null,
+});
 const savingChannel = ref('');
+const loadingChannel = ref('');
 const testingChannel = ref('');
 let qqbotOpenIdController: AbortController | undefined;
-type BotChannel = 'telegram' | 'feishu' | 'qqbot' | 'onebot';
-const botEnabled = reactive<Record<BotChannel, boolean>>({ telegram: false, feishu: false, qqbot: false, onebot: false });
+const botEnabled = reactive<Record<BotChannel, boolean>>({
+  telegram: false,
+  feishu: false,
+  qqbot: false,
+  onebot: false,
+});
 const botsLoaded = ref(false);
-const botDialog = ref<BotChannel>();
+const botConfiguration = ref<CommandBotConfiguration>();
+const botDialogModal = useModalState<BotChannel | undefined>(() => undefined, Boolean, () => {
+  botConfiguration.value = undefined;
+});
+const botDialog = botDialogModal.data;
+const loadingBotChannel = ref('');
+const showBotLoading = useDelayedLoading(() => Boolean(loadingBotChannel.value));
+async function openBotSettings(channel: string) {
+  if (
+    !requests.active || safeModeEnabled.value || loading.value || !settingsLoaded.value ||
+    !botsLoaded.value || saving.value || testing.value || loadingBotChannel.value || botDialogModal.show
+  ) return;
+  if (!['telegram', 'feishu', 'qqbot', 'onebot'].includes(channel)) return;
+  loadingBotChannel.value = channel;
+  try {
+    const response = await requests.fetch(`/api/settings/notifications/command-bots/${channel}`);
+    if (!response.ok) throw new Error(await readApiError(response, '无法读取命令机器人设置', requests.json));
+    const configuration = await requests.json<CommandBotConfiguration>(response);
+    if (safeModeEnabled.value) return;
+    botConfiguration.value = configuration;
+    botDialogModal.open(channel as BotChannel);
+  } catch (cause) {
+    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '无法读取命令机器人设置'), 'error');
+  } finally {
+    loadingBotChannel.value = '';
+  }
+}
 const botFields: Record<BotChannel, string[]> = {
-  telegram: ['telegramBotToken', 'telegramChatId', 'telegramApiBaseUrl', 'telegramProxyUrl', 'telegramProxyEnabled'],
+  telegram: [
+    'telegramBotToken',
+    'telegramChatId',
+    'telegramApiBaseUrl',
+    'telegramProxyUrl',
+    'telegramProxyEnabled',
+  ],
   feishu: ['feishuAppId', 'feishuAppSecret'],
-  qqbot: ['qqBotAppId', 'qqBotClientSecret', 'qqBotOpenId', 'qqBotGroupOpenId', 'qqBotMessageFormat'],
+  qqbot: [
+    'qqBotAppId',
+    'qqBotClientSecret',
+    'qqBotOpenId',
+    'qqBotGroupOpenId',
+    'qqBotMessageFormat',
+  ],
   onebot: ['oneBotUserId', 'oneBotGroupId'],
 };
-const savedSettings = reactive<NotificationSettings>({});
+const savedSettings = reactive<Partial<NotificationSettings>>({});
 const sendTargetOptions = [
   { value: 'auto', label: '全部' },
   { value: 'private', label: '私聊' },
@@ -80,8 +130,11 @@ const messageFormatOptions = [
   { value: 'text', label: '普通消息' },
   { value: 'markdown', label: 'Markdown' },
 ];
-const connectionDirty = computed(() => botDialog.value
-  ? botFields[botDialog.value].some((key) => form[key] !== savedSettings[key]) : false);
+const connectionDirty = computed(() =>
+  botDialog.value
+    ? botFields[botDialog.value].some((key) => form[key] !== savedSettings[key])
+    : false,
+);
 const settingsLoaded = ref(false);
 const channels = [
   { key: 'windows', title: 'Windows 通知', desc: '使用系统通知中心接收消息', prefix: 'windows' },
@@ -93,23 +146,23 @@ const channels = [
   { key: 'qqbot', title: 'QQBot', desc: 'QQ 官方 Bot 通知设置', prefix: 'qqBot' },
 ] as const;
 async function loadSettings() {
-  if (safeModeEnabled.value) {
-    loading.value = false;
-    return;
-  }
+  if (!requests.active || safeModeEnabled.value || loading.value) return;
   loading.value = true;
-  settingsLoaded.value = botsLoaded.value = false;
-  error.value = '';
   try {
-    const response = await requests.fetch('/api/settings/notifications');
-    if (!response.ok) throw new Error(await readApiError(response, '无法读取通知设置', requests.json));
+    const [response, botsResponse] = await Promise.all([
+      requests.fetch('/api/settings/notifications'),
+      requests.fetch('/api/settings/notifications/command-bots'),
+    ]);
+    if (!response.ok)
+      throw new Error(await readApiError(response, '无法读取通知设置', requests.json));
     Object.assign(form, await requests.json(response));
     Object.assign(savedSettings, form);
     settingsLoaded.value = true;
-    const botsResponse = await requests.fetch('/api/settings/notifications/command-bots');
-    if (!botsResponse.ok) throw new Error(await readApiError(botsResponse, '无法读取命令机器人开关', requests.json));
+    if (!botsResponse.ok)
+      throw new Error(await readApiError(botsResponse, '无法读取命令机器人开关', requests.json));
     Object.assign(botEnabled, await requests.json(botsResponse));
     botsLoaded.value = true;
+    error.value = '';
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
     error.value = userErrorMessage(cause, '无法读取通知设置');
@@ -118,17 +171,25 @@ async function loadSettings() {
   }
 }
 async function toggleChannel(channel: string) {
-  if (!requests.active || safeModeEnabled.value || loading.value) return;
+  if (!requests.active || safeModeEnabled.value || loading.value || loadingBotChannel.value === channel) return;
   if (expanded[channel]) {
     expanded[channel] = false;
     return;
   }
-  if (!settingsLoaded.value || !botsLoaded.value) await loadSettings();
-  if (requests.active && !safeModeEnabled.value && settingsLoaded.value && botsLoaded.value)
-    expanded[channel] = true;
+  loadingChannel.value = channel;
+  try {
+    if (!settingsLoaded.value || !botsLoaded.value) await loadSettings();
+    if (
+      requests.active && !safeModeEnabled.value &&
+      settingsLoaded.value && botsLoaded.value && !error.value
+    )
+      expanded[channel] = true;
+  } finally {
+    loadingChannel.value = '';
+  }
 }
 async function save(channel: string) {
-  if (!settingsLoaded.value || saving.value || safeModeEnabled.value || !requests.active) return;
+  if (!settingsLoaded.value || saving.value || loadingBotChannel.value === channel || safeModeEnabled.value || !requests.active) return;
   saving.value = true;
   savingChannel.value = channel;
   const submitted = { ...form };
@@ -138,9 +199,10 @@ async function save(channel: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(submitted),
     });
-    if (!response.ok) throw new Error(await readApiError(response, '无法保存通知设置', requests.json));
+    if (!response.ok)
+      throw new Error(await readApiError(response, '无法保存通知设置', requests.json));
     const result = await requests.json<NotificationSettings>(response);
-    const prefix = channels.find(item => item.key === channel)?.prefix;
+    const prefix = channels.find((item) => item.key === channel)?.prefix;
     if (!prefix) throw new Error('通知渠道无效');
     for (const key of Object.keys(form)) {
       if (!key.startsWith(prefix)) continue;
@@ -151,18 +213,22 @@ async function save(channel: string) {
     showToast('通知设置已保存', 'success');
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
-    error.value = userErrorMessage(cause, '无法保存通知设置');
-    showToast(error.value);
+    showToast(userErrorMessage(cause, '无法保存通知设置'));
   } finally {
     saving.value = false;
     savingChannel.value = '';
   }
 }
-function togglePassword(field: string) {
-  passwordVisible[field] = !passwordVisible[field];
-}
 async function test(channel: string) {
-  if (!settingsLoaded.value || testing.value || saving.value || safeModeEnabled.value || !requests.active) return;
+  if (
+    !settingsLoaded.value ||
+    testing.value ||
+    saving.value ||
+    loadingBotChannel.value === channel ||
+    safeModeEnabled.value ||
+    !requests.active
+  )
+    return;
   testing.value = true;
   testingChannel.value = channel;
   try {
@@ -172,11 +238,11 @@ async function test(channel: string) {
       body: JSON.stringify({ content: '这是一条测试通知信息', channel }),
     });
     if (!response.ok) throw new Error(await readApiError(response, '通知测试失败', requests.json));
-    const results = await requests.json(response);
+    const results = await requests.json<{ succeeded?: boolean; channel?: string }[]>(response);
     if (!Array.isArray(results)) throw new Error('通知测试返回的数据无效');
-    const failed = results.filter((item: { succeeded?: boolean }) => item.succeeded === false);
+    const failed = results.filter(item => item.succeeded === false);
     if (failed.length > 0)
-      throw Error(`通知渠道发送失败：${failed.map((item: any) => item.channel).join('、')}`);
+      throw Error(`通知渠道发送失败：${failed.map(item => item.channel).join('、')}`);
     showToast('测试通知已发送', 'success');
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
@@ -222,7 +288,10 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
           if (!line.startsWith('data: ')) continue;
           const data = JSON.parse(line.slice(6));
           if (data.type === 'code')
-            qqbotOpenIdStatus[target] = { text: `请发送验证码 ${data.code} 获取 OpenID`, tone: 'info' };
+            qqbotOpenIdStatus[target] = {
+              text: `请发送验证码 ${data.code} 获取 OpenID`,
+              tone: 'info',
+            };
           if (data.type === 'success') {
             if (target === 'user') form.qqBotOpenId = data.openId;
             else form.qqBotGroupOpenId = data.openId;
@@ -246,261 +315,397 @@ async function bindQQBot(target: QQBotOpenIdTarget) {
     }
   }
 }
-onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
+onBeforeUnmount(() => {
+  requests.dispose();
+  qqbotOpenIdController?.abort();
+});
 </script>
 <template>
-  <div class="settings-tab-content notification-settings-content">
-    <p v-if="error" class="status-message error">{{ error }}</p>
-    <section
-      v-for="channel in channels"
-      :key="channel.key"
-      class="settings-section notification-channel-section"
-      :class="{ expanded: expanded[channel.key] }"
-    >
-      <button
-        class="notification-channel-header"
-        type="button"
-        :aria-expanded="expanded[channel.key] === true"
-        @click="toggleChannel(channel.key)"
-      >
-        <span class="notification-channel-copy">
-          <strong>{{ channel.title }}</strong>
-          <small>{{ channel.desc }}</small>
-        </span>
-        <span class="notification-chevron" :class="{ open: expanded[channel.key] }" aria-hidden="true" />
-      </button>
-      <div v-if="expanded[channel.key]" class="notification-channel-body" :class="{ 'settings-data-pending': !settingsLoaded }">
-        <template v-if="channel.key === 'webhook'">
-          <label class="field-control">
-            <span>Webhook 端点</span>
-            <input v-model="form.webhookUrl" placeholder="填写 Webhook 端点" />
-          </label>
-          <label class="field-control">
-            <span>发送对象</span>
-            <input v-model="form.webhookSendTo" placeholder="填写发送对象" />
-          </label>
-        </template>
-        <template v-else-if="channel.key === 'telegram'">
-          <label class="field-control">
-            <span>机器人 Token</span>
-            <span class="secret-input">
-              <input
-                v-model="form.telegramBotToken"
-                :type="passwordVisible.telegramBotToken ? 'text' : 'password'"
-                placeholder="填写 Telegram 机器人的 Token"
-              />
-              <button
-                type="button"
-                class="secret-toggle"
-                :aria-label="passwordVisible.telegramBotToken ? '隐藏 Token' : '显示 Token'"
-                @click="togglePassword('telegramBotToken')"
-              >
-                <AppIcon :name="passwordVisible.telegramBotToken ? 'eye-off' : 'eye'" />
-              </button>
+  <div class="settings-tab-content notification-settings-content load-error-layout">
+    <AppLoadError :show="Boolean(error)" :retry="!settingsLoaded || !botsLoaded ? loadSettings : undefined">{{ error }}</AppLoadError>
+    <NCard v-for="channel in channels" :key="channel.key" :header-style="{ padding: 0 }" :content-style="{ padding: 0 }">
+      <template #header>
+        <NButton
+          class="notification-channel-trigger"
+          attr-type="button"
+          text
+          block
+          :aria-expanded="Boolean(expanded[channel.key])"
+          :aria-busy="loading && loadingChannel === channel.key"
+          :disabled="loadingBotChannel === channel.key || savingChannel === channel.key"
+          @click="toggleChannel(channel.key)"
+        >
+          <span class="notification-channel-heading">
+            <span class="notification-channel-copy">
+              <strong>{{ channel.title }}</strong>
+              <small>{{ channel.desc }}</small>
             </span>
-          </label>
-          <label class="field-control">
-            <span>聊天 ID</span>
-            <input v-model="form.telegramChatId" placeholder="填写接收消息的聊天 ID" />
-          </label>
-          <label class="field-control">
-            <span>API 基础 URL（可选）</span>
-            <input v-model="form.telegramApiBaseUrl" placeholder="留空使用官方 API，或填写第三方 API 地址" />
-          </label>
-          <label class="field-control">
-            <span>代理地址</span>
-            <input v-model="form.telegramProxyUrl" placeholder="格式：http://127.0.0.1:7890" />
-          </label>
-          <label class="toggle-control">
-            <input v-model="form.telegramProxyEnabled" type="checkbox" />
-            <span>启用代理</span>
-          </label>
-        </template>
-        <template v-else-if="channel.key === 'workweixin'">
-          <label class="field-control">
-            <span>企业微信通知地址</span>
-            <input v-model="form.workWeixinWebhookUrl" placeholder="填写企业微信通知地址" />
-          </label>
-        </template>
-        <template v-else-if="channel.key === 'feishu'">
-          <label class="field-control">
-            <span>飞书通知地址</span>
-            <input v-model="form.feishuWebhookUrl" placeholder="填写飞书通知地址" />
-          </label>
-          <label class="field-control">
-            <span>飞书 AppId</span>
-            <input v-model="form.feishuAppId" placeholder="发送图片需填写 AppId 和 AppSecret" />
-          </label>
-          <label class="field-control">
-            <span>飞书 AppSecret</span>
-            <span class="secret-input">
-              <input
-                v-model="form.feishuAppSecret"
-                :type="passwordVisible.feishuAppSecret ? 'text' : 'password'"
-                placeholder="发送图片需填写 AppId 和 AppSecret"
-              />
-              <button
-                type="button"
-                class="secret-toggle"
-                :aria-label="passwordVisible.feishuAppSecret ? '隐藏 AppSecret' : '显示 AppSecret'"
-                @click="togglePassword('feishuAppSecret')"
-              >
-                <AppIcon :name="passwordVisible.feishuAppSecret ? 'eye-off' : 'eye'" />
-              </button>
-            </span>
-          </label>
-        </template>
-        <template v-else-if="channel.key === 'onebot'">
-          <label class="field-control">
-            <span>OneBot 请求地址</span>
-            <input v-model="form.oneBotEndpoint" placeholder="填写 OneBot 请求地址" />
-          </label>
-          <label class="field-control">
-            <span>QQ 号</span>
-            <input v-model="form.oneBotUserId" placeholder="填写接收消息的 QQ 号" />
-          </label>
-          <label class="field-control">
-            <span>群号</span>
-            <input v-model="form.oneBotGroupId" placeholder="填写接收消息的群号" />
-          </label>
-          <label class="field-control">
-            <span>OneBot Token</span>
-            <span class="secret-input">
-              <input
-                v-model="form.oneBotToken"
-                :type="passwordVisible.oneBotToken ? 'text' : 'password'"
-                placeholder="填写 OneBot Token（可选）"
-              />
-              <button
-                type="button"
-                class="secret-toggle"
-                :aria-label="passwordVisible.oneBotToken ? '隐藏 Token' : '显示 Token'"
-                @click="togglePassword('oneBotToken')"
-              >
-                <AppIcon :name="passwordVisible.oneBotToken ? 'eye-off' : 'eye'" />
-              </button>
-            </span>
-          </label>
-        </template>
-        <template v-else-if="channel.key === 'qqbot'">
-          <label class="field-control">
-            <span>AppID</span>
-            <input v-model="form.qqBotAppId" placeholder="QQ 开放平台的 AppID" />
-          </label>
-          <label class="field-control">
-            <span>AppSecret</span>
-            <span class="secret-input">
-              <input
-                v-model="form.qqBotClientSecret"
-                :type="passwordVisible.qqBotClientSecret ? 'text' : 'password'"
-                placeholder="QQ 开放平台的 AppSecret"
-              />
-              <button
-                type="button"
-                class="secret-toggle"
-                :aria-label="passwordVisible.qqBotClientSecret ? '隐藏 AppSecret' : '显示 AppSecret'"
-                @click="togglePassword('qqBotClientSecret')"
-              >
-                <AppIcon :name="passwordVisible.qqBotClientSecret ? 'eye-off' : 'eye'" />
-              </button>
-            </span>
-          </label>
-          <label class="field-control">
-            <span>用户 OpenID</span>
-            <div class="notification-inline-field">
-              <input v-model="form.qqBotOpenId" placeholder="可点击「获取」私聊机器人发送验证码自动填充" />
-              <button
-                class="button button-secondary"
-                type="button"
-                :disabled="binding !== '' && binding !== 'user'"
-                @click="bindQQBot('user')"
-              >
-                {{ binding === 'user' ? '取消' : '获取' }}
-              </button>
-            </div>
-            <small
-              v-if="qqbotOpenIdStatus.user"
-              class="notification-field-status"
-              :class="qqbotOpenIdStatus.user.tone"
-              :role="qqbotOpenIdStatus.user.tone === 'error' ? 'alert' : 'status'"
-            >
-              {{ qqbotOpenIdStatus.user.text }}
-            </small>
-          </label>
-          <label class="field-control">
-            <span>群 OpenID</span>
-            <div class="notification-inline-field">
-              <input
-                v-model="form.qqBotGroupOpenId"
-                placeholder="可点击「获取」群聊@机器人发送验证码自动填充"
-              />
-              <button
-                class="button button-secondary"
-                type="button"
-                :disabled="binding !== '' && binding !== 'group'"
-                @click="bindQQBot('group')"
-              >
-                {{ binding === 'group' ? '取消' : '获取' }}
-              </button>
-            </div>
-            <small
-              v-if="qqbotOpenIdStatus.group"
-              class="notification-field-status"
-              :class="qqbotOpenIdStatus.group.tone"
-              :role="qqbotOpenIdStatus.group.tone === 'error' ? 'alert' : 'status'"
-            >
-              {{ qqbotOpenIdStatus.group.text }}
-            </small>
-          </label>
-        </template>
-        <div v-if="channel.key === 'onebot' || channel.key === 'qqbot'" class="field-control">
-          <span>发送目标</span>
-          <AppSelect
-            v-model="form[channel.key === 'onebot' ? 'oneBotSendTarget' : 'qqBotSendTarget']"
-            :options="sendTargetOptions"
-            :disabled="loading || !settingsLoaded || saving || safeModeEnabled"
-            aria-label="发送目标"
-          />
-        </div>
-        <div v-if="channel.key === 'qqbot'" class="field-control">
-          <span>消息格式</span>
-          <AppSelect
-            v-model="form.qqBotMessageFormat"
-            :options="messageFormatOptions"
-            :disabled="loading || !settingsLoaded || saving || safeModeEnabled"
-            aria-label="消息格式"
-          />
-        </div>
-        <div class="notification-channel-actions">
-          <button
-            v-if="channel.key === 'telegram' || channel.key === 'feishu' || channel.key === 'qqbot' || channel.key === 'onebot'"
-            type="button"
-            class="button button-secondary command-bot-button"
-            :class="{ enabled: botEnabled[channel.key] }"
-            :disabled="loading || !settingsLoaded || saving || !botsLoaded || safeModeEnabled"
-            title="命令机器人设置"
-            aria-label="命令机器人设置"
-            @click="botDialog = channel.key"
-          ><AppIcon name="bot" /></button>
-          <button
-            class="button button-secondary"
-            :class="{ 'is-pending': testingChannel === channel.key }"
-            :disabled="loading || !settingsLoaded || saving || testing"
-            @click="test(channel.key)"
+            <NSpin v-if="loading && loadingChannel === channel.key" :size="18" aria-label="正在读取通知设置" />
+            <AppIcon v-else :name="expanded[channel.key] ? 'chevron-down' : 'chevron-right'" />
+          </span>
+        </NButton>
+      </template>
+      <NCollapseTransition :show="Boolean(expanded[channel.key])" :inert="!expanded[channel.key] || undefined">
+        <div class="notification-channel-content">
+          <div
+            class="notification-channel-body"
+            :inert="savingChannel === channel.key"
+            v-show="settingsLoaded && botsLoaded"
           >
-            {{ testingChannel === channel.key ? '正在发送' : '测试发送' }}
-          </button>
-          <button v-if="channel.key !== 'windows'" class="button button-primary" :class="{ 'is-pending': savingChannel === channel.key }" :disabled="loading || !settingsLoaded || saving" @click="save(channel.key)">
-            {{ savingChannel === channel.key ? '正在保存' : '保存' }}
-          </button>
+            <template v-if="channel.key === 'webhook'">
+              <NFormItem
+                label="Webhook 端点"
+                :label-props="{ for: `${formId}-field-0-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-0-${channel.key}` }" v-model:value="form.webhookUrl" placeholder="填写 Webhook 端点" />
+              </NFormItem>
+              <NFormItem
+                label="发送对象"
+                :label-props="{ for: `${formId}-field-1-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-1-${channel.key}` }" v-model:value="form.webhookSendTo" placeholder="填写发送对象" />
+              </NFormItem>
+            </template>
+            <template v-else-if="channel.key === 'telegram'">
+              <NFormItem
+                label="机器人 Token"
+                :label-props="{ for: `${formId}-field-2-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <AppPasswordInput
+                  :input-props="{ id: `${formId}-field-2-${channel.key}` }"
+                  v-model:value="form.telegramBotToken"
+                  placeholder="填写 Telegram 机器人的 Token"
+                />
+              </NFormItem>
+              <NFormItem
+                label="聊天 ID"
+                :label-props="{ for: `${formId}-field-3-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-3-${channel.key}` }" v-model:value="form.telegramChatId" placeholder="填写接收消息的聊天 ID" />
+              </NFormItem>
+              <NFormItem
+                label="API 基础 URL（可选）"
+                :label-props="{ for: `${formId}-field-4-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput
+                  :input-props="{ id: `${formId}-field-4-${channel.key}` }"
+                  v-model:value="form.telegramApiBaseUrl"
+                  placeholder="留空使用官方 API，或填写第三方 API 地址"
+                />
+              </NFormItem>
+              <NFormItem
+                label="代理地址"
+                :label-props="{ for: `${formId}-field-5-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput
+                  :input-props="{ id: `${formId}-field-5-${channel.key}` }"
+                  v-model:value="form.telegramProxyUrl"
+                  placeholder="格式：http://127.0.0.1:7890"
+                />
+              </NFormItem>
+              <NCheckbox
+                v-model:checked="form.telegramProxyEnabled"
+              ><span>启用代理</span></NCheckbox
+              >
+            </template>
+            <template v-else-if="channel.key === 'workweixin'">
+              <NFormItem
+                label="企业微信通知地址"
+                :label-props="{ for: `${formId}-field-6-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput
+                  :input-props="{ id: `${formId}-field-6-${channel.key}` }"
+                  v-model:value="form.workWeixinWebhookUrl"
+                  placeholder="填写企业微信通知地址"
+                />
+              </NFormItem>
+            </template>
+            <template v-else-if="channel.key === 'feishu'">
+              <NFormItem
+                label="飞书通知地址"
+                :label-props="{ for: `${formId}-field-7-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-7-${channel.key}` }" v-model:value="form.feishuWebhookUrl" placeholder="填写飞书通知地址" />
+              </NFormItem>
+              <NFormItem
+                label="飞书 AppId"
+                :label-props="{ for: `${formId}-field-8-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput
+                  :input-props="{ id: `${formId}-field-8-${channel.key}` }"
+                  v-model:value="form.feishuAppId"
+                  placeholder="发送图片需填写 AppId 和 AppSecret"
+                />
+              </NFormItem>
+              <NFormItem
+                label="飞书 AppSecret"
+                :label-props="{ for: `${formId}-field-9-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <AppPasswordInput
+                  :input-props="{ id: `${formId}-field-9-${channel.key}` }"
+                  v-model:value="form.feishuAppSecret"
+                  placeholder="发送图片需填写 AppId 和 AppSecret"
+                />
+              </NFormItem>
+            </template>
+            <template v-else-if="channel.key === 'onebot'">
+              <NFormItem
+                label="OneBot 请求地址"
+                :label-props="{ for: `${formId}-field-10-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-10-${channel.key}` }" v-model:value="form.oneBotEndpoint" placeholder="填写 OneBot 请求地址" />
+              </NFormItem>
+              <NFormItem
+                label="QQ 号"
+                :label-props="{ for: `${formId}-field-11-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-11-${channel.key}` }" v-model:value="form.oneBotUserId" placeholder="填写接收消息的 QQ 号" />
+              </NFormItem>
+              <NFormItem
+                label="群号"
+                :label-props="{ for: `${formId}-field-12-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-12-${channel.key}` }" v-model:value="form.oneBotGroupId" placeholder="填写接收消息的群号" />
+              </NFormItem>
+              <NFormItem
+                label="OneBot Token"
+                :label-props="{ for: `${formId}-field-13-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <AppPasswordInput
+                  :input-props="{ id: `${formId}-field-13-${channel.key}` }"
+                  v-model:value="form.oneBotToken"
+                  placeholder="填写 OneBot Token（可选）"
+                />
+              </NFormItem>
+            </template>
+            <template v-else-if="channel.key === 'qqbot'">
+              <NFormItem
+                label="AppID"
+                :label-props="{ for: `${formId}-field-14-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <NInput :input-props="{ id: `${formId}-field-14-${channel.key}` }" v-model:value="form.qqBotAppId" placeholder="QQ 开放平台的 AppID" />
+              </NFormItem>
+              <NFormItem
+                label="AppSecret"
+                :label-props="{ for: `${formId}-field-15-${channel.key}` }"
+                :show-feedback="false"
+                class="form-field"
+              >
+                <AppPasswordInput
+                  :input-props="{ id: `${formId}-field-15-${channel.key}` }"
+                  v-model:value="form.qqBotClientSecret"
+                  placeholder="QQ 开放平台的 AppSecret"
+                />
+              </NFormItem>
+              <NFormItem
+                label="用户 OpenID"
+                :label-props="{ for: `${formId}-field-16-${channel.key}` }"
+                :show-feedback="Boolean(qqbotOpenIdStatus.user)"
+                :validation-status="qqbotOpenIdStatus.user?.tone === 'info' ? undefined : qqbotOpenIdStatus.user?.tone"
+                class="form-field"
+              >
+                <div class="notification-inline-field">
+                  <NInput
+                    :input-props="{ id: `${formId}-field-16-${channel.key}` }"
+                    v-model:value="form.qqBotOpenId"
+                    placeholder="可点击「获取」私聊机器人发送验证码自动填充"
+                  />
+                  <NButton
+                    attr-type="button"
+                    :disabled="binding !== '' && binding !== 'user'"
+                    @click="bindQQBot('user')"
+                  >
+                    {{ binding === 'user' ? '取消' : '获取' }}
+                  </NButton>
+                </div>
+                <template #feedback><span :role="qqbotOpenIdStatus.user?.tone === 'error' ? 'alert' : 'status'">{{ qqbotOpenIdStatus.user?.text }}</span></template>
+              </NFormItem>
+              <NFormItem
+                label="群 OpenID"
+                :label-props="{ for: `${formId}-field-17-${channel.key}` }"
+                :show-feedback="Boolean(qqbotOpenIdStatus.group)"
+                :validation-status="qqbotOpenIdStatus.group?.tone === 'info' ? undefined : qqbotOpenIdStatus.group?.tone"
+                class="form-field"
+              >
+                <div class="notification-inline-field">
+                  <NInput
+                    :input-props="{ id: `${formId}-field-17-${channel.key}` }"
+                    v-model:value="form.qqBotGroupOpenId"
+                    placeholder="可点击「获取」群聊@机器人发送验证码自动填充"
+                  />
+                  <NButton
+                    attr-type="button"
+                    :disabled="binding !== '' && binding !== 'group'"
+                    @click="bindQQBot('group')"
+                  >
+                    {{ binding === 'group' ? '取消' : '获取' }}
+                  </NButton>
+                </div>
+                <template #feedback><span :role="qqbotOpenIdStatus.group?.tone === 'error' ? 'alert' : 'status'">{{ qqbotOpenIdStatus.group?.text }}</span></template>
+              </NFormItem>
+            </template>
+            <NFormItem
+              label="发送目标"
+              :label-props="{ id: (`${formId}-field-18-${channel.key}`) + '-label' }"
+              :show-feedback="false"
+              v-if="channel.key === 'onebot' || channel.key === 'qqbot'"
+              class="form-field"
+            >
+              <AppSelect
+                :labelled-by="(`${formId}-field-18-${channel.key}`) + '-label'"
+                :id="`${formId}-field-18-${channel.key}`"
+                v-model="form[channel.key === 'onebot' ? 'oneBotSendTarget' : 'qqBotSendTarget']"
+                :options="sendTargetOptions"
+                :disabled="loading || !settingsLoaded || saving || safeModeEnabled"
+                aria-label="发送目标"
+              />
+            </NFormItem>
+            <NFormItem
+              label="消息格式"
+              :label-props="{ id: (`${formId}-field-19-${channel.key}`) + '-label' }"
+              :show-feedback="false"
+              v-if="channel.key === 'qqbot'"
+              class="form-field"
+            >
+              <AppSelect
+                :labelled-by="(`${formId}-field-19-${channel.key}`) + '-label'"
+                :id="`${formId}-field-19-${channel.key}`"
+                v-model="form.qqBotMessageFormat"
+                :options="messageFormatOptions"
+                :disabled="loading || !settingsLoaded || saving || safeModeEnabled"
+                aria-label="消息格式"
+              />
+            </NFormItem>
+            <div class="notification-channel-actions">
+              <span
+                v-if="
+                  channel.key === 'telegram' ||
+                  channel.key === 'feishu' ||
+                  channel.key === 'qqbot' ||
+                  channel.key === 'onebot'
+                "
+                class="command-bot-entry"
+              >
+                <AppTooltip
+                  text="命令机器人设置"
+                  :disabled-trigger="loading || !settingsLoaded || saving || testing || !botsLoaded || safeModeEnabled || Boolean(loadingBotChannel)"
+                >
+                  <NButton
+                    attr-type="button"
+                    class="app-icon-button command-bot-button"
+                    :loading="loadingBotChannel === channel.key && showBotLoading"
+                    :aria-busy="loadingBotChannel === channel.key"
+                    :disabled="loading || !settingsLoaded || saving || testing || !botsLoaded || safeModeEnabled || Boolean(loadingBotChannel && (loadingBotChannel !== channel.key || !showBotLoading))"
+                    aria-label="命令机器人设置"
+                    @click="openBotSettings(channel.key)"
+                  >
+                    <template #icon><AppIcon name="bot" :color="botEnabled[channel.key] ? 'var(--accent-text)' : undefined" /></template>
+                  </NButton>
+                </AppTooltip>
+              </span>
+              <NButton
+                :loading="testingChannel === channel.key"
+                :disabled="loading || !settingsLoaded || saving || testing || loadingBotChannel === channel.key"
+                @click="test(channel.key)"
+              >
+                {{ testingChannel === channel.key ? '正在发送' : '测试发送' }}
+              </NButton>
+              <NButton
+                v-if="channel.key !== 'windows'"
+                :loading="savingChannel === channel.key"
+                :disabled="loading || !settingsLoaded || saving || loadingBotChannel === channel.key"
+                @click="save(channel.key)"
+                type="primary"
+              >
+                {{ savingChannel === channel.key ? '正在保存' : '保存' }}
+              </NButton>
+            </div>
+          </div>
         </div>
-      </div>
-    </section>
-    <CommandBotSettingsModal v-if="botDialog" :key="botDialog" :channel="botDialog" :initial-enabled="botEnabled[botDialog]" @enabled-change="botEnabled[botDialog] = $event" :connection-dirty="connectionDirty" @close="botDialog = undefined" />
+      </NCollapseTransition>
+    </NCard>
+    <CommandBotSettingsModal
+      :show="botDialogModal.show"
+      @after-leave="botDialogModal.afterLeave"
+      v-if="botDialog && botConfiguration"
+      :key="botDialog"
+      :channel="botDialog"
+      :initial-configuration="botConfiguration"
+      @enabled-change="botEnabled[botDialog] = $event"
+      :connection-dirty="connectionDirty"
+      @close="botDialogModal.close()"
+    />
   </div>
 </template>
 
+<style>
+.notification-settings-content { grid-template-columns: minmax(0, 1fr); }
+.notification-channel-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.notification-channel-copy strong { font-size: 16px; font-weight: 500; }
+.notification-channel-copy small { overflow: hidden; color: var(--text-muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.notification-channel-body { display: grid; gap: 12px; }
+.notification-channel-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.notification-inline-field { display: flex; width: 100%; min-width: 0; gap: 8px; }
+.notification-inline-field > .n-input { min-width: 0; flex: 1; }
+.notification-inline-field > .n-button { flex: 0 0 auto; }
+</style>
+
 <style scoped>
-.notification-channel-actions .command-bot-button { margin-right: auto; flex: 0 0 auto; padding: 8px; color: var(--text-muted); }
-.notification-channel-actions .command-bot-button.enabled { color: var(--accent-text); }
+.notification-channel-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  height: auto;
+  padding: var(--n-padding-top) var(--n-padding-left) var(--n-padding-bottom);
+  text-align: left;
+  line-height: 1.5;
+}
+.notification-channel-heading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+}
+.notification-channel-heading > .app-icon {
+  flex-shrink: 0;
+}
+.notification-channel-content {
+  padding: 0 var(--n-padding-left) var(--n-padding-bottom);
+}
+.command-bot-entry {
+  display: inline-flex;
+  margin-right: auto;
+  flex: 0 0 auto;
+}
 </style>

@@ -1,0 +1,23 @@
+.interaction-animations-disabled :where(*):not([data-page-transition]):not(.n-loading-bar-container, .n-loading-bar),
+.interaction-animations-disabled ::before,
+.interaction-animations-disabled ::after { transition-duration: 0s !important; transition-delay: 0s !important; scroll-behavior: auto !important; }
+.interaction-animations-disabled .n-base-wave { animation: none !important; }
+.page-fade-enter-active, .page-fade-leave-active { transition: opacity 300ms ease; }
+.page-fade-enter-from, .page-fade-leave-to { opacity: 0; }
+.page-slide-enter-active, .page-slide-leave-active { transition: transform 400ms cubic-bezier(.25, .46, .45, .94), opacity 400ms cubic-bezier(.25, .46, .45, .94); will-change: transform, opacity; }
+.page-slide-enter-from { opacity: 0; transform: translateX(40px); }
+.page-slide-leave-to { opacity: 0; transform: translateX(-40px); }
+.page-scale-enter-active, .page-scale-leave-active { transition: transform 300ms cubic-bezier(.4, 0, .2, 1), opacity 300ms cubic-bezier(.4, 0, .2, 1); }
+.page-scale-enter-from { opacity: 0; transform: scale(.9); }
+.page-scale-leave-to { opacity: 0; transform: scale(1.05); }
+.page-fade-slide-enter-active, .page-fade-slide-leave-active { transition: transform 300ms cubic-bezier(.4, 0, .2, 1), opacity 300ms cubic-bezier(.4, 0, .2, 1), filter 300ms cubic-bezier(.4, 0, .2, 1); }
+.page-fade-slide-enter-from { opacity: 0; transform: translateY(10px) scale(.98); filter: blur(4px); }
+.page-fade-slide-leave-to { opacity: 0; transform: translateY(-10px) scale(.98); filter: blur(4px); }
+.page-fade-leave-active, .page-slide-leave-active, .page-scale-leave-active, .page-fade-slide-leave-active { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .n-skeleton { animation: none; }
+  .page-fade-enter-active, .page-fade-leave-active { transition: none; }
+  .page-fade-enter-from, .page-fade-leave-to { opacity: 1; }
+  .page-slide-enter-active, .page-slide-leave-active, .page-scale-enter-active, .page-scale-leave-active, .page-fade-slide-enter-active, .page-fade-slide-leave-active { transition: none; will-change: auto; }
+  .page-slide-enter-from, .page-slide-leave-to, .page-scale-enter-from, .page-scale-leave-to, .page-fade-slide-enter-from, .page-fade-slide-leave-to { opacity: 1; transform: none; filter: none; }
+}

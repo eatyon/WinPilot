@@ -1,5 +1,4 @@
 const modals: Array<{ element: HTMLElement; previousFocus?: HTMLElement }> = [];
-const portals = new Map<HTMLElement, HTMLElement>();
 const focusableSelector = 'a[href], button, input, select, textarea, [tabindex], [contenteditable="true"]';
 
 function activeElement(): Element | null {
@@ -8,6 +7,7 @@ function activeElement(): Element | null {
   return active;
 }
 
+// 插件控件可能位于 Shadow DOM，检查焦点归属时需继续沿宿主元素向外遍历。
 function composedParent(element: HTMLElement): HTMLElement | null {
   if (element.parentElement) return element.parentElement;
   const root = element.getRootNode();
@@ -38,19 +38,11 @@ function available(element: HTMLElement): boolean {
   return !element.matches(':disabled') && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden';
 }
 
-export function registerModalPortal(portal: HTMLElement, owner: HTMLElement): () => void {
-  portals.set(portal, owner);
-  return () => portals.delete(portal);
-}
-
 export function getModalInteractionRoot(modal: HTMLElement, path: EventTarget[]): HTMLElement | null {
-  if (path.includes(modal)) return modal;
-  for (const [portal, owner] of portals) {
-    if (path.includes(portal) && composedContains(modal, owner)) return portal;
-  }
-  return null;
+  return path.includes(modal) ? modal : null;
 }
 
+// 只由最上层弹窗约束焦点；关闭后恢复到仍可用的原焦点或下层弹窗。
 export function manageModalFocus(modal: HTMLElement): () => void {
   const active = activeElement();
   const state = { element: modal, previousFocus: active instanceof HTMLElement ? active : undefined };
@@ -61,14 +53,6 @@ export function manageModalFocus(modal: HTMLElement): () => void {
   function onKeyDown(event: KeyboardEvent) {
     if (event.key !== 'Tab' || modals.at(-1) !== state || !available(modal)) return;
     const elements = focusableElements(modal);
-    for (const [portal, owner] of portals) {
-      if (!composedContains(modal, owner)) continue;
-      let ownerIndex = elements.length - 1;
-      while (ownerIndex >= 0 && !composedContains(owner, elements[ownerIndex]!)) ownerIndex--;
-      if (ownerIndex < 0) continue;
-      const options = focusableElements(portal);
-      elements.splice(ownerIndex + 1, 0, ...options);
-    }
     const current = elements.indexOf(activeElement() as HTMLElement);
     const index = event.shiftKey
       ? (current <= 0 ? elements.length - 1 : current - 1)
@@ -81,9 +65,6 @@ export function manageModalFocus(modal: HTMLElement): () => void {
     if (modals.at(-1) !== state || !available(modal)) return;
     const active = activeElement();
     if (!(active instanceof HTMLElement) || composedContains(modal, active)) return;
-    for (const [portal, owner] of portals) {
-      if (composedContains(modal, owner) && composedContains(portal, active)) return;
-    }
     modal.focus({ preventScroll: true });
   }
 

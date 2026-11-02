@@ -5,10 +5,13 @@ type ScrollLockState = {
   pageLayout?: { scrollbarGutter: string; paddingRight: string };
 };
 
+// 同一滚动容器可能被多层弹窗锁定，最后一个持有者释放后才恢复原样式。
 const locks = new WeakMap<HTMLElement, ScrollLockState>();
 
 export function getPageScroller(): HTMLElement {
-  return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
+  return document.querySelector<HTMLElement>('[data-page-scroller] > .n-scrollbar-container')
+    ?? (document.scrollingElement as HTMLElement | null)
+    ?? document.documentElement;
 }
 
 export function lockScroll(...targets: Array<HTMLElement | null | undefined>): () => void {
@@ -26,6 +29,7 @@ export function lockScroll(...targets: Array<HTMLElement | null | undefined>): (
     };
     const view = element.ownerDocument.defaultView;
     if (element === element.ownerDocument.documentElement && view) {
+      // 隐藏根滚动条时补偿原占位宽度，避免弹窗打开后背景内容横向移动。
       const gutterWidth = Math.max(0, view.innerWidth - element.getBoundingClientRect().width);
       state.pageLayout = { scrollbarGutter: element.style.scrollbarGutter, paddingRight: element.style.paddingRight };
       const paddingRight = parseFloat(view.getComputedStyle(element).paddingRight) || 0;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import AppLoadError from '../../../components/AppLoadError.vue';
+import { NCheckbox, NCard, NSkeleton } from 'naive-ui';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { createSettingsRequests } from '../SettingsRequests';
+import { createSettingsRequests } from '../settingsRequests';
 import { readApiError, isAbortError, userErrorMessage } from '../../../api/client';
 import { showToast } from '../../../ui/toast';
 import { safeModeEnabled } from '../../security/safeMode';
@@ -12,19 +14,22 @@ const saving = ref(false);
 const settingsLoaded = ref(false);
 const error = ref('');
 
-onMounted(async () => {
+async function load() {
+  loading.value = true;
   try {
     const response = await requests.fetch('/api/settings/advanced/unauthenticated-web-page');
     if (!response.ok) throw new Error(await readApiError(response, '无法读取设置', requests.json));
     enabled.value = ((await requests.json(response)) as { enabled: boolean }).enabled;
     settingsLoaded.value = true;
+    error.value = '';
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
     error.value = userErrorMessage(cause, '无法读取设置');
   } finally {
     loading.value = false;
   }
-});
+}
+onMounted(load);
 
 onBeforeUnmount(() => requests.dispose());
 
@@ -46,7 +51,7 @@ async function save(next: boolean) {
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
     enabled.value = previous;
-    error.value = userErrorMessage(cause, '无法保存设置');
+    showToast(userErrorMessage(cause, '无法保存设置'));
   } finally {
     saving.value = false;
   }
@@ -54,8 +59,9 @@ async function save(next: boolean) {
 </script>
 
 <template>
-  <div class="settings-tab-content advanced-settings">
-    <section class="settings-section">
+  <div class="settings-tab-content advanced-settings load-error-layout">
+    <AppLoadError :show="Boolean(error)" :retry="!settingsLoaded ? load : undefined">{{ error }}</AppLoadError>
+    <NCard tag="section">
       <div class="settings-section-heading">
         <h3>Web 页面伪装</h3>
         <p>
@@ -64,17 +70,15 @@ async function save(next: boolean) {
           自定义页面
         </p>
       </div>
-      <label class="toggle-control settings-toggle" :class="{ 'settings-data-pending': !settingsLoaded }">
-        <input
-          :checked="enabled"
-          type="checkbox"
-          :disabled="loading || !settingsLoaded || saving"
-          @change="save(($event.target as HTMLInputElement).checked)"
-        />
-        <span>开启 Web 页面伪装</span>
-      </label>
+      <NSkeleton v-if="loading && !settingsLoaded && !error" :width="220" height="1lh" :sharp="false" />
+      <NCheckbox
+        v-show="settingsLoaded"
+        :checked="enabled"
+        :disabled="loading || !settingsLoaded || saving"
+        @update:checked="save($event)"
+      ><span>开启 Web 页面伪装</span></NCheckbox
+      >
       <p class="settings-help">首次开启会创建默认页面文件，长按页面进入登录页</p>
-      <p v-if="error" class="status-message error" role="alert">{{ error }}</p>
-    </section>
+    </NCard>
   </div>
 </template>

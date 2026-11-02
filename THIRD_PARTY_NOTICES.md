@@ -14,10 +14,9 @@ WinPilot 使用或参考以下第三方项目，各组件保留原有许可证�
 
 | 组件 | 用途 | 许可证 |
 | --- | --- | --- |
-| [Cronos](https://github.com/HangfireIO/Cronos) | Cron 任务调度 | [MIT](https://github.com/HangfireIO/Cronos/blob/main/LICENSE) |
+| [Cronos](https://github.com/HangfireIO/Cronos) | Cron 表达式解析与执行时间计算 | [MIT](https://github.com/HangfireIO/Cronos/blob/main/LICENSE) |
 | [protobuf-net / protobuf-net.Core](https://github.com/protobuf-net/protobuf-net) | 飞书长连接消息序列化 | [Apache-2.0](https://github.com/protobuf-net/protobuf-net/blob/main/Licence.txt) |
 | [System.Management](https://github.com/dotnet/runtime) | Windows 进程事件监听 | [MIT](https://github.com/dotnet/runtime/blob/main/LICENSE.TXT) |
-| [Microsoft.Toolkit.Uwp.Notifications](https://github.com/CommunityToolkit/WindowsCommunityToolkit) | Windows 桌面通知 | [MIT](https://github.com/CommunityToolkit/WindowsCommunityToolkit/blob/main/License.md) |
 | [TaskScheduler](https://github.com/dahall/taskscheduler) | Windows 启动任务管理 | [MIT](https://github.com/dahall/taskscheduler/blob/master/license.md) |
 | [Microsoft.Extensions.Logging.Abstractions](https://github.com/dotnet/runtime) | 日志接口与插件契约 | [MIT](https://github.com/dotnet/runtime/blob/main/LICENSE.TXT) |
 
@@ -27,6 +26,10 @@ WinPilot 使用或参考以下第三方项目，各组件保留原有许可证�
 | --- | --- | --- |
 | [Vue](https://github.com/vuejs/core) | Web 界面与响应式状态 | [MIT](https://github.com/vuejs/core/blob/main/LICENSE) |
 | [Vue Router（vue-router）](https://github.com/vuejs/router) | 页面路由 | [MIT](https://github.com/vuejs/router/blob/main/LICENSE) |
+| [Naive UI](https://github.com/tusen-ai/naive-ui) | Web 通用组件与主题 | [MIT](WinPilot.Web/public/licenses/Naive-UI-LICENSE.txt) |
+| [Lucide / @lucide/vue](https://github.com/lucide-icons/lucide) | Web 业务图标 | [ISC / MIT（部分图标源自 Feather）](WinPilot.Web/public/licenses/Lucide-LICENSE.txt) |
+| [vfonts](https://github.com/07akioni/vfonts) | 字体资源入口 | MIT |
+| Lato / Fira Code | 界面及等宽字体 | SIL OFL 1.1（[Lato](WinPilot.Web/public/licenses/Lato-OFL.txt) / [Fira Code](WinPilot.Web/public/licenses/FiraCode-OFL.txt)） |
 | [@xterm/xterm / @xterm/addon-fit](https://github.com/xtermjs/xterm.js) | Web 终端与尺寸适配 | [MIT](https://github.com/xtermjs/xterm.js/blob/master/LICENSE) |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | HTML 内容净化 | [MPL-2.0](https://github.com/cure53/DOMPurify/blob/main/LICENSE-MPL) 或 [Apache-2.0](https://github.com/cure53/DOMPurify/blob/main/LICENSE)（任选其一） |
 | [markdown-it](https://github.com/markdown-it/markdown-it) | Markdown 渲染 | [MIT](https://github.com/markdown-it/markdown-it/blob/master/LICENSE) |

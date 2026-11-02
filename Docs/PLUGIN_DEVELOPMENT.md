@@ -278,13 +278,13 @@ User/Plugin/ExamplePlugin/
 | 模式 | 声明与实现 |
 | --- | --- |
 | `action` | `context.Features.Actions.Register(id, handler)`，返回带有非空 Message 的 `PluginFeatureActionResult`；可声明 `confirm: true` 请求操作确认 |
-| `page` | 声明指向 ES 模块的 `entry`，通过 `context.Features.Pages.Register(id, opened)` 注册页面会话；模块默认导出带有 `mount` 函数的对象 |
+| `page` | 声明指向 ES 模块的 `entry`，通过 `context.Features.Pages.Register(id, opened)` 注册页面会话；模块默认导出带有 `create` 函数的对象 |
 
 Action 回调是同步的，不适合直接执行耗时操作。耗时业务使用功能页启动操作并查询进度，或使用异步任务动作
 
 ## 自定义功能页
 
-一个功能页由 `features.json` 声明、C# 页面会话处理器和 `web/` 中的 ES 模块组成。宿主创建页面会话后，加载模块并调用 `mount(root, host)`。`root` 是独立的 `ShadowRoot`，插件负责在其中渲染业务内容
+一个功能页由 `features.json` 声明、C# 页面会话处理器和 `web/` 中的 ES 模块组成。宿主创建页面会话后，加载模块并调用 `create(host)`，将返回的 Vue 组件放入主程序组件树渲染，共享主题、语言和提示环境
 
 ### 声明与文件位置
 
@@ -313,9 +313,9 @@ ExamplePlugin/
       └─ style.css
 ```
 
-`entry` 相对 `web/`，必须以 `.js` 结尾，不能使用绝对路径或包含 `..`。入口默认导出带有 `mount` 函数的对象，`styles` 可省略
+`entry` 相对 `web/`，必须以 `.js` 结尾，不能使用绝对路径或包含 `..`。入口默认导出带有 `create` 函数的对象，`styles` 可省略
 
-使用 Vue、React 等框架时，将插件自己的前端构建为浏览器可加载的 ES 模块，连同依赖和资源一起发布到 `web/`。框架应用挂载到 `root` 内创建的元素，并在卸载时释放实例。CSS 通过 `styles` 声明，不依赖直接导入 CSS 或裸包名的浏览器解析
+从 `host.vue` 获取共享 Vue，通过 `await host.loadUI(['NButton', 'NCard'])` 声明并加载所需的 Naive UI 组件，不重复打包或从 CDN 加载这两项依赖，不另行创建 Vue 应用。入口使用 `h` 或预编译的 render 函数，不使用运行时 template 编译。CSS 通过 `styles` 声明，不依赖直接导入 CSS 或裸包名的浏览器解析
 
 ### 注册 C# 消息处理器
 
@@ -358,34 +358,37 @@ if (context.Features.Pages is { } pages)
 ```javascript
 export default {
   styles: [new URL('./style.css', import.meta.url)],
-  mount(root, host) {
-    const document = root.ownerDocument
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'wp-button wp-button-primary'
-    button.textContent = '刷新状态'
-    const status = document.createElement('pre')
-    status.className = 'status-output'
-    root.append(button, status)
-
-    async function refresh() {
-      button.disabled = true
-      try {
-        const result = await host.send('get-status')
-        if (host.signal.aborted) return
-        if (result && typeof result === 'object' && 'error' in result)
-          throw new Error(String(result.error))
-        status.textContent = JSON.stringify(result, null, 2)
-      } catch (error) {
-        if (!host.signal.aborted)
-          host.notify(error instanceof Error ? error.message : '读取状态失败', 'error')
-      } finally {
-        if (!host.signal.aborted) button.disabled = false
-      }
-    }
-
-    button.addEventListener('click', refresh, { signal: host.signal })
-    void refresh()
+  async create(host) {
+    const { defineComponent, h, ref, onMounted } = host.vue
+    const { NButton, NCard, useMessage } = await host.loadUI(['NButton', 'NCard', 'useMessage'])
+    return defineComponent({
+      setup() {
+        const message = useMessage()
+        const loading = ref(false)
+        const status = ref('')
+        async function refresh() {
+          if (loading.value) return
+          loading.value = true
+          try {
+            const result = await host.send('get-status')
+            if (host.signal.aborted) return
+            if (result && typeof result === 'object' && 'error' in result)
+              throw new Error(String(result.error))
+            status.value = JSON.stringify(result, null, 2)
+          } catch (error) {
+            if (!host.signal.aborted)
+              message.error(error instanceof Error ? error.message : '读取状态失败')
+          } finally {
+            if (!host.signal.aborted) loading.value = false
+          }
+        }
+        onMounted(refresh)
+        return () => h(NCard, { title: '状态' }, { default: () => [
+          h(NButton, { type: 'primary', loading: loading.value, onClick: refresh }, () => '刷新状态'),
+          h('pre', { class: 'example-status-output' }, status.value),
+        ] })
+      },
+    })
   },
 }
 ```
@@ -393,11 +396,7 @@ export default {
 `web/dashboard/style.css`：
 
 ```css
-:host {
-  display: block;
-}
-
-.status-output {
+.example-status-output {
   margin: 12px 0 0;
   padding: 12px;
   border: 1px solid var(--border);
@@ -409,7 +408,7 @@ export default {
 }
 ```
 
-`styles` 接受字符串或 URL 数组，使用 `new URL('./style.css', import.meta.url)` 可保留模块的版本化资源路径。宿主等待所有声明样式加载后再调用 `mount`，单个样式加载超过 15 秒会使初始化失败
+`styles` 接受字符串或 URL 数组，使用 `new URL('./style.css', import.meta.url)` 可保留模块的版本化资源路径。宿主等待所有声明样式加载后再调用 `create`，单个样式加载超过 15 秒会使初始化失败
 
 JS 使用相对路径导入模块；图片、字体等资源通过 `new URL('./image.png', import.meta.url)` 或 `host.assetUrl('dashboard/image.png')` 获取。`assetUrl` 参数相对 `web/`，不带开头的 `/`，不要保存宿主生成的资源版本路径
 
@@ -423,15 +422,13 @@ JS 使用相对路径导入模块；图片、字体等资源通过 `new URL('./i
 | `host.assetUrl(path)` | 获取相对 `web/` 的版本化资源地址 |
 | `host.signal` | 页面退出、初始化失败或会话重建时取消 |
 | `host.onDispose(cleanup)` | 注册同步清理函数，返回取消注册的函数 |
-| `host.notify(message, type?)` | 显示提示，type 为 `success` 或 `error`，默认 `success` |
-| `host.confirm(options)` | 打开确认弹窗，返回 `Promise<boolean>` |
-| `host.openModal(options)` | 打开自定义内容弹窗，返回弹窗句柄 |
-| `host.ui` | 增强选择器和操作菜单 |
+| `host.vue` | 与主程序相同实例的 Vue 导出，包括 h、ref、defineComponent 和生命周期方法 |
+| `host.loadUI(names)` | 按声明名称异步加载共享 UI 组件及组合式 API，仅返回请求的项目 |
 | `host.scroll` | 读取或调整宿主页面滚动位置 |
 
-`mount` 可以返回同步卸载函数，也可以返回最终得到卸载函数的 Promise。计时器、观察器和框架实例通过 `host.onDispose` 或卸载函数释放；DOM 事件可绑定 `host.signal`。清理函数按注册的相反顺序执行，一个清理函数抛出异常不会阻止其他清理函数。异步挂载在页面关闭后才返回时，返回的卸载函数会立即执行
+`create` 返回 Vue 组件，也可返回最终得到组件的 Promise。Vue 生命周期方法在组件 setup 中调用，宿主负责卸载组件；计时器和观察器通过 `onUnmounted` 或 `host.onDispose` 释放，DOM 事件可绑定 `host.signal`。onDispose 清理函数按注册的相反顺序执行，一个清理函数抛出异常不会阻止其他清理函数。异步初始化在页面关闭后才返回时，不再挂载组件；关闭后新注册的 onDispose 清理函数立即执行
 
-`send` 和 `upload` 自动绑定页面信号；传入额外 signal 时，任一信号取消都会取消请求。自行调用 fetch 时也要传入页面或弹窗信号。C# 处理器必须遵守收到的 CancellationToken，页面会话关闭或插件停用时会取消正在处理的请求
+`send` 和 `upload` 自动绑定页面信号；传入额外 signal 时，任一信号取消都会取消请求。自行调用 fetch 时也要传入页面信号或插件管理的取消信号。C# 处理器必须遵守收到的 CancellationToken，页面会话关闭或插件停用时会取消正在处理的请求
 
 ### 上传二进制数据
 
@@ -474,85 +471,54 @@ session.HandleUploads((upload, cancellationToken) =>
 
 ### 样式与布局
 
-页面高度自然参与宿主滚动，业务样式放在自己的 ShadowRoot 内，使用 `:host` 设置页面级变量。主题颜色优先使用 `--text`、`--text-muted`、`--surface`、`--surface-hover` 和 `--border`，这些变量会随宿主主题切换更新
+页面参与宿主滚动，共享组件继承主程序主题、语言和交互动画设置。业务状态由插件管理，优先复用组件和主题，避免覆盖组件内部样式。
 
-插件继承主程序配色，按用途选择主题变量，不自行维护默认强调色
+通过 `host.loadUI(names)` 按需获取组件及组合式 API，支持名称见 [共享 UI 清单](../WinPilot.Web/src/features/plugins/page/pluginPageComponents.ts)。仅加载声明项目及其依赖，已加载模块复用；未知名称报错，空数组返回空对象。页面关闭后不再返回加载结果。
 
-| 用途 | 主题变量 |
+库组件按官方用法使用；组合式 API 在 `setup` 中调用，`useMessage`、`useLoadingBar` 使用宿主 Provider。
+
+业务 CSS 使用插件唯一 class 前缀和 `--text`、`--text-muted`、`--surface`、`--border`、`--accent-text` 等主题变量。页面不使用 Shadow DOM，避免全局元素选择器、`:root`、`body` 和 `:host`；浮层由组件管理。仅安装可信插件，共享组件树不提供权限隔离。
+
+本体适配项：
+
+| 项目 | 用法 |
 | --- | --- |
-| 强调文字、链接和图标 | `--accent-text`、`--accent-text-hover` |
-| 实心主按钮 | 背景 `--accent-solid`、`--accent-solid-hover`，文字与图标 `--accent-contrast` |
-| 选中项和焦点 | 背景 `--accent-bg`，文字 `--accent-text`，边框 `--accent-border`，焦点环 `--accent-focus-ring` |
-| 错误文字、危险提示 | `--danger-text`、`--danger-bg`、`--danger-border` |
-| 实心危险按钮 | 背景 `--danger-solid`、`--danger-solid-hover`，文字与图标 `--danger-contrast` |
-| 成功提示 | `--success-text`、`--success-bg`、`--success-border` |
-| 警告提示 | `--warning-text`、`--warning-bg`、`--warning-border` |
-
-次级按钮使用中性背景，悬停使用 `--surface-hover`。图表数据系列颜色可以独立定义，但线条和图例应共用同一颜色变量
-
-宿主已提供以下可选控件样式，无需另行加载公共 CSS：
-
-| 控件 | class 或属性 |
-| --- | --- |
-| 按钮 | `wp-button`，可叠加 `wp-button-primary`、`wp-button-danger`、`wp-button-icon` |
-| 输入框、文本域 | `wp-input`，错误状态使用 `aria-invalid="true"` |
-| 复选框 | `wp-checkbox` |
-| checkbox 开关 | `wp-switch` |
-| 禁用状态 | 原生 `disabled` 属性 |
-
-布局、卡片和业务组件样式仍由插件提供。页面和弹窗各有独立 ShadowRoot，全局样式选择器不会自动进入这些区域；不要向 `document.head` 注入业务样式或向 `document.body` 挂载业务浮层。ShadowRoot 用于隔离样式，不提供权限隔离，宿主只应安装可信插件
-
-### 选择器与操作菜单
-
-普通 `<select>` 添加选项后调用 `host.ui.enhanceSelect(root)`，弹窗内使用 `scope.ui.enhanceSelect(root)`。控件保留原生 select 的值和 change 事件，并观察新增控件与选项；`<select multiple>` 使用复选框列表，多次勾选时保持展开
-
-返回对象提供 `refresh(select)`、`open(select)`、`close(select?)` 和 `dispose()`。代码直接修改 select.value 或选项的 selected 后，调用 refresh 更新显示。监听可取消的 `app-select-beforeopen` 事件，可以先 preventDefault，异步取得选项后更新 select，再调用 open
-
-操作菜单调用 `ui.enhanceMenu(trigger, content, options?)`。trigger 是按钮，content 中放置使用 `app-select-option` 和 `role="menuitem"` 的业务按钮，二者先挂载在同一 ShadowRoot 内。宿主负责定位、键盘导航和关闭，业务按钮事件由插件处理
-
-菜单 options 支持 `width`、`maxHeight`，单位为像素；`beforeOpen()` 返回 false 可取消打开，此回调是同步的。需要异步加载时先取消，加载完成后让 beforeOpen 允许打开，再调用返回对象的 `open()`。返回对象也提供 `close()`、`dispose()`；分组、标题和空状态可使用 `app-menu-group`、`app-menu-heading`、`app-menu-message`
-
-选择器和菜单默认字号 12px、字重 600，使用 `--wp-picker-font-size` 和 `--wp-picker-font-weight` 覆盖。局部容器变量不会自动传到独立弹窗，页面与弹窗共用样式文件时可在 `:host` 中统一设置。选择器和菜单注册的监听器与观察器由对应页面或弹窗自动清理
+| `AppTooltip` | `text` 提供多行提示，默认插槽提供触发控件，`disabledTrigger` 为禁用控件添加触发容器；触屏禁用悬停 |
+| `useDelayedLoading` | `useDelayedLoading(() => loading.value, delay?)` 默认延迟 150ms 显示反馈，不延迟请求；业务自行防止重复提交 |
+| `withSelectLabels` | `withSelectLabels(options)` 为选择器选项提供截断提示；触屏禁用悬停，长文本限宽并保留换行 |
+| `AppModal` | 内容弹窗，见下节 |
 
 ### 确认与内容弹窗
 
-简单确认使用 `await host.confirm({ title, message, acceptText, danger })`。title 默认“提示”，acceptText 默认“确认”；danger 为 true 时使用危险操作按钮。取消或页面退出返回 false，只有确认时返回 true
+内容弹窗优先按需加载 `AppModal`，复用本体布局、滚动区、焦点和滚动锁。主要属性：
 
-复杂内容使用 `host.openModal`。弹窗的 `mount(root, scope)` 中，scope 提供 `signal`、`onDispose`、`ui`，不包含页面的 send、upload 等接口；通过闭包访问 host，并把 `scope.signal` 传入弹窗发起的请求：
+| 属性 | 用法 |
+| --- | --- |
+| `title`、`show` | 标题和显示状态 |
+| `size` | `small / medium / large` |
+| `bodyMaxHeight` | 内容区最大高度 |
+| `dismissible` | 是否允许用户关闭，默认 true |
+| `dismissOnBackdrop` | 是否允许点击遮罩关闭，默认 true |
+
+以下示例位于组件 `setup` 中，`AppModal`、`NButton` 通过 `host.loadUI` 获取：
 
 ```javascript
-let modal
-modal = host.openModal({
-  title: '插件状态',
-  size: 'medium',
-  async mount(root, scope) {
-    const result = await host.send('get-status', {}, scope.signal)
-    if (scope.signal.aborted) return
-    if (result && typeof result === 'object' && 'error' in result)
-      throw new Error(String(result.error))
-    const content = root.ownerDocument.createElement('pre')
-    content.className = 'status-output'
-    content.textContent = JSON.stringify(result, null, 2)
-    root.append(content)
-  },
-  actions: [{ label: '关闭', onClick: () => modal.close() }],
-})
+const show = ref(false)
+const mounted = ref(false)
+return () => [
+  h(NButton, { onClick: () => { mounted.value = show.value = true } }, () => '查看'),
+  mounted.value && h(AppModal, {
+    title: '插件状态',
+    show: show.value,
+    onClose: () => { show.value = false },
+    onAfterLeave: () => { if (!show.value) mounted.value = false },
+  }, { default: () => '由插件提供内容' }),
+]
 ```
 
-每次打开弹窗创建新内容，不移动页面中已经挂载的节点。宿主提供标题、关闭按钮、遮罩、操作栏、滚动和焦点管理，插件只挂载内容
+关闭时先修改 `show`，离场结束后再卸载 `AppModal`，避免动画中断或隐藏弹窗持续锁定页面。操作按钮使用 `actions` 插槽；确认弹窗可使用 `NModal` 的 `dialog` 预设，文案和重复提交保护由插件处理。
 
-| 选项 | 说明 |
-| --- | --- |
-| `title`、`mount` | 必填，标题和内容挂载函数 |
-| `styles` | 省略时使用页面声明的样式；传空数组时只保留宿主基础与控件样式 |
-| `size` | `small`、`medium`、`large`，省略时使用宿主默认尺寸 |
-| `dismissible` | 默认 true，控制用户关闭；false 不阻止代码调用 close |
-| `dismissOnBackdrop` | 默认 false，是否允许点击遮罩关闭；仍受 dismissible 限制 |
-| `actions` | 省略时提供取消按钮，空数组隐藏操作栏 |
-
-操作按钮结构为 `{ label, onClick, kind?, disabled? }`，kind 为 `primary`、`secondary` 或 `danger`，默认 `secondary`。异步 onClick 返回 Promise，宿主在执行期间阻止重复提交和用户关闭；成功后不会自动关闭，需主动调用句柄的 close。操作异常会显示提示并保留弹窗，内容初始化失败则关闭弹窗
-
-句柄提供 `close()`、`update({ title, size, actions, dismissible, dismissOnBackdrop })`、`closed: Promise<void>` 和 `signal`。update 不替换 styles 或 mount。关闭弹窗会取消其信号并清理资源，关闭父弹窗也会关闭其上所有弹窗；页面退出时关闭全部弹窗
+插件负责取消弹窗请求及清理资源；页面退出可通过 `host.signal` 或 `host.onDispose` 处理。
 
 ### 滚动与会话恢复
 
@@ -562,7 +528,7 @@ modal = host.openModal({
 | `host.scroll.restorePosition(position, behavior?)` | 恢复宿主页面位置，behavior 默认 `instant` |
 | `host.scroll.scrollTo(element, { offset?, behavior? }?)` | 滚动到当前页面内的元素，offset 默认 0，正值在元素上方保留空间 |
 
-滚动位置与 offset 必须是有限数字。scrollTo 只接受当前页面 ShadowRoot 内且仍挂载的元素；弹窗内容有独立滚动区域，不使用此接口操作弹窗
+滚动位置与 offset 必须是有限数字。scrollTo 只接受当前页面容器内且仍挂载的元素；弹窗内容有独立滚动区域，不使用此接口操作弹窗
 
 固定悬浮按钮使用 `bottom: calc(14px + var(--wp-page-bottom-inset, 0px))` 避免被手机底部导航遮挡，该变量在桌面为 0px。弹窗中的按钮使用弹窗自身布局
 
@@ -571,11 +537,11 @@ modal = host.openModal({
 - 每 30 秒发送一次心跳，回到前台时立即检查；同一时间只发送一个心跳，10 秒超时后取消
 - 会话连续 2 分钟没有消息或心跳后由服务端清理，退出页面或停用插件也会关闭会话
 - 页面消息或心跳返回会话不存在时，宿主自动创建新会话并重新挂载页面；不会重放导致失效的业务请求
-- 普通网络失败不会自动重建页面；入口、样式或 mount 初始化失败会关闭会话并显示错误，不自动重试
+- 普通网络失败不会自动重建页面；入口、样式或 create 初始化失败会关闭会话并显示错误，不自动重试
 
 重新挂载会重置前端输入和弹窗状态，重要数据由插件保存到数据目录。不要把 sessionId 或 host 存入模块级变量供后续挂载复用
 
-完整页面类型见 [PluginPageTypes.ts](../WinPilot.Web/src/features/plugins/page/PluginPageTypes.ts)，消息与上传的 C# 接口见 [PluginPageContracts.cs](../WinPilot.PluginContract/PluginPageContracts.cs)
+完整页面类型见 [pluginPageTypes.ts](../WinPilot.Web/src/features/plugins/page/pluginPageTypes.ts)，消息与上传的 C# 接口见 [PluginPageContracts.cs](../WinPilot.PluginContract/PluginPageContracts.cs)
 
 ## 任务扩展
 
@@ -812,7 +778,7 @@ Host.Actions 和 Host.Processes 为可空接口，调用前检查是否可用。
 | --- | --- |
 | DLL 未找到或无法加载 | `main` 与实际 DLL 文件名、依赖文件、PluginContract 版本 |
 | 功能执行失败 | 注册 ID 与 `features.json` 是否一致，是否返回非空提示 |
-| 功能页初始化失败 | 浏览器中的模块及 CSS 请求、`entry` 与发布路径、默认导出和 `mount` |
+| 功能页初始化失败 | 浏览器中的模块及 CSS 请求、`entry` 与发布路径、默认导出和 `create` |
 | 页面消息失败 | C# 消息处理器、返回 JSON、业务错误判断和取消处理 |
 | 上传失败 | command、参数对象、单块大小、上传处理器与分块清理 |
 | 返回前台后页面状态重置 | 会话是否已重建，重要状态是否持久化，业务操作是否重复启动 |

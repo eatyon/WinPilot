@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { manageModalFocus, registerModalPortal } from '../../src/ui/modalFocus.ts';
+import { manageModalFocus, getModalInteractionRoot } from '../../src/ui/modalFocus.ts';
 
 class Shadow extends EventTarget {
   children = [];
@@ -131,27 +131,12 @@ test('inert parent controls are excluded across a ShadowRoot boundary', t => {
   } finally { parent.attrs.delete('inert'); release(); }
 });
 
-test('a registered dropdown portal follows its ShadowRoot owner in Tab order', t => {
+test('modal interaction stays within its composed event path', () => {
   const modal = new Element();
-  const owner = new Element();
-  modal.append(owner);
-  owner.shadowRoot = new Shadow(owner);
-  const trigger = new Element('button');
-  owner.shadowRoot.append(trigger);
-  const next = new Element('button');
-  modal.append(next);
-  const portal = new Element();
-  const option = new Element('button');
-  portal.append(option);
-  const unregister = registerModalPortal(portal, owner);
-  let release;
-  t.after(() => { unregister(); release?.(); });
-  release = manageModalFocus(modal);
-  try {
-    trigger.focus();
-    pressTab();
-    assert.equal(document.activeElement, option);
-    pressTab();
-    assert.equal(document.activeElement, next);
-  } finally { unregister(); release(); }
+  const child = new Element();
+  modal.append(child);
+  assert.equal(getModalInteractionRoot(modal, [child, modal]), modal);
+  assert.equal(getModalInteractionRoot(modal, [child, new Shadow(modal), modal]), modal);
+  assert.equal(getModalInteractionRoot(modal, [new Element()]), null);
+  assert.equal(getModalInteractionRoot(modal, []), null);
 });

@@ -1,135 +1,50 @@
-<script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
-import { useAnchoredMenu } from './useAnchoredMenu';
-import './AppPicker.css';
+<script setup lang="ts" generic="Value extends string | number = string">
+import { computed } from 'vue';
+import { NSelect } from 'naive-ui';
+import { useSelectOpening } from '../ui/useSelectOpening';
+import { selectFallbackOption, withSelectLabels } from '../ui/selectLabel';
 
-export type AppSelectOption = { value: string | number; label: string; disabled?: boolean };
-const props = withDefaults(
-  defineProps<{
-    modelValue: any;
-    options: readonly AppSelectOption[];
-    disabled?: boolean;
-    invalid?: boolean;
-    placeholder?: string;
-    ariaLabel?: string;
-    id?: string;
-    beforeOpen?: () => Promise<boolean | void>;
-  }>(),
-  { disabled: false, placeholder: '请选择' },
-);
-const emit = defineEmits<{ 'update:modelValue': [value: any]; change: [value: any] }>();
-const root = ref<HTMLElement>();
-const loading = ref(false);
-const { trigger, menu, open, positioned, menuStyle, close, toggle: toggleMenu } = useAnchoredMenu(root);
-const selected = computed(() =>
-  props.options.find((option) => String(option.value) === String(props.modelValue ?? '')),
-);
-const label = computed(() => selected.value?.label ?? props.placeholder);
-
-async function toggle() {
-  if (props.disabled || loading.value) return;
-  if (!open.value && props.beforeOpen) {
-    loading.value = true;
-    try {
-      if ((await props.beforeOpen()) === false) return;
-    } finally {
-      loading.value = false;
-    }
-  }
-  await toggleMenu();
+export type AppSelectOption<Value extends string | number = string | number> = { value: Value; label: string; disabled?: boolean };
+const props = withDefaults(defineProps<{
+  modelValue: Value | null | undefined;
+  options: readonly AppSelectOption<Value>[];
+  disabled?: boolean;
+  clearable?: boolean;
+  invalid?: boolean;
+  placeholder?: string;
+  ariaLabel?: string;
+  labelledBy?: string;
+  id?: string;
+  beforeOpen?: () => Promise<boolean | void>;
+}>(), { disabled: false, clearable: false, placeholder: '请选择' });
+const emit = defineEmits<{ 'update:modelValue': [value: Value | '']; change: [value: Value | ''] }>();
+const selectedValue = computed(() => {
+  const option = props.options.find(option => String(option.value) === String(props.modelValue ?? ''));
+  return option ? option.value : props.modelValue === '' ? null : props.modelValue ?? null;
+});
+const { open, loading, updateShow } = useSelectOpening(() => props.disabled, () => props.beforeOpen);
+function choose(value: string | number | null) {
+  const selected = (value ?? '') as Value | '';
+  emit('update:modelValue', selected);
+  emit('change', selected);
 }
-
-function choose(option: AppSelectOption) {
-  if (option.disabled) return;
-  emit('update:modelValue', option.value);
-  emit('change', option.value);
-  close();
-  trigger.value?.focus({ preventScroll: true });
-}
-
-async function onTriggerArrow(event: KeyboardEvent) {
-  event.preventDefault();
-  if (!open.value) await toggle();
-  await nextTick();
-  const selected = menu.value?.querySelector<HTMLButtonElement>(
-    '.app-select-option[aria-selected="true"]:not(:disabled)',
-  );
-  const first = menu.value?.querySelector<HTMLButtonElement>('.app-select-option:not(:disabled)');
-  const target = selected ?? first;
-  target?.focus();
-}
-
-function onKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    close();
-    trigger.value?.focus({ preventScroll: true });
-    return;
-  }
-  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-  if (!menu.value?.contains(document.activeElement)) return;
-  const items = [
-    ...(menu.value?.querySelectorAll<HTMLButtonElement>('.app-select-option:not(:disabled)') ?? []),
-  ];
-  if (!items.length) return;
-  event.preventDefault();
-  const index = items.indexOf(document.activeElement as HTMLButtonElement);
-  items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
-}
-
-watch(
-  () => props.disabled,
-  (value) => {
-    if (value) close();
-  },
-);
 </script>
 
 <template>
-  <span ref="root" class="app-select">
-    <button
-      :id="id"
-      ref="trigger"
-      class="app-select-trigger"
-      type="button"
-      :disabled="disabled || loading"
-      :aria-label="ariaLabel"
-      :aria-invalid="invalid || undefined"
-      :aria-busy="loading"
-      aria-haspopup="listbox"
-      :aria-expanded="open"
-      @click.prevent="toggle"
-      @keydown.down="onTriggerArrow"
-      @keydown.up="onTriggerArrow"
-      @keydown.esc="close"
-    >
-      <span>{{ loading ? '正在加载…' : label }}</span>
-      <span class="app-select-chevron" aria-hidden="true" />
-    </button>
-    <Teleport to="body">
-      <div
-        v-if="open"
-        ref="menu"
-        class="app-select-menu"
-        role="listbox"
-        :style="menuStyle"
-        :class="{ 'is-positioned': positioned }"
-        @keydown="onKeyDown"
-      >
-        <div class="app-select-options">
-          <button
-            v-for="(option, index) in options"
-            :key="`${String(option.value)}-${index}`"
-            class="app-select-option"
-            type="button"
-            role="option"
-            :disabled="option.disabled"
-            :aria-selected="String(option.value) === String(modelValue ?? '')"
-            @click="choose(option)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </div>
-    </Teleport>
-  </span>
+  <NSelect
+    class="app-select"
+    :fallback-option="selectFallbackOption"
+    :aria-labelledby="labelledBy"
+    :value="selectedValue"
+    :options="withSelectLabels(options)"
+    :disabled="disabled"
+    :clearable="clearable"
+    :loading="loading"
+    :show="open"
+    :placeholder="placeholder"
+    :status="invalid ? 'error' : undefined"
+    :input-props="{ id, 'aria-label': ariaLabel, 'aria-labelledby': labelledBy, 'aria-invalid': invalid || undefined }"
+    @update:show="updateShow"
+    @update:value="choose"
+  />
 </template>

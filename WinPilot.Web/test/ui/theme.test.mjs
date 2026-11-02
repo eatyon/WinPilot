@@ -1,10 +1,13 @@
+import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { ref } from 'vue';
-import { accentOptions, accentPalettes, getAccentTokens } from '../../src/ui/themeColors.ts';
+import { computed, ref } from 'vue';
+import { darkTheme, lightTheme } from 'naive-ui';
+import { accentOptions, getAccentTokens } from '../../src/ui/themeColors.ts';
+import { elements, attribute, binding } from '../support/template.mjs';
 
 const properties = {
   text: '--accent-text', textHover: '--accent-text-hover',
@@ -12,34 +15,78 @@ const properties = {
   bg: '--accent-bg', border: '--accent-border', focusRing: '--accent-focus-ring',
 };
 
-test('toast messages center independently inside the viewport-centered stack', () => {
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  const stack = css.match(/\.toast-stack\s*\{([^}]+)\}/)?.[1];
-  assert.match(stack, /left:\s*50%/);
-  assert.match(stack, /transform:\s*translateX\(-50%\)/);
-  assert.match(stack, /justify-items:\s*center/);
+test('theme switching delegates component colors to the provider without changing native color-scheme', () => {
+  const theme = readFileSync(new URL('../../src/ui/theme.ts', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(theme, /style\.colorScheme|setProperty\(['"]color-scheme/);
+  assert.doesNotMatch(css + html, /(?:^|[;{\s])color-scheme\s*:/);
+  assert.match(theme, /window\.matchMedia\('\(prefers-color-scheme: dark\)'\)/);
+  assert.match(html, /@media \(prefers-color-scheme: dark\)[\s\S]*html:not\(\[data-theme="light"\]\)/);
 });
 
-test('invalid form controls retain danger borders without replacing the normal focus ring', () => {
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  const picker = readFileSync(new URL('../../src/components/AppPicker.css', import.meta.url), 'utf8');
-  const inputRule = '.field-control :is(input, textarea, select)[aria-invalid="true"]';
-  assert.ok(css.includes(inputRule));
-  assert.ok(css.indexOf(inputRule) > css.indexOf('.task-config-card .field-control textarea:focus'));
-  assert.ok(css.includes('.input-action:has(input[aria-invalid="true"]) :is(input, .input-action-button) { border-color: var(--danger-border); box-shadow: none; }'));
-  assert.ok(css.includes('.input-action:focus-within, .secret-input:focus-within { box-shadow: 0 0 0 2px var(--accent-focus-ring); }'));
-  assert.doesNotMatch(css, /box-shadow:[^;}]*var\(--danger-border\)|outline-color: var\(--danger-border\)/);
-  assert.ok(picker.includes('.app-select-trigger[aria-invalid="true"] { border-color: var(--danger-border); }'));
-  assert.doesNotMatch(picker, /outline-color: var\(--danger-border\)/);
+test('login and about gradients derive their tint from the active theme accent', () => {
+  const css = readFeatureStyles();
+  assert.match(css, /\.login-view\s*\{[^}]*var\(--brand-accent\) 12%, var\(--brand-canvas\)/);
+  assert.match(css, /\.n-card\.about-product-section[^\n]*var\(--brand-accent\) 12%, var\(--brand-surface\)/);
+  const brand = readFileSync(new URL('../../src/styles/brand.css', import.meta.url), 'utf8');
+  assert.match(brand, /--brand-accent:\s*var\(--accent-solid\)/);
+  assert.match(brand, /--brand-surface:\s*var\(--surface\)/);
+});
+
+test('help buttons use library keyboard focus styling', () => {
+  const source = readFileSync(new URL('../../src/components/HelpHint.vue', import.meta.url), 'utf8');
+  assert.match(source, /NButton/);
+  assert.doesNotMatch(source, /outline:|box-shadow:/);
+});
+
+test('appearance choices delegate radio keyboard navigation and focus to the library', () => {
+  const source = readFileSync(new URL('../../src/components/AppearanceSettingsDrawer.vue', import.meta.url), 'utf8');
+  assert.equal((source.match(/<NRadioGroup/g) ?? []).length, 1);
+  assert.match(source, /<NSwitch :value="themeMode === 'system'"/);
+  assert.match(source, /<NSwitch :value="resolvedTheme === 'dark'"/);
+  assert.match(source, /setAccent\(value as AccentColor\)/);
+  assert.doesNotMatch(source, /tabindex=|@keydown|type="radio"/);
+});
+
+test('loading, disabled and global focus visuals belong to the shared library', () => {
+  const css = readFeatureStyles();
+  assert.doesNotMatch(css, /\.button(?:[.:\s{]|-primary|-secondary|-danger)|\.is-pending/);
+  assert.doesNotMatch(css, /:where\(:focus-visible\)/);
+  const plugins = readFileSync(new URL('../../src/features/plugins/PluginsView.vue', import.meta.url), 'utf8');
+  const scan = elements(plugins, node => node.tag === 'NButton' && attribute(node, 'aria-label') === '重新扫描')[0];
+  assert.ok(scan);
+  assert.equal(binding(scan, 'loading'), 'showScanLoading');
+  assert.equal(binding(scan, 'disabled'), '(loading && !showScanLoading) || changingIds.size > 0');
+  assert.doesNotMatch(css, /safe-mode-button|safe-mode-lock-icon|safe-mode-brand-lock/);
+});
+
+test('toast messages use the shared library provider instead of a custom stack', () => {
+  const css = readFeatureStyles();
+  const provider = readFileSync(new URL('../../src/components/AppTheme.vue', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.toast-stack\s*\{/);
+  assert.match(provider, /<NMessageProvider placement="top" :duration="4200"/);
+});
+
+test('invalid form controls delegate their error state to the shared library', () => {
+  const css = readStylesheet(new URL('../../src/style.css', import.meta.url));
+  assert.doesNotMatch(css, /\.field-control|\.input-action/);
+  assert.doesNotMatch(css, /\.tag-search input|\.plugin-secret-input|\.text-input/);
+  const keyboard = readStylesheet(new URL('../../src/components/KeyboardKeyPicker.vue', import.meta.url));
+  assert.match(keyboard, /\.selected-keys\[aria-invalid="true"\]/);
   for (const name of ['AppSelect', 'AppMultiSelect']) {
     const source = readFileSync(new URL(`../../src/components/${name}.vue`, import.meta.url), 'utf8');
-    assert.match(source, /<button[\s\S]*?:aria-invalid="invalid \|\| undefined"/);
+    assert.match(source, /<NSelect/);
+    assert.ok(source.includes(':status="invalid ? \'error\' : undefined"'));
   }
 });
 
 function contrast(first, second) {
-  const luminance = hex => {
-    const rgb = hex.slice(1).match(/../g).map(value => parseInt(value, 16) / 255);
+  const luminance = color => {
+    if (/^#[\da-f]{3}$/i.test(color)) color = '#' + [...color.slice(1)].map(value => value.repeat(2)).join('');
+    const rgb = (color.startsWith('#')
+      ? color.slice(1).match(/../g).map(value => parseInt(value, 16))
+      : color.match(/[\d.]+/g).slice(0, 3).map(Number)).map(value => value / 255);
     const linear = rgb.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
     return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
   };
@@ -60,7 +107,7 @@ function fixture(saved = {}, dark = false) {
   const media = { matches: dark, addEventListener: (type, listener) => listeners.push(listener) };
   const context = {
     exports: {},
-    require: name => name === 'vue' ? { ref } : { accentPalettes, getAccentTokens },
+    require: name => name === 'vue' ? { computed, ref } : { accentOptions },
     document: { documentElement: root },
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     window: { matchMedia: () => media },
@@ -69,53 +116,50 @@ function fixture(saved = {}, dark = false) {
   return { subject: context.exports, root, values, storage, media, listeners };
 }
 
-test('all ten themes provide complete semantic colors with readable text and solid controls', () => {
-  assert.equal(Object.keys(accentPalettes).length, 10);
-  assert.deepEqual(accentOptions.map(option => option.value), Object.keys(accentPalettes));
+test('all ten choices provide mode-aware emphasis colors and a readable solid button color', () => {
+  assert.equal(accentOptions.length, 10);
   assert.equal(new Set(accentOptions.map(option => option.value)).size, 10);
   assert.equal(new Set(accentOptions.map(option => option.label)).size, 10);
-  for (const [color, palette] of Object.entries(accentPalettes)) {
+  for (const option of accentOptions) {
+    assert.ok(contrast(option.color, '#fff') >= 4.5, `${option.value} primary button`);
     for (const mode of ['light', 'dark']) {
-      const tokens = getAccentTokens(color, mode);
-      assert.deepEqual(Object.keys(tokens).sort(), Object.keys(properties).sort());
-      assert.equal(tokens.contrast, '#ffffff');
-      assert.ok(contrast(tokens.solid, tokens.contrast) >= 4.5, `${color} ${mode} button`);
-      assert.ok(contrast(tokens.solidHover, tokens.contrast) >= 4.5, `${color} ${mode} hover`);
-      assert.ok(contrast(tokens.solidHover, tokens.contrast) > contrast(tokens.solid, tokens.contrast));
-      const backgrounds = mode === 'light'
-        ? ['#f5f6f8', '#ffffff', '#f8f9fb', '#f0f4f8', tokens.bg]
-        : ['#171b21', '#20262e', '#1b2129', '#29313b', tokens.bg];
-      for (const background of backgrounds) {
-        assert.ok(contrast(tokens.text, background) >= 4.5, `${color} ${mode} text on ${background}`);
-        assert.ok(contrast(tokens.textHover, background) >= 4.5, `${color} ${mode} hovered text on ${background}`);
-        assert.ok(contrast(tokens.focusRing, background) >= 3, `${color} ${mode} focus on ${background}`);
+      const tokens = getAccentTokens(option.value, mode);
+      const common = (mode === 'dark' ? darkTheme : lightTheme).common;
+      assert.deepEqual(Object.keys(tokens).sort(), ['solid', 'text', 'textHover']);
+      assert.equal(tokens.solid, option.color);
+      assert.notEqual(tokens.text, tokens.textHover);
+      for (const background of [common.bodyColor, common.cardColor]) {
+        assert.ok(contrast(tokens.text, background) >= 4.5, `${option.value} ${mode} emphasis`);
+        assert.ok(contrast(tokens.textHover, background) >= 4.5, `${option.value} ${mode} hover`);
       }
     }
-    assert.notEqual(palette.light.text, palette.dark.text);
+    assert.notEqual(getAccentTokens(option.value, 'light').text, getAccentTokens(option.value, 'dark').text);
+  }
+  for (const mode of ['light', 'dark']) {
+    assert.deepEqual(getAccentTokens('unknown', mode), getAccentTokens(accentOptions[0].value, mode));
   }
 });
 
-test('host and hosted page views share a low-specificity theme focus ring', () => {
-  for (const file of ['../../src/style.css', '../../src/features/plugins/page/PluginPageUi.css']) {
-    const css = readFileSync(new URL(file, import.meta.url), 'utf8');
-    assert.match(css, /:where\(:focus-visible\)\s*\{\s*outline: 2px solid var\(--accent-focus-ring\); outline-offset: 2px;/);
-  }
+test('host and plugin Vue pages delegate focus to library controls', () => {
+  const hostCss = readFeatureStyles();
+  assert.doesNotMatch(hostCss, /:where\(:focus-visible\)/);
+  const renderer = readFileSync(new URL('../../src/features/plugins/page/PluginPageRenderer.vue', import.meta.url), 'utf8');
+  assert.doesNotMatch(renderer, /attachShadow|AppPicker|controlStyles/);
 });
 
-test('theme choices persist and all semantic tokens follow explicit and system modes', () => {
+test('theme choices persist while only the provider writes color variables', () => {
   const f = fixture({ 'winpilot.theme': 'system', 'winpilot.accent': 'violet' }, true);
   f.subject.initializeTheme();
   f.subject.initializeTheme();
   assert.equal(f.listeners.length, 1);
   const theme = f.subject.useTheme();
   const check = (color, mode) => {
-    for (const [token, property] of Object.entries(properties)) {
-      assert.equal(f.values.get(property), getAccentTokens(color, mode)[token]);
-    }
-    assert.equal(f.values.size, 8);
+    assert.equal(theme.accentColor.value, color);
+    assert.equal(theme.resolvedTheme.value, mode);
+    assert.equal(f.values.size, 0);
   };
   check('violet', 'dark');
-  for (const color of Object.keys(accentPalettes)) {
+  for (const { value: color } of accentOptions) {
     theme.setAccent(color);
     for (const mode of ['light', 'dark']) {
       theme.setTheme(mode);
@@ -142,7 +186,7 @@ test('invalid stored theme and inherited palette keys fall back to defaults', ()
     f.subject.initializeTheme();
     assert.equal(f.subject.useTheme().accentColor.value, 'blue');
     assert.equal(f.subject.useTheme().themeMode.value, 'system');
-    assert.equal(f.values.get('--accent-solid'), accentPalettes.blue.light.solid);
+    assert.equal(f.values.size, 0);
   }
 });
 
@@ -164,35 +208,40 @@ test('host sources only reference defined semantic accent and status variables',
   roots.forEach(checkDirectory);
 });
 
-test('secret fields share one focus ring across the input and visibility button', () => {
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.secret-input\s*\{[^}]*border-radius:\s*var\(--radius-sm\)/);
-  assert.match(css, /\.secret-input:focus-within\s*\{\s*box-shadow:\s*0 0 0 2px var\(--accent-focus-ring\)/);
-  assert.match(css, /\.secret-input:focus-within input,\s*\.secret-input:focus-within \.secret-toggle\s*\{[^}]*outline:\s*none;\s*box-shadow:\s*none;/);
-  assert.ok(!css.includes('.plugin-secret-input > .text-input:focus'));
+test('secret fields use the library password control without a second custom focus ring', () => {
+  const css = readFeatureStyles();
+  assert.doesNotMatch(css, /\.secret-input|\.secret-toggle|\.login-password-input/);
+  for (const file of ['auth/LoginView.vue', 'plugins/PluginSettingField.vue', 'settings/tabs/SecuritySettings.vue']) {
+    const source = readFileSync(new URL('../../src/features/' + file, import.meta.url), 'utf8');
+    assert.match(source, /<AppPasswordInput/);
+  }
+  const password = readFileSync(new URL('../../src/components/AppPasswordInput.vue', import.meta.url), 'utf8');
+  assert.match(password, /type="password" show-password-on="click"/);
+  assert.match(password, /#password-invisible-icon/);
+  assert.match(password, /#password-visible-icon/);
+  assert.match(password, /aria-label="显示密码"/);
+  assert.match(password, /aria-label="隐藏密码"/);
+  assert.doesNotMatch(password, /visible =|visible\.value|@click/);
+  assert.match(password, /attr-type="button"/);
 });
 
-test('status text and backgrounds stay readable in both explicit color modes', () => {
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+test('status colors follow library tokens rather than handwritten light and dark palettes', () => {
+  const css = readFeatureStyles();
   const taskWarning = css.match(/\.task-warning\s*\{([^}]+)\}/)[1];
-  assert.match(taskWarning, /color:\s*var\(--warning-text\);/);
+  assert.doesNotMatch(taskWarning, /color:/);
+  const tasks = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  assert.equal((tasks.match(/<NText\s+type="warning"\s+class="task-warning"/g) ?? []).length, 2);
   assert.ok(!taskWarning.includes('color-mix'));
-  for (const mode of ['light', 'dark']) {
-    const block = css.match(new RegExp(`\\[data-theme="${mode}"\\] \\{([^}]+)\\}`))[1];
-    const values = Object.fromEntries([...block.matchAll(/(--[a-z-]+):\s*(#[a-f0-9]+)/g)].map(match => [match[1], match[2]]));
-    for (const state of ['success', 'warning', 'danger']) {
-      const text = values[`--${state}-text`];
-      const background = values[`--${state}-bg`];
-      assert.ok(text && background, `${mode} ${state} definitions`);
-      for (const surface of [background, values['--canvas'], values['--surface'], values['--surface-hover']]) {
-        assert.ok(contrast(text, surface) >= 4.5, `${mode} ${state} on ${surface}`);
-      }
-    }
+  assert.doesNotMatch(css, /--(?:danger|success|warning)-[a-z-]+:\s*#/);
+  const provider = readFileSync(new URL('../../src/components/AppThemeTokens.vue', import.meta.url), 'utf8');
+  for (const [state, token] of [['success', 'successColor'], ['warning', 'warningColor'], ['danger', 'errorColor']]) {
+    assert.ok(provider.includes(`'--${state}-text': '${token}'`));
+    assert.ok(provider.includes(`'--${state}-bg': 'hoverColor'`));
   }
 });
 
 test('keyboard page spacing belongs to the desktop container rather than the shared picker', () => {
-  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const styles = readFeatureStyles();
   const desktop = readFileSync(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url), 'utf8');
   const pickerStyle = styles.match(/\.virtual-keyboard\s*\{([^}]*)\}/)?.[1];
   assert.ok(pickerStyle);
@@ -204,12 +253,16 @@ test('keyboard page spacing belongs to the desktop container rather than the sha
   assert.doesNotMatch(styles, /\.task-config-card[^{}]*\.(?:virtual-keyboard|keyboard-help)\s*\{/);
 });
 
-test('field validation messages share a small regular-weight style regardless of label inheritance', () => {
-  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  const errorStyle = styles.match(/\.field-error\s*\{([^}]*)\}/)?.[1];
-  assert.ok(errorStyle);
-  assert.match(errorStyle, /font-size:\s*12px;/);
-  assert.match(errorStyle, /font-weight:\s*400;/);
+test('field validation appearance belongs to library form feedback rather than a handwritten error class', () => {
+  const styles = readFeatureStyles();
+  assert.doesNotMatch(styles, /\.field-error\s*\{/);
+  for (const file of ['tasks/TasksView.vue', 'tasks/CronEditor.vue', 'plugins/PluginSettingField.vue']) {
+    const source = readFileSync(new URL(`../../src/features/${file}`, import.meta.url), 'utf8');
+    assert.match(source, /<NFormItem/);
+    assert.match(source, /:show-feedback=/);
+    assert.match(source, /:validation-status=/);
+    assert.doesNotMatch(source, /class="field-error"/);
+  }
 });
 
 test('host styles do not reference undefined CSS variables without fallbacks', () => {
@@ -222,9 +275,12 @@ test('host styles do not reference undefined CSS variables without fallbacks', (
     }
   };
   [new URL('../../src/', import.meta.url)].forEach(collect);
-  const defined = new Set(Object.values(properties));
+  const card = readFileSync(new URL('../../node_modules/naive-ui/es/card/src/Card.mjs', import.meta.url), 'utf8');
+  const cardPadding = ['--n-padding-top', '--n-padding-left', '--n-padding-bottom'];
+  for (const name of cardPadding) assert.ok(card.includes(`"${name}":`));
+  const defined = new Set([...Object.values(properties), '--n-height', ...cardPadding]);
   for (const [file, source] of sources) {
-    for (const match of source.matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)) defined.add(match[1]);
+    for (const match of source.matchAll(/['"]?(--[a-z][a-z0-9-]*)['"]?\s*:/g)) defined.add(match[1]);
   }
   for (const [file, source] of sources) {
     for (const match of source.matchAll(/var\((--[a-z0-9-]+)\)/g)) {

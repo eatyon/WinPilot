@@ -1,12 +1,14 @@
+import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { reactive, computed, ref } from 'vue';
 import { loadScriptModule } from '../support/scriptModule.mjs';
-import * as keyboardLayout from '../../src/features/desktop/keyboardLayout.ts';
+import * as keyboardLayout from '../../src/ui/keyboardLayout.ts';
+import postcss from 'postcss';
 
-const component = new URL('../../src/features/desktop/KeyboardKeyPicker.vue', import.meta.url);
+const component = new URL('../../src/components/KeyboardKeyPicker.vue', import.meta.url);
 const componentSource = readFileSync(component, 'utf8');
 const script = loadScriptModule(component, 'isKeyDisabled,toggle,expanded,selected,toggleExpanded');
 
@@ -48,17 +50,19 @@ test('only task pickers opt into collapsing while the desktop keeps its keyboard
   const tasks = readFileSync(new URL('../../src/features/tasks/TaskActionEditor.vue', import.meta.url), 'utf8');
   const desktop = readFileSync(new URL('../../src/features/desktop/DesktopView.vue', import.meta.url), 'utf8');
   assert.match(source, /collapsible: false/);
-  assert.match(source, /v-if="!collapsible \|\| expanded" class="physical-keyboard"/);
+  assert.match(source, /<NCollapseTransition :show="!collapsible \|\| expanded"[^>]*>\s*<div class="physical-keyboard">/);
+  assert.match(source, /:inert="collapsible && !expanded \|\| undefined"/);
   assert.match(source, /v-if="collapsible"[\s\S]*?:aria-expanded="expanded"/);
   assert.match(tasks, /<KeyboardKeyPicker[^>]*\scollapsible\s*\/>/);
   assert.doesNotMatch(desktop, /<KeyboardKeyPicker[^>]*\bcollapsible\b/);
+  assert.match(desktop, /<NCollapseTransition :show="keyboardEnabled && !safeModeEnabled"[^>]*>\s*<div class="keyboard-panel-controls">/);
 });
 
-test('collapse controls reuse the picker arrow without a tooltip or visible text', () => {
+test('collapse controls use library chevrons without a tooltip or visible text', () => {
   const source = componentSource;
   assert.doesNotMatch(source, /:title=/);
   assert.match(source, /:aria-label="expanded \? '收起键盘' : '展开键盘'"/);
-  assert.ok(source.includes('<span class="app-select-chevron" aria-hidden="true" />'));
+  assert.ok(source.includes('<AppIcon :name="expanded ? \'chevron-up\' : \'chevron-down\'" />'));
   assert.ok(!source.includes("{{ expanded ? '收起' : '展开' }}"));
 });
 
@@ -81,9 +85,19 @@ test('the full-bar toggle expands directly while selected keys only remove thems
   assert.equal(desktop.expanded.value, false);
 });
 
+test('the empty key selection reserves one key row without imposing a fixed height', () => {
+  const styles = readStylesheet(new URL('../../src/components/KeyboardKeyPicker.vue', import.meta.url));
+  const row = styles.match(/\.selected-key-values\s*\{([^}]+)\}/)?.[1] ?? '';
+  assert.match(row, /min-height: var\(--control-height\)/);
+  assert.match(row, /flex-wrap: wrap/);
+  assert.doesNotMatch(row, /(?:^|;)\s*height:/);
+  const collapsible = styles.match(/\.selected-keys\.is-collapsible\s*\{([^}]+)\}/)?.[1] ?? '';
+  assert.doesNotMatch(collapsible, /min-height/);
+});
+
 test('the toggle covers the selection bar while selected key buttons remain independently clickable', () => {
-  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(styles, /\.keyboard-expand-toggle\s*\{[^}]*position: absolute;[^}]*inset: 0;/);
+  const styles = readStylesheet(new URL('../../src/components/KeyboardKeyPicker.vue', import.meta.url));
+  assert.match(styles, /\.keyboard-expand-toggle\.n-button\s*\{[^}]*position: absolute;[^}]*inset: 0;/);
   assert.match(styles, /\.selected-keys\.is-collapsible \.selected-key-values\s*\{[^}]*pointer-events: none;/);
   assert.match(styles, /\.selected-keys\.is-collapsible \.selected-key\s*\{[^}]*pointer-events: auto;/);
 });
@@ -137,12 +151,27 @@ test('all picker instances display fixed modifier order without mutating their i
 
 test('keyboard triggers use the same picker help and typography as keyboard actions', () => {
   const tasks = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
-  const styles = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(tasks, /class="task-trigger-keyboard" data-task-field="keys"/);
+  const styles = readFeatureStyles();
+  assert.match(tasks, /class="form-field task-trigger-keyboard"[\s\S]*?data-task-field="keys"/);
   const picker = tasks.match(/<KeyboardKeyPicker[^>]*v-model="editor.trigger.keys"[^>]*\/>/)?.[0];
   assert.ok(picker);
   assert.doesNotMatch(picker, /\bhelp=/);
-  assert.match(styles, /\.task-trigger-process, \.task-trigger-extension, \.task-trigger-keyboard\s*\{\s*display: grid; gap: 12px; margin-top: 12px;/);
+  const css = postcss.parse(styles);
+  function declarations(selector) {
+    const values = {};
+    css.walkRules(rule => {
+      if (rule.selectors.includes(selector)) rule.walkDecls(decl => { values[decl.prop] = decl.value; });
+    });
+    return values;
+  }
+  for (const selector of ['.task-trigger-process', '.task-trigger-fields']) {
+    assert.equal(declarations(selector).display, 'grid');
+  }
+  assert.equal(declarations('.task-trigger-fields').gap, '12px');
+  for (const selector of ['.task-trigger-process', '.task-trigger-extension']) {
+    assert.equal(declarations(selector)['margin-top'], '12px');
+  }
+  assert.match(styles, /\.task-trigger-keyboard\s*\{\s*margin-top: 12px;/);
 });
 
 test('desktop and task feature names consistently use key monitoring and simulation', () => {
@@ -152,8 +181,9 @@ test('desktop and task feature names consistently use key monitoring and simulat
   assert.match(desktop, /启用按键模拟/);
   assert.match(models, /\['Keyboard', '按键模拟'\]/);
   assert.match(tasks, /value: 'Keyboard', label: '按键监听'/);
-  assert.match(tasks, /按键模拟 ·/);
-  assert.doesNotMatch(desktop + tasks + models, /键盘(?:模拟|监听)/);
+  const presentation = readFileSync(new URL('../../src/features/tasks/taskPresentation.ts', import.meta.url), 'utf8');
+  assert.match(presentation, /按键模拟 ·/);
+  assert.doesNotMatch(desktop + tasks + models + presentation, /键盘(?:模拟|监听)/);
 });
 
 test('global disabling still prevents removing selected keys', () => {
@@ -180,5 +210,5 @@ test('direct overflow attempts retain the existing three-key guard and limit eve
 test('all four physical keyboard groups use the same per-key disabled condition', () => {
   const source = componentSource;
   assert.equal([...source.matchAll(/:disabled="isKeyDisabled\(key\)"/g)].length, 4);
-  assert.match(source, /class="selected-key" :disabled="disabled"/);
+  assert.match(source, /class="selected-key"\s+:disabled="disabled"/);
 });

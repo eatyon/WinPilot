@@ -1,78 +1,107 @@
+import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
+import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
+import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import { readFileSync } from 'node:fs';
 import * as vue from 'vue';
+import * as programList from '../../src/features/programs/useProgramList.ts';
+import { elements, attribute, event } from '../support/template.mjs';
 import * as apiErrors from '../support/apiErrors.mjs';
+import { parse } from '@vue/compiler-sfc';
+
+test('launch path places the required mark before its help entry', () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  assert.match(source, /:show-require-mark="false"/);
+  assert.match(source, /程序 \/ 脚本路径<span class="launch-path-required" aria-hidden="true">&nbsp;\*<\/span><\/span>\s*<HelpHint/);
+  assert.match(source, /'aria-required': true/);
+  assert.match(source, /\.launch-path-label \{ gap: 6px; \}/);
+  assert.match(source, /\.launch-path-required \{ color: var\(--n-asterisk-color, var\(--danger-text\)\); \}/);
+});
+
+test('short confirmations use dialog presets without a full-height content scrollbar', () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const modals = [...source.matchAll(/<NModal\b[\s\S]*?<\/NModal>/g)].map(([modal]) => modal);
+  assert.equal(modals.length, 4);
+  for (const modal of modals) {
+    if (modal.includes('v-if="processUsageTarget"')) {
+      assert.match(modal, /content-scrollable/);
+      assert.match(modal, /preset="card"/);
+      assert.match(modal, /class="app-detail-dialog"/);
+      assert.match(modal, /<template #footer>/);
+    } else {
+      assert.doesNotMatch(modal, /content-scrollable/);
+      assert.match(modal, /preset="dialog"/);
+      assert.match(modal, /<template #action>/);
+    }
+  }
+});
 
 test('mobile query controls use a full-width user field and one button row without desktop overrides', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  assert.ok(source.includes('class="program-actions process-query-actions"'));
+  assert.ok(source.includes('class="content-actions process-query-actions"'));
   assert.ok(source.includes("isQuerying ? '查询中' : '查询'"));
-  const mobile = source.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
+  const scoped = parse(source).descriptor.styles.filter(style => style.scoped).map(style => style.content).join('\n');
+  const mobile = scoped.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
   assert.match(mobile, /\.process-query-actions \.user-select\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*flex:\s*0 0 100%/);
-  assert.match(mobile, /\.process-query-actions \.button\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*nowrap/);
-  assert.equal(source.replace(mobile, '').includes('.process-query-actions .'), false);
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.program-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);
-  assert.match(css, /\.program-panel-header \.program-actions \.button\s*\{\s*flex:\s*1/);
+  assert.match(mobile, /\.process-query-actions \.program-button\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*nowrap/);
+  assert.equal(scoped.replace(mobile, '').includes('.process-query-actions .'), false);
+  const css = readStylesheet(new URL('../../src/styles/components.css', import.meta.url));
+  assert.match(css, /\.content-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);
+  assert.match(mobile, /\.content-actions \.program-button[^{}]*\{\s*flex:\s*1/);
 });
 
 test('tag controls remain mounted and disable by the full list rather than search results', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
   assert.match(source, /<div class="tag-controls">/);
   assert.doesNotMatch(source, /<div v-if="tags.length" class="tag-controls">/);
-  assert.match(source, /<input v-model="tagSearch"[^>]*:disabled="!tags.length"/);
-  assert.match(source, /:disabled="safeModeEnabled \|\| !tags.length"\s*:title="safeModeEnabled \? safeModeMessage : undefined"\s*:aria-pressed="managingTags"/);
-  assert.match(css, /\.programs-view \.tag-controls \.button:disabled[^{}]*\{[^}]*background:\s*var\(--surface-subtle\);[^}]*color:\s*var\(--text-subtle\)/);
+  assert.match(source, /<NInput\s+v-model:value="tagSearch"[^>]*:disabled="!tags.length"/);
+  assert.doesNotMatch(source, /safeModeMessage|safe-mode-lock-icon/);
+  assert.match(source, /:disabled="safeModeEnabled \|\| !tags.length"\s*:aria-pressed="managingTags"/);
+  assert.match(source, /:type="managingTags \? 'primary' : 'default'"/);
 });
 
 test('tag paths appear beneath their names only in management mode', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  assert.match(source, /<div class="tag-info">\s*<strong>\{\{ tag.name \}\}<\/strong>\s*<small v-if="managingTags && !safeModeEnabled" :title="tag.programPath">\{\{ tag.programPath \}\}<\/small>\s*<\/div>/);
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(source, /<div class="tag-info">\s*<strong>\{\{ tag.name \}\}<\/strong>\s*<small v-if="managingTags && !safeModeEnabled">\{\{ tag.programPath \}\}<\/small>\s*<\/div>/);
+  const css = readFeatureStyles();
   assert.match(css, /\.tag-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/);
   assert.match(css, /\.tag-info\s*\{[^}]*display:\s*grid;[^}]*min-width:\s*0/);
   assert.match(css, /\.tag-row small\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap/);
   assert.match(css, /\.tag-row strong\s*\{[^}]*font-size:\s*16px/);
   assert.match(source, /\.tag-controls\s*\{[^}]*width:\s*min\(100%, 320px\)/);
-  const mobile = source.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
+  const scoped = parse(source).descriptor.styles.filter(style => style.scoped).map(style => style.content).join('\n');
+  const mobile = scoped.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
   assert.match(mobile, /\.tag-info small\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere/);
   assert.match(mobile, /\.tag-controls\s*\{\s*width:\s*100%/);
 });
 
 test('process search appears with query results and uses the tag search font', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  assert.match(source, /<template v-if="hasQueried">\s*<div class="program-query-bar">/);
-  assert.match(source, /<input v-model="programSearch"[^>]*aria-label="搜索进程名"/);
+  assert.doesNotMatch(source, /用户列表加载失败/);
+  assert.match(source, /queryError \? '无法加载进程列表' : '请选择用户后查询进程'/);
+  assert.match(source, /<template v-else-if="hasQueried">\s*<div class="program-query-bar">/);
+  assert.match(source, /<NInput\s+v-model:value="programSearch"[^>]*'aria-label': '搜索进程名'/);
   assert.equal(source.includes(':disabled="!hasQueried"'), false);
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.program-search input\s*\{[^}]*font-size:\s*14px;[^}]*font-weight:\s*400/);
-  assert.match(css, /\.tag-search input\s*\{[^}]*font-size:\s*14px/);
+  assert.match(source, /<NInput\s+v-model:value="tagSearch"/);
 });
 
-test('all pagination buttons share disabled styling and mobile program pagination follows files', () => {
+test('programs and files delegate page navigation and boundary controls to library pagination', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
   const files = readFileSync(new URL('../../src/features/files/FilesView.vue', import.meta.url), 'utf8');
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.pagination-actions \.button:disabled[^{}]*\{[^}]*background:\s*var\(--surface-subtle\);[^}]*color:\s*var\(--text-subtle\)/);
-  assert.match(source, /:disabled="currentPage === 1"/);
-  assert.match(source, /:disabled="currentPage === pageCount"/);
-  assert.match(files, /:disabled="page === 1"/);
-  assert.match(files, /:disabled="page === pageCount"/);
-  const mobile = source.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
-  assert.match(mobile, /\.programs-view \.program-pagination\s*\{[^}]*flex-direction:\s*row/);
-  assert.match(mobile, /\.programs-view \.page-size-control\s*\{[^}]*grid-template-columns:\s*auto 64px/);
-  assert.match(mobile, /\.programs-view \.pagination-actions\s*\{[^}]*display:\s*flex/);
-  assert.match(mobile, /\.programs-view \.pagination-actions \.button\s*\{[^}]*width:\s*auto;[^}]*min-width:\s*68px/);
+  const css = readFeatureStyles();
+  assert.match(source, /<NPagination v-model:page="currentPage" :page-count="pageCount" simple aria-label="进程分页"/);
+  assert.match(files, /<NPagination v-model:page="page" :page-count="pageCount" simple aria-label="文件分页"/);
+  assert.doesNotMatch(source + files, /@click="(?:currentPage|page)(?:\+\+|--)"/);
+  assert.doesNotMatch(css, /program-pagination|pagination-actions|page-size-control/);
 });
 
 async function fixture() {
   const code = loadScriptModule(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url),
-    'launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, groups, selectedUserName, tagName, pendingActions, launchFormError, pageError, editTag, cancelTagEdit, editingTagName, launchPanel, programPath, argumentsText, workingDirectory, runElevated, silent, launchFormMessage, managingTags, toggleTagManagement, tagDeleteTarget, confirmDeleteTag, confirmClose, processCloseTarget, isClosing, filteredGroups, programSearch, targetForGroup, currentPage, pageSize, expandedGroups, toggleGroup, resultSummary, groupDetailCount');
+'tagDeleteTargetModal, processUsageTargetModal, launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, programList, selectedUserName, tagName, pendingActions, launchFormError, pageError, editTag, cancelTagEdit, editingTagName, launchPanel, programPath, argumentsText, workingDirectory, runElevated, silent, managingTags, toggleTagManagement, tagDeleteTarget, confirmDeleteTag, confirmClose, processCloseTarget, isClosing, filteredGroups, programSearch, targetForGroup, currentPage, pageSize, expandedGroups, toggleGroup, resultSummary, queryError, usageError, groupDetailCount, retryPage');
   let mounted;
   let unmount;
   const requests = [];
@@ -81,7 +110,10 @@ async function fixture() {
   const context = {
     exports: {}, AbortController,
     require: name => {
-      if (name === 'vue') return { ...vue, onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
+      if (name.endsWith('/useDelayedLoading')) return delayedLoading;
+      if (name.endsWith('/useModalState')) return modalStateModule;
+      if (name === './useProgramList') return programList;
+      if (name === 'vue') return { ...vue, useId: () => 'programs-test', onMounted: callback => { mounted = callback; }, onBeforeUnmount: callback => { unmount = callback; } };
       if (name.endsWith('/client')) return { ...apiErrors,
         apiFetch: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
         isAbortError: error => error?.name === 'AbortError', userErrorMessage: error => error.message,
@@ -93,6 +125,7 @@ async function fixture() {
   };
   const scope = vue.effectScope();
   scope.run(() => runInNewContext(code, context));
+  context.exports.groups = context.exports.programList.groups;
   mounted();
   requests[0].resolve({ ok: true, json: async () => [] });
   requests[1].resolve({ ok: true, json: async () => [{ userName: 'User', isCurrentUser: true }] });
@@ -102,9 +135,60 @@ async function fixture() {
   return { subject: context.exports, requests, toasts, safeModeEnabled, dispose: () => { unmount(); scope.stop(); } };
 }
 
+test('page retry reloads failed resources or repeats the process query', async () => {
+  const f = await fixture();
+  try {
+    f.subject.pageError.value = 'load failed';
+    const resources = f.subject.retryPage();
+    assert.equal(f.subject.pageError.value, 'load failed');
+    assert.equal(f.requests.length, 2);
+    f.requests.find(request => request.url.endsWith('/tags')).resolve({ ok: true, json: async () => [] });
+    f.requests.find(request => request.url.endsWith('/users')).resolve({ ok: true, json: async () => [{ userName: 'User', isCurrentUser: true }] });
+    await resources;
+    assert.equal(f.subject.pageError.value, '');
+    f.requests.length = 0;
+    f.subject.queryError.value = 'query failed';
+    const query = f.subject.retryPage();
+    assert.equal(f.requests.length, 1);
+    assert.match(f.requests[0].url, /userName=User/);
+    f.requests[0].resolve({ ok: true, json: async () => [] });
+    await query;
+    assert.equal(f.subject.queryError.value, '');
+  } finally {
+    f.dispose();
+  }
+});
+
+test('query failure has its own error state until retry succeeds or the list is collapsed', async () => {
+  const f = await fixture();
+  try {
+    f.subject.hasQueried.value = true;
+    const failed = f.subject.queryPrograms();
+    f.requests.at(-1).reject(new Error('query failed'));
+    await failed;
+    assert.equal(f.subject.queryError.value, 'query failed');
+    f.subject.pageError.value = '';
+    assert.equal(f.subject.queryError.value, 'query failed');
+    const retry = f.subject.queryPrograms();
+    assert.equal(f.subject.queryError.value, 'query failed');
+    assert.equal(f.subject.isQuerying.value, true);
+    f.requests.at(-1).resolve({ ok: true, json: async () => [] });
+    await retry;
+    assert.equal(f.subject.queryError.value, '');
+    assert.equal(f.subject.isQuerying.value, false);
+    f.subject.queryError.value = 'query failed';
+    f.subject.collapsePrograms();
+    assert.equal(f.subject.queryError.value, '');
+  } finally { f.dispose(); }
+});
+
 test('tag management is opt-in, resets on leaving and is locked by safe mode', async () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  assert.ok(source.includes('<button class="button button-secondary" type="button" @click="tagLaunchTarget = tag">启动</button>'));
+  const launchButton = elements(source, node => node.tag === 'NButton' && event(node, 'click') === 'tagLaunchTargetModal.open(tag)')[0];
+  assert.ok(launchButton);
+  assert.equal(attribute(launchButton, 'type'), 'default');
+  assert.equal(attribute(launchButton, 'attr-type'), 'button');
+  assert.ok(launchButton.children.some(node => node.type === 2 && node.content.trim() === '启动'));
   const f = await fixture();
   try {
     assert.equal(f.subject.managingTags.value, false);
@@ -144,6 +228,8 @@ test('deleting the last tag exits management while remaining tags keep managemen
       f.requests[1].resolve({ ok: true, json: async () => remaining });
       await deleting;
       assert.equal(f.subject.managingTags.value, remaining.length > 0);
+      assert.equal(f.subject.tagDeleteTargetModal.show, false);
+      f.subject.tagDeleteTargetModal.afterLeave();
       assert.equal(f.subject.tagDeleteTarget.value, undefined);
       assert.equal(f.toasts.at(-1).text, '标签已删除');
     } finally { f.dispose(); }
@@ -170,10 +256,11 @@ test('process ending selects the method from the target and prevents duplicate r
 
 test('protected members disable ending the group without blocking other members', async () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
   assert.match(source, /:disabled="!processUsageTarget.canEnd"/);
   assert.match(source, /:disabled="isClosing \|\| !processCloseTarget.canEnd"/);
-  assert.match(css, /\.programs-view \.tag-controls \.button:disabled, \.program-end-button:disabled:not\(\.is-pending\)/);
+  assert.doesNotMatch(css, /\.program-end-button:disabled/);
+  assert.match(source, /<NButton[^>]*type="error"[^>]*:disabled="!processUsageTarget.canEnd"/);
   const f = await fixture();
   try {
     const allowed = { processId: 1, canEnd: true };
@@ -213,6 +300,7 @@ test('program launch accepts drive and network absolute paths', async () => {
       request.resolve({ ok: true });
       await pending;
       assert.equal(f.subject.launchFormError.value, '');
+      assert.deepEqual(f.toasts.at(-1), { text: '程序已启动', type: 'success' });
     }
   } finally { f.dispose(); }
 });
@@ -247,6 +335,7 @@ test('repeated program validation keeps the error visible and success clears it'
       }
       await pending;
       assert.equal(f.subject.launchFormError.value, '');
+      assert.deepEqual(f.toasts.at(-1), { text: operation === 'launch' ? '程序已启动' : '标签已保存', type: 'success' });
     } finally { stop?.(); f.dispose(); }
   }
 });
@@ -292,12 +381,10 @@ test('editing launch fields clears validation feedback without changing other pa
     ]) {
       f.subject.launchFormError.value = '配置无效';
       f.subject.pageError.value = '列表读取失败';
-      f.subject.launchFormMessage.value = '程序已启动';
       f.subject[field].value = value;
       await vue.nextTick();
       assert.equal(f.subject.launchFormError.value, '', field);
       assert.equal(f.subject.pageError.value, '列表读取失败');
-      assert.equal(f.subject.launchFormMessage.value, '程序已启动');
     }
     assert.equal(f.requests.length, 0);
   } finally { f.dispose(); }
@@ -356,7 +443,7 @@ test('tag editing scrolls without focusing, cancel and save reset the form, and 
     f.subject.launchPanel.value = { scrollIntoView() { scrolls++; }, focus() { assert.fail('editing must not focus'); } };
     const tag = { name: 'Tag', programPath: 'C:/app.exe', arguments: '--test', workingDirectory: 'C:/', runElevated: true, silent: true };
     function assertFormCleared() {
-      for (const field of ['tagName', 'programPath', 'argumentsText', 'workingDirectory', 'launchFormError', 'launchFormMessage'])
+      for (const field of ['tagName', 'programPath', 'argumentsText', 'workingDirectory', 'launchFormError'])
         assert.equal(f.subject[field].value, '', field);
       assert.equal(f.subject.runElevated.value, false);
       assert.equal(f.subject.silent.value, false);
@@ -405,6 +492,8 @@ test('closing a usage dialog prevents a late result from repopulating it', async
     assert.equal(f.requests[0].init.signal.aborted, true);
     f.requests[0].resolve({ ok: true, json: async () => ({ cpuPercent: 1 }) });
     await pending;
+    assert.equal(f.subject.processUsageTargetModal.show, false);
+    f.subject.processUsageTargetModal.afterLeave();
     assert.equal(f.subject.processUsageTarget.value, undefined);
     assert.equal(f.subject.processUsage.value, undefined);
     assert.equal(f.subject.isUsageLoading.value, false);
@@ -412,6 +501,11 @@ test('closing a usage dialog prevents a late result from repopulating it', async
 });
 
 test('usage results remain until the dialog closes and a new dialog starts empty', async () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const dialog = source.split('title="进程占用情况"')[1].split('</NModal>')[0];
+  assert.equal(dialog.match(/<NSkeleton v-if="isUsageLoading && !processUsage && !usageError"/g).length, 3);
+  assert.match(dialog, /class="usage-grid" :aria-busy="isUsageLoading"/);
+  assert.doesNotMatch(dialog, /AppLoading/);
   const f = await fixture();
   try {
     const target = { name: 'App', processIds: [1] };
@@ -425,6 +519,9 @@ test('usage results remain until the dialog closes and a new dialog starts empty
     assert.equal(f.subject.isUsageLoading.value, false);
     assert.equal(f.requests.length, 1);
     f.subject.closeUsage();
+    assert.equal(f.subject.processUsageTargetModal.show, false);
+    assert.equal(f.subject.processUsage.value.cpuPercent, 1);
+    f.subject.processUsageTargetModal.afterLeave();
     assert.equal(f.subject.processUsage.value, undefined);
     f.subject.showUsage(target);
     assert.equal(f.subject.processUsage.value, undefined);
@@ -487,7 +584,7 @@ test('changing pages or page size collapses groups without refetching or clearin
 });
 
 test('program grouping follows backend membership and name order without merging identical names', async () => {
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
   assert.match(css, /\.process-child\s*\{[^}]*padding:\s*0 18px/);
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
   assert.match(source, /<li v-for="\(title, index\) in process.windowTitles"[^>]*class="process-child">\s*<span class="process-detail program-identity">\s*<span>\{\{ title \}\}<\/span>\s*<small>窗口<\/small>/);
@@ -536,4 +633,9 @@ test('program grouping follows backend membership and name order without merging
     f.subject.programSearch.value = '';
     assert.equal(f.subject.resultSummary.value, '查询：4 个进程 · 3 个进程组');
   } finally { f.dispose(); }
+});
+test('shortcut tag paths remain visible without hover hints', () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  assert.match(source, /<small v-if="managingTags && !safeModeEnabled">\{\{ tag\.programPath \}\}<\/small>/);
+  assert.doesNotMatch(source, /(?:text|title)="tag\.programPath"/);
 });

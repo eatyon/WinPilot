@@ -1,3 +1,4 @@
+import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -19,14 +20,14 @@ test('initial theme is applied before the application loads without writing pref
   assert.doesNotThrow(() => runInNewContext(script, {
     localStorage: { getItem: () => { throw new Error('Storage unavailable'); } },
   }));
-  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-  for (const color of ['#f5f6f8', '#171b21']) {
+  const css = readStylesheet(new URL('../../src/styles/base.css', import.meta.url));
+  for (const color of ['#f5f5f5', 'rgb(16, 16, 20)']) {
     assert.ok(html.includes(color));
-    assert.ok(css.includes(`--canvas: ${color}`));
   }
+  assert.ok(css.includes('--canvas: Canvas'));
 });
 
-test('application waits for the initial route and still mounts when navigation fails', async () => {
+test('application mounts before the initial route settles so its loading bar is available', async () => {
   const code = loadScriptModule(new URL('../../src/main.ts', import.meta.url));
   for (const failed of [false, true]) {
     const events = [];
@@ -43,12 +44,22 @@ test('application waits for the initial route and still mounts when navigation f
         if (name === 'vue') return { createApp: () => app };
         if (name === './router') return { router };
         if (name === './ui/theme') return { initializeTheme: () => events.push('theme') };
+        if (name === './ui/panelEffects') return { initializePanelEffects() {} };
         return {};
       },
     });
-    assert.deepEqual(events, ['theme', 'router']);
+    assert.deepEqual(events, ['theme', 'router', 'mount']);
+    ready.catch(() => {});
     finish(failed ? new Error('Navigation failed') : undefined);
     await Promise.resolve();
     assert.deepEqual(events, ['theme', 'router', 'mount']);
   }
+});
+
+test('initial navigation does not render the private shell or start security sync before route resolution', () => {
+  const app = readFileSync(new URL('../../src/App.vue', import.meta.url), 'utf8');
+  assert.match(app, /route\.matched\.length \? isPublicPage\.value : undefined/);
+  assert.match(app, /if \(publicPage === undefined\) return/);
+  assert.match(app, /<NLayout v-else-if="route.matched.length" class="app-frame"/);
+  assert.doesNotMatch(app, /connectionStatus|connection-notice/);
 });

@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { apiErrorMessage, readApiError, userErrorMessage, WinPilotConnectionError } from '../support/apiErrors.mjs';
 
-test('empty error messages fall back while connection errors remain suppressed', () => {
+test('empty error messages fall back and connection errors remain visible', () => {
   assert.equal(userErrorMessage(new Error(), '操作失败'), '操作失败');
   assert.equal(userErrorMessage(new Error('  '), '操作失败'), '操作失败');
   assert.equal(userErrorMessage(new Error('具体原因'), '操作失败'), '具体原因');
-  assert.equal(userErrorMessage(new WinPilotConnectionError(), '操作失败'), '');
+  assert.equal(userErrorMessage(new WinPilotConnectionError(), '操作失败'), '无法连接到 WinPilot');
 });
 
 test('API error messages support existing formats with consistent precedence', () => {

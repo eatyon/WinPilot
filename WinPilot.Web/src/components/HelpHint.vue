@@ -1,92 +1,40 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, useId } from 'vue';
+import { NButton, NPopover } from 'naive-ui';
+import { onScopeDispose, ref } from 'vue';
+import AppModal from './AppModal.vue';
+import AppIcon from './AppIcon.vue';
+import { textPopoverStyle } from '../ui/textPopoverStyle';
 
-const props = withDefaults(
-  defineProps<{
-    label: string;
-    href?: string;
-  }>(),
-  { href: undefined },
-);
-const root = ref<HTMLElement>();
-const button = ref<HTMLButtonElement>();
-const open = ref(false);
-const left = ref(0);
-const tooltipId = useId();
-
-function position() {
-  const bounds = root.value?.getBoundingClientRect();
-  if (!bounds) return;
-  const viewportWidth = document.documentElement.clientWidth;
-  const width = Math.min(320, viewportWidth - 56);
-  left.value = Math.max(16, Math.min(bounds.left, viewportWidth - width - 16)) - bounds.left;
-}
-
-function close() {
-  open.value = false;
-  button.value?.blur();
-}
-
-function toggle() {
-  position();
-  if (open.value) close();
-  else open.value = true;
-}
-
-function outside(event: PointerEvent) {
-  if (!root.value?.contains(event.target as Node)) close();
-}
-
-function keydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') close();
-}
-
-onMounted(() => {
-  if (props.href) return;
-  document.addEventListener('pointerdown', outside);
-  document.addEventListener('keydown', keydown);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', outside);
-  document.removeEventListener('keydown', keydown);
-});
+defineProps<{ label: string; href?: string }>();
+const narrowMedia = window.matchMedia('(max-width: 767px)');
+const isNarrow = ref(narrowMedia.matches);
+const helpOpen = ref(false);
+function updateWidth() { isNarrow.value = narrowMedia.matches; }
+narrowMedia.addEventListener('change', updateWidth);
+onScopeDispose(() => narrowMedia.removeEventListener('change', updateWidth));
 </script>
 
 <template>
-  <a
-    v-if="href"
-    class="help-hint"
-    :href="href"
-    target="_blank"
-    rel="noopener noreferrer"
-    :aria-label="label"
-    :title="label"
-  >
-    ?
-  </a>
-  <span v-else ref="root" class="help-hint-wrap" :class="{ open }" @mouseenter="position">
-    <button
-      ref="button"
-      class="help-hint"
-      type="button"
-      aria-label="查看说明"
-      :aria-describedby="tooltipId"
-      :aria-expanded="open"
-      @focus="position"
-      @click.stop="toggle"
-    >
-      ?
-    </button>
-    <span :id="tooltipId" class="help-hint-popover" role="tooltip" :style="{ left: `${left}px` }">{{ label }}</span>
-  </span>
+  <NButton v-if="href" tag="a" :href="href" target="_blank" rel="noopener noreferrer" size="tiny" circle quaternary :aria-label="label">
+    <template #icon><AppIcon name="info" class="help-hint-icon" /></template>
+  </NButton>
+  <NButton v-else-if="isNarrow" size="tiny" circle quaternary aria-label="查看说明" @click="helpOpen = true">
+    <template #icon><AppIcon name="info" class="help-hint-icon" /></template>
+  </NButton>
+  <NPopover v-else trigger="click" :style="textPopoverStyle">
+    <template #trigger>
+      <NButton size="tiny" circle quaternary aria-label="查看说明">
+        <template #icon><AppIcon name="info" class="help-hint-icon" /></template>
+      </NButton>
+    </template>
+    {{ label }}
+  </NPopover>
+  <AppModal v-if="helpOpen" title="说明" size="small" @close="helpOpen = false">
+    <p class="help-hint-content">{{ label }}</p>
+  </AppModal>
 </template>
 
 <style scoped>
-.help-hint-wrap { position: relative; display: inline-flex; }
-.help-hint { cursor: pointer; }
-.help-hint-popover { position: absolute; z-index: 30; top: calc(100% + 7px); display: none; width: min(320px, calc(100vw - 56px)); padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 20px rgb(22 33 45 / 14%); color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.55; white-space: normal; pointer-events: none; }
-.help-hint-wrap:focus-within .help-hint-popover, .help-hint-wrap.open .help-hint-popover { display: block; }
-@media (hover: hover) {
-  .help-hint-wrap:hover .help-hint-popover { display: block; }
-}
+.n-button .help-hint-icon { width: 14px; height: 14px; opacity: 0.7; }
+.help-hint-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

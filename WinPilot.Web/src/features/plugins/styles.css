@@ -1,0 +1,36 @@
+.plugins-panel-title h2 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+.plugins-panel-title p { margin: 6px 0 0; font-size: 14px; font-weight: 400; line-height: 1.55; }
+.plugin-list-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.plugin-summary-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.plugin-summary-counts span { font-size: 13px; }
+.plugin-summary-counts strong { font-size: 16px; font-weight: 500; }
+.plugin-search { width: min(280px, 100%); margin-left: auto; }
+@media (max-width: 640px) {
+  .plugin-list-summary { align-items: stretch; flex-direction: column; gap: 10px; }
+  .plugin-search { width: 100%; margin-left: 0; }
+}
+.plugins-view, .plugin-detail-view { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--page-card-row-gap) 18px; }
+.plugin-empty { margin: 0; }
+.plugin-empty.n-card { border-style: dashed; }
+@media (max-width: 640px) {
+  .n-card.plugins-panel > .plugins-panel-heading { align-items: stretch; flex-direction: column; }
+  .plugins-panel-heading { gap: 16px; }
+  .plugins-panel .plugins-panel-heading > .plugins-panel-actions { margin-left: 0; }
+}
+.plugin-features-list { display: grid; gap: 10px; }
+.plugin-feature-item { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; }
+.plugin-feature-item > div:first-child { min-width: 0; }
+.plugin-feature-item h4 { margin: 0; font-size: 14px; font-weight: 500; }
+.plugin-feature-item p { margin: 5px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.plugin-feature-controls { display: flex; flex: 0 0 auto; align-items: center; }
+@media (max-width: 640px) {
+  .plugin-feature-item { gap: 12px; }
+}
+.plugin-settings-fields label > span { font-size: 14px; font-weight: 400; }
+.plugin-settings-fields { display: grid; gap: 16px; max-width: none; }
+.plugin-settings-fields label { display: grid; gap: 7px; }
+@media (max-width: 640px) {
+  .plugin-card, .plugin-home-header { position: relative; }
+  .plugin-card .plugin-title-copy h3, .plugin-home-header-copy h2 { padding-right: 58px; }
+}
+.plugin-module, .plugin-settings-fields, .plugin-setting-field, .plugin-collection-item-fields { min-width: 0; grid-template-columns: minmax(0, 1fr); }

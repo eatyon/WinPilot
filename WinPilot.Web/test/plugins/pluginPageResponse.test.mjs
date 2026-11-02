@@ -5,7 +5,7 @@ import { loadScriptModule } from '../support/scriptModule.mjs';
 import { apiErrorMessage } from '../support/apiErrors.mjs';
 
 const exports = {};
-runInNewContext(loadScriptModule(new URL('../../src/features/plugins/page/PluginPageResponse.ts', import.meta.url)), {
+runInNewContext(loadScriptModule(new URL('../../src/features/plugins/page/pluginPageResponse.ts', import.meta.url)), {
   exports, require: () => ({ apiErrorMessage }), DOMException, Error,
 });
 const { PluginPageSessionExpiredError, readPluginResponse } = exports;

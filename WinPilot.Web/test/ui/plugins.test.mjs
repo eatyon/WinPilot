@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
+import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
+import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
-import { combinePageSignal } from '../../src/features/plugins/page/PluginPageLifetime.ts';
+import { combinePageSignal } from '../../src/features/plugins/page/pluginPageLifetime.ts';
 
 function evaluate(path, require, members = '', globals = {}) {
   const code = loadScriptModule(new URL(path, import.meta.url), members);
-  const context = { exports: {}, require, AbortController, DOMException, console, sessionStorage: { getItem: () => null, removeItem() {} }, EventSource: class { close() {} }, ...globals };
+  const context = { exports: {}, require: name => name.endsWith('/useDelayedLoading') ? delayedLoading : require(name), AbortController, DOMException, console, sessionStorage: { getItem: () => null, removeItem() {} }, EventSource: class { close() {} }, ...globals };
   runInNewContext(code, context);
   return context.exports;
 }
@@ -17,7 +19,7 @@ function evaluate(path, require, members = '', globals = {}) {
 function fixture(page = 'PluginInfoView.vue', requestGlobals = {}) {
   const calls = [], toasts = [], renders = [];
   const safeModeEnabled = vue.ref(false);
-  const route = vue.reactive({ params: { pluginId: 'first' }, fullPath: '/plugins/first' });
+  const route = vue.reactive({ params: { pluginId: 'first' }, query: {}, fullPath: '/plugins/first' });
   let unmount;
   let disposed = false;
   const client = {
@@ -28,26 +30,30 @@ function fixture(page = 'PluginInfoView.vue', requestGlobals = {}) {
     userErrorMessage: (error, fallback) => error.message || fallback,
   };
   const executor = evaluate('../../src/api/requestExecutor.ts', name => name.endsWith('/client') ? client : { combineRequestSignal: combinePageSignal });
-  const requests = evaluate('../../src/features/plugins/PluginRequests.ts', () => executor, '', requestGlobals);
-  const models = evaluate('../../src/features/plugins/PluginModels.ts', () => ({}));
+  const requests = evaluate('../../src/features/plugins/pluginRequests.ts', () => executor, '', requestGlobals);
+  const models = evaluate('../../src/features/plugins/pluginModels.ts', () => ({}));
+  const configuration = evaluate('../../src/features/plugins/pluginConfiguration.ts', () => models);
   const imports = name => {
-    if (name === 'vue') return { ...vue, onMounted() {}, onBeforeUnmount: callback => { unmount = callback; } };
+    if (name.endsWith('/useModalState')) return modalStateModule;
+    if (name === 'vue') return { ...vue, useId: () => 'plugin-test', onMounted() {}, onBeforeUnmount: callback => { unmount = callback; } };
     if (name === 'vue-router') return { useRoute: () => route, useRouter: () => ({ push: async () => {} }) };
-    if (name.endsWith('/PluginRequests')) return requests;
-    if (name.endsWith('/PluginModels')) return models;
+    if (name.endsWith('/pluginRequests')) return requests;
+    if (name.endsWith('/pluginModels')) return models;
+    if (name.endsWith('/pluginConfiguration')) return configuration;
     if (name.endsWith('/client')) return client;
     if (name.endsWith('/toast')) return { showToast: (text, type) => toasts.push({ text, type }) };
     if (name.endsWith('/markdown')) return { renderMarkdown: source => new Promise((resolve, reject) => renders.push({ source, resolve, reject })) };
+    if (name.endsWith('/theme')) return { useTheme: () => ({ accentTokens: vue.ref({ text: '#0067c0' }) }) };
     if (name.endsWith('/safeMode')) return { safeModeEnabled };
     return {};
   };
   const members = page === 'PluginsView.vue'
-    ? 'load,toggle,onToggle,plugins,changingIds,loading,scanning,requests'
-    : page === 'PluginDetailView.vue' ? 'load,toggle,saveSettings,config,settingsLoaded,loading,requests,plugin,features,status,error'
-    : 'load,plugin,loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,openReadme,closeReadme,readmeController,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,readmeError';
+    ? 'load,toggle,plugins,filteredPlugins,search,changingIds,loading,scanning,requests'
+    : page === 'PluginDetailView.vue' ? 'load,retryLoad,toggle,saveSettings,executeFeature,beginFeature,confirmingFeatureModal,config,settingsLoaded,loading,hasLoaded,requests,plugin,features,status,error,sections,settingsDisplay'
+    : 'load,plugin,loadStatusSettings,loadFeatureSettings,loadSettings,openSettings,openStatusSettings,openFeatureSettings,loadingCapability,statusSettingsOpenModal,featureSettingsOpenModal,settingsOpenModal,saveSettings,statusSettings,featureSettings,settingsOpen,settingsConfig,requests,readmeOpenModal,openReadme,closeReadme,readmeController,readmeAvailable,readmeOpen,readmeLoading,readmeHtml,deletePlugin,deleting,deletingData';
   const scope = vue.effectScope();
   let subject;
-  scope.run(() => { subject = evaluate('../../src/features/plugins/' + page, imports, members); });
+  scope.run(() => { subject = evaluate('../../src/features/plugins/' + page, imports, page === 'PluginInfoView.vue' ? `${members},pageElement,highlightedCapability` : members); });
   return { calls, toasts, renders, subject, route, safeModeEnabled, dispose() {
     if (disposed) return;
     disposed = true;
@@ -56,6 +62,276 @@ function fixture(page = 'PluginInfoView.vue', requestGlobals = {}) {
   } };
 }
 const response = (value, ok = true) => ({ ok, json: async () => value });
+
+test('plugin section retry preserves configuration drafts and skips unrelated reads', async () => {
+  for (const section of ['status', 'features']) {
+    const f = fixture('PluginDetailView.vue');
+    try {
+      f.subject.config.sample = 'unsaved';
+      f.subject.sections[section].error = 'failed';
+      const retry = f.subject.retryLoad(section);
+      f.calls[0].resolve(response({ id: 'first', enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true, settings_ui: true } }));
+      await setImmediate();
+      assert.equal(f.calls.length, 2);
+      assert.ok(f.calls[1].url.endsWith(`/${section}`));
+      f.calls[1].resolve(response(section === 'features' ? { features: [] } : {}));
+      await retry;
+      assert.equal(f.subject.config.sample, 'unsaved');
+      assert.equal(f.subject.sections[section].error, '');
+    } finally { f.dispose(); }
+  }
+});
+
+test('plugin saving, lifecycle changes and action execution exclude competing writes and retries', async () => {
+  for (const operation of ['save', 'toggle', 'execute']) {
+    const f = fixture('PluginDetailView.vue');
+    try {
+      f.subject.plugin.value = { id: 'first', enabled: true, canChangeEnabled: true };
+      f.subject.settingsLoaded.value = true;
+      const feature = { id: 'action', mode: 'action', confirm: true };
+      const operations = {
+        save: () => f.subject.saveSettings(),
+        toggle: () => f.subject.toggle(),
+        execute: () => f.subject.executeFeature(feature),
+      };
+      const pending = operations[operation]();
+      await f.subject.saveSettings();
+      await f.subject.toggle();
+      await f.subject.executeFeature(feature);
+      await f.subject.retryLoad('status');
+      f.subject.beginFeature(feature);
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.subject.confirmingFeatureModal.show, false);
+      f.calls[0].resolve(response({}, false));
+      await pending;
+      f.subject.beginFeature(feature);
+      assert.equal(f.subject.confirmingFeatureModal.show, true);
+    } finally { f.dispose(); }
+  }
+});
+
+test('plugin action entries stay mutually exclusive and recover after execution failure', async () => {
+  const f = fixture('PluginDetailView.vue');
+  try {
+    const pending = f.subject.executeFeature({ id: 'first', mode: 'action' });
+    f.subject.beginFeature({ id: 'second', mode: 'action', confirm: true });
+    f.subject.beginFeature({ id: 'third', mode: 'action', confirm: false });
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.subject.confirmingFeatureModal.show, false);
+    f.calls[0].resolve(response({}, false));
+    await pending;
+    f.subject.beginFeature({ id: 'second', mode: 'action', confirm: true });
+    assert.equal(f.subject.confirmingFeatureModal.show, true);
+  } finally { f.dispose(); }
+});
+
+for (const [key, open, modal, count] of [
+  ['status', 'openStatusSettings', 'statusSettingsOpenModal', 2],
+  ['features', 'openFeatureSettings', 'featureSettingsOpenModal', 2],
+  ['settings', 'openSettings', 'settingsOpenModal', 3],
+]) {
+  test(`${key} capability opening rejects repeated and competing clicks and recovers after failure`, async () => {
+    const f = fixture();
+    try {
+      const first = f.subject[open]();
+      await f.subject[open]();
+      await f.subject[key === 'status' ? 'openFeatureSettings' : 'openStatusSettings']();
+      assert.equal(f.calls.length, count);
+      assert.equal(f.subject.loadingCapability.value, key);
+      assert.equal(f.subject[modal].show, false);
+      f.calls[0].resolve(response({}, false));
+      for (const call of f.calls.slice(1)) call.resolve(response({}));
+      await first;
+      assert.equal(f.subject.loadingCapability.value, '');
+      assert.equal(f.subject[modal].show, false);
+      assert.equal(f.toasts.length, 1);
+      const retry = f.subject[open]();
+      for (const call of f.calls.slice(count))
+        call.resolve(response(call.url.endsWith('/schema') ? [] : {}));
+      await retry;
+      assert.equal(f.calls.length, count * 2);
+      assert.equal(f.subject[modal].show, true);
+      assert.equal(f.subject.loadingCapability.value, '');
+    } finally { f.dispose(); }
+  });
+}
+
+test('capability preparation cannot open a dialog after safe mode changes or unmount', async () => {
+  for (const leave of [false, true]) {
+    const f = fixture();
+    try {
+      const pending = f.subject.openStatusSettings();
+      if (leave) f.dispose();
+      else {
+        f.safeModeEnabled.value = true;
+        f.safeModeEnabled.value = false;
+      }
+      for (const call of f.calls) call.resolve(response({}));
+      await pending;
+      assert.equal(f.subject.statusSettingsOpenModal.show, false);
+      assert.equal(f.toasts.length, 0);
+    } finally { f.dispose(); }
+  }
+});
+
+test('plugin info loads metadata only until a capability editor is opened', async () => {
+  const f = fixture();
+  try {
+    const loading = f.subject.load();
+    f.calls[0].resolve(response({ id: 'first', manifest: { status_ui: true, features_ui: true, settings_ui: true } }));
+    await loading;
+    assert.equal(f.calls.length, 1);
+    const opening = f.subject.openSettings();
+    assert.deepEqual(f.calls.slice(1).map(call => call.url), [
+      '/api/plugins/first/settings/display/configuration',
+      '/api/plugins/first/configuration/schema',
+      '/api/plugins/first/configuration',
+    ]);
+    f.calls[1].resolve(response({ registerOnHome: true }));
+    f.calls[2].resolve(response([]));
+    f.calls[3].resolve(response({}));
+    await opening;
+    assert.equal(f.subject.settingsOpen.value, true);
+  } finally { f.dispose(); }
+});
+
+test('plugin home waits for all sections before revealing content and keeps section errors independent', async () => {
+  const f = fixture('PluginDetailView.vue');
+  try {
+    const loading = f.subject.load();
+    f.calls[0].resolve(response({ id: 'first', enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true } }));
+    await setImmediate();
+    assert.equal(f.subject.plugin.value.id, 'first');
+    assert.equal(f.subject.hasLoaded.value, false);
+    assert.equal(f.subject.loading.value, true);
+    assert.equal(f.subject.sections.status.loading, true);
+    f.calls.find(call => call.url.endsWith('/features')).resolve(response({ features: [{ id: 'page' }] }));
+    await setImmediate();
+    assert.equal(f.subject.features.value[0].id, 'page');
+    assert.equal(f.subject.sections.features.loading, false);
+    assert.equal(f.subject.sections.status.loading, true);
+    assert.equal(f.subject.hasLoaded.value, false);
+    f.calls.find(call => call.url.endsWith('/status')).resolve(response({}, false));
+    await loading;
+    assert.equal(f.subject.hasLoaded.value, true);
+    assert.equal(f.subject.sections.status.error, '无法加载状态');
+    assert.equal(f.subject.sections.features.error, '');
+    assert.equal(f.subject.error.value, '');
+  } finally { f.dispose(); }
+});
+
+test('plugin home gates configuration reads on display settings, including failure and cancellation', async () => {
+  for (const mode of ['hidden', 'visible', 'failed', 'disposed']) {
+    const f = fixture('PluginDetailView.vue');
+    try {
+      const loading = f.subject.load();
+      f.calls[0].resolve(response({ id: 'first', manifest: { settings_ui: true } }));
+      await setImmediate();
+      assert.equal(f.calls.length, 2);
+      assert.ok(f.calls[1].url.endsWith('/settings/display/configuration'));
+      assert.equal(f.subject.settingsDisplay.value.registerOnHome, false);
+      if (mode === 'disposed') f.dispose();
+      f.calls[1].resolve(response({ registerOnHome: mode !== 'hidden' }, mode !== 'failed'));
+      await setImmediate();
+      if (mode === 'visible') {
+        assert.equal(f.calls.length, 4);
+        assert.equal(f.subject.settingsDisplay.value.registerOnHome, true);
+        f.calls.find(call => call.url === '/api/plugins/first/configuration').resolve(response({ sample: 'value' }));
+        f.calls.find(call => call.url.endsWith('/schema')).resolve(response([{ name: 'sample', type: 'text' }]));
+      }
+      await loading;
+      assert.equal(f.calls.length, mode === 'visible' ? 4 : 2);
+      if (mode === 'failed') assert.equal(f.subject.sections.settings.error, '读取插件设置失败');
+      if (mode === 'visible') assert.equal(f.subject.config.sample, 'value');
+      else assert.equal(Object.keys(f.subject.config).length, 0);
+    } finally { f.dispose(); }
+  }
+});
+
+test('plugin setting options preserve schema values and dynamic empty results', () => {
+  const props = vue.reactive({ field: { name: 'target', options: ['plain', { value: 'id', label: '名称' }] }, modelValue: [] });
+  const scope = vue.effectScope();
+  try {
+    const subject = scope.run(() => evaluate('../../src/features/plugins/PluginSettingField.vue', name => {
+      if (name === 'vue') return { ...vue, onBeforeUnmount() {} };
+      if (name.endsWith('/useModalState')) return modalStateModule;
+      if (name.endsWith('/pluginRequests')) return { createPluginRequests: () => ({ dispose() {} }) };
+      return {};
+    }, 'multiOptions,selectOptions,loadedOptions', { defineProps: () => props, defineEmits: () => () => {} }));
+    const expected = [{ value: 'plain', label: 'plain' }, { value: 'id', label: '名称' }];
+    assert.equal(JSON.stringify(subject.multiOptions.value), JSON.stringify(expected));
+    assert.equal(JSON.stringify(subject.selectOptions.value), JSON.stringify(expected));
+    subject.loadedOptions.value = [];
+    assert.equal(subject.selectOptions.value.length, 0);
+    assert.equal(subject.multiOptions.value.length, 2);
+    subject.loadedOptions.value = [{ value: 'dynamic', label: '动态' }];
+    assert.equal(subject.selectOptions.value[0].value, 'dynamic');
+    assert.equal(props.field.options[1].value, 'id');
+    subject.loadedOptions.value = undefined;
+    props.field.options = undefined;
+    assert.equal(subject.selectOptions.value.length, 0);
+    assert.equal(subject.multiOptions.value.length, 0);
+  } finally { scope.stop(); }
+});
+
+test('plugin search count follows matches and returns to the total when cleared', () => {
+  const f = fixture('PluginsView.vue');
+  try {
+    f.subject.plugins.value = [
+      { id: 'cleaner', manifest: { name: '内存清理', authors: [{ name: 'Alice' }] } },
+      { id: 'monitor', manifest: { name: '状态监控', authors: [{ name: 'Bob' }] } },
+    ];
+    assert.equal(f.subject.filteredPlugins.value.length, 2);
+    for (const query of ['内存', ' CLEANER ', 'alice']) {
+      f.subject.search.value = query;
+      assert.equal(f.subject.filteredPlugins.value.length, 1);
+    }
+    f.subject.search.value = '不存在';
+    assert.equal(f.subject.filteredPlugins.value.length, 0);
+    f.subject.search.value = '';
+    assert.equal(f.subject.filteredPlugins.value.length, 2);
+  } finally { f.dispose(); }
+});
+
+test('home management links focus only the requested available capability after loading', async () => {
+  const f = fixture();
+  const calls = [];
+  try {
+    f.subject.pageElement.value = {
+      querySelector: selector => ({
+        scrollIntoView: options => calls.push(['scroll', selector, options.block]),
+        focus: options => calls.push(['focus', selector, options.preventScroll]),
+      }),
+    };
+    f.route.query.focus = 'status';
+    await vue.nextTick();
+    assert.equal(calls.length, 0);
+    f.subject.plugin.value = { manifest: { status_ui: true, features_ui: true } };
+    await vue.nextTick();
+    assert.deepEqual(calls.map(call => call.slice(0, 2)), [
+      ['scroll', '[data-capability="status"]'], ['focus', '[data-capability="status"]'],
+    ]);
+    assert.equal(calls[1][2], true);
+    assert.equal(f.subject.highlightedCapability.value, 'status');
+    calls.length = 0;
+    f.route.query.focus = 'features';
+    await vue.nextTick();
+    assert.equal(calls[1][1], '[data-capability="features"]');
+    assert.equal(f.subject.highlightedCapability.value, 'features');
+    calls.length = 0;
+    f.route.query.focus = 'unknown';
+    await vue.nextTick();
+    f.subject.plugin.value = { manifest: { status_ui: false } };
+    f.route.query.focus = 'status';
+    await vue.nextTick();
+    assert.equal(calls.length, 0);
+    assert.equal(f.subject.highlightedCapability.value, '');
+    f.safeModeEnabled.value = true;
+    f.subject.plugin.value = { manifest: { status_ui: true } };
+    await vue.nextTick();
+    assert.equal(calls.length, 0);
+  } finally { f.dispose(); }
+});
 
 function trackedRequestFixture(page = 'PluginInfoView.vue') {
   const maps = [];
@@ -66,6 +342,26 @@ function trackedRequestFixture(page = 'PluginInfoView.vue') {
   return { ...f, controllers: maps[0] };
 }
 
+
+test('plugin deletion modes share exclusion and clear their identity after success or failure', async () => {
+  for (const deleteData of [false, true]) {
+    for (const succeeds of [false, true]) {
+      const f = fixture();
+      try {
+        const deleting = f.subject.deletePlugin(deleteData);
+        assert.equal(f.subject.deleting.value, true);
+        assert.equal(f.subject.deletingData.value, deleteData);
+        await f.subject.deletePlugin(!deleteData);
+        assert.equal(f.calls.length, 1);
+        assert.ok(f.calls[0].url.endsWith(`deleteData=${deleteData}`));
+        f.calls[0].resolve(response({}, succeeds));
+        await deleting;
+        assert.equal(f.subject.deleting.value, false);
+        assert.equal(f.subject.deletingData.value, undefined);
+      } finally { f.dispose(); }
+    }
+  }
+});
 
 test('safe mode clears modal configuration and cancels late configuration reads', async () => {
   const f = fixture();
@@ -91,9 +387,11 @@ test('safe mode clears plugin home configuration and reloads without accepting l
     assert.equal(Object.keys(f.subject.config).length, 0);
     f.calls[0].resolve(response({ id: 'first', enabled: false, state: 'Loaded', manifest: {} }));
     await first;
-    f.calls[1].resolve(response({ id: 'first', enabled: false, state: 'Loaded', manifest: {} }));
+    f.calls[1].resolve(response({ id: 'first', enabled: false, state: 'Loaded', manifest: { settings_ui: true } }));
     await setImmediate();
-    for (const call of f.calls.slice(2)) call.resolve(response(
+    f.calls[2].resolve(response({ registerOnHome: true }));
+    await setImmediate();
+    for (const call of f.calls.slice(3)) call.resolve(response(
       call.url.endsWith('/configuration') ? { plain: 'visible', secret: '••••' }
         : call.url.endsWith('/configuration/schema') ? [{ name: 'secret', type: 'text', masked: true }]
           : { registerOnHome: true }));
@@ -126,6 +424,7 @@ test('readme loads only on opening, releases content on closing and reloads with
     f.subject.plugin.value = { hasReadme: true };
     const first = f.subject.openReadme();
     await f.subject.openReadme();
+    assert.equal(f.subject.readmeOpenModal.show, false);
     assert.equal(f.calls.length, 1);
     f.calls[0].resolve({ ok: true, text: async () => '# Document' });
     await setImmediate();
@@ -133,15 +432,20 @@ test('readme loads only on opening, releases content on closing and reloads with
     await first;
     assert.equal(f.subject.readmeHtml.value, '<h1>Document</h1>');
     f.subject.closeReadme();
+    assert.equal(f.subject.readmeOpenModal.show, false);
+    assert.equal(f.subject.readmeHtml.value, '<h1>Document</h1>');
+    f.subject.readmeOpenModal.afterLeave();
     assert.equal(f.subject.readmeOpen.value, false);
     assert.equal(f.subject.readmeHtml.value, '');
     const second = f.subject.openReadme();
     assert.equal(f.calls.length, 2);
     f.calls[1].resolve(response({}, false));
     await second;
-    assert.equal(f.subject.readmeError.value, '读取说明文档失败');
+    assert.equal(f.subject.readmeOpenModal.show, false);
+    assert.equal(f.toasts.at(-1).text, '读取说明文档失败');
     f.subject.closeReadme();
-    assert.equal(f.subject.readmeError.value, '');
+    assert.equal(f.subject.readmeOpenModal.show, false);
+    f.subject.readmeOpenModal.afterLeave();
   } finally { f.dispose(); }
 });
 
@@ -165,7 +469,6 @@ test('closing or leaving a readme cancels work and late rendering cannot overwri
     assert.equal(f.calls[1].init.signal.aborted, true);
     f.calls[1].reject(new Error('late failure'));
     await second;
-    assert.equal(f.subject.readmeError.value, '');
     assert.equal(f.subject.readmeOpen.value, false);
   } finally { f.dispose(); }
 });
@@ -177,7 +480,9 @@ test('plugin home retains loaded content during refresh and on failure without a
     f.subject.status.state = 'ready';
     f.subject.features.value = [{ id: 'page' }];
     f.subject.settingsLoaded.value = true;
+    f.subject.hasLoaded.value = true;
     const pending = f.subject.load();
+    assert.equal(f.subject.hasLoaded.value, true);
     assert.equal(f.subject.status.state, 'ready');
     assert.equal(f.subject.features.value.length, 1);
     await f.subject.saveSettings();
@@ -188,6 +493,7 @@ test('plugin home retains loaded content during refresh and on failure without a
     assert.equal(f.subject.features.value.length, 1);
     assert.equal(f.subject.settingsLoaded.value, true);
     assert.equal(f.subject.error.value, 'refresh failed');
+    assert.equal(f.subject.hasLoaded.value, true);
   } finally { f.dispose(); }
 });
 
@@ -227,17 +533,17 @@ test('closing either configuration editor while reading an error suppresses late
   }
 });
 
-test('failed enabling restores the native checkbox before issuing the request', async () => {
+test('controlled plugin switch keeps its value until a successful response', async () => {
   const f = fixture('PluginsView.vue');
   try {
     const plugin = { id: 'first', enabled: false, state: 'Disabled', canChangeEnabled: true };
     f.subject.plugins.value = [plugin];
-    const input = { checked: true };
-    const toggling = f.subject.onToggle({ target: input }, plugin);
-    assert.equal(input.checked, false);
+    const toggling = f.subject.toggle(plugin);
+    assert.equal(f.subject.plugins.value[0].enabled, false);
+    assert.equal(f.subject.changingIds.value.has(plugin.id), true);
     f.calls[0].resolve(response({ ...plugin, state: 'Failed', canChangeEnabled: false, errors: ['校验失败'] }));
     await toggling;
-    assert.equal(input.checked, false);
+    assert.equal(f.subject.changingIds.value.has(plugin.id), false);
     assert.equal(f.subject.plugins.value[0].enabled, false);
     assert.equal(f.toasts[0].text, '插件启用失败');
   } finally { f.dispose(); }
@@ -298,7 +604,7 @@ test('details wait for lifecycle completion before loading status and features',
     assert.equal(f.subject.plugin.value.state, 'Running');
     assert.equal(f.subject.features.value[0].id, 'page');
     assert.equal(f.subject.status.ready, true);
-    assert.equal(f.calls.length, 6);
+    assert.equal(f.calls.length, 3);
   } finally { f.dispose(); }
 });
 
@@ -334,10 +640,7 @@ test('failed and disabled plugins do not request runtime status or features', as
       const loading = f.subject.load();
       f.calls[0].resolve(response({ id: 'first', ...plugin, manifest: { status_ui: true, features_ui: true } }));
       await setImmediate();
-      assert.equal(f.calls.length, 4);
-      f.calls[1].resolve(response({}));
-      f.calls[2].resolve(response([]));
-      f.calls[3].resolve(response({ registerOnHome: true }));
+      assert.equal(f.calls.length, 1);
       await loading;
       assert.equal(f.subject.plugin.value.state, plugin.state);
       assert.equal(f.subject.settingsLoaded.value, true);
@@ -449,7 +752,7 @@ test('leaving cancels writes and late bodies cannot update data or send a toast'
 });
 
 test('shared settings predicates validate collections without plugin business rules', () => {
-  const models = evaluate('../../src/features/plugins/PluginModels.ts', () => ({}));
+  const models = evaluate('../../src/features/plugins/pluginModels.ts', () => ({}));
   assert.equal(models.isPluginSetting({ name: 'value', type: 'text' }), true);
   assert.equal(models.isPluginSetting({ name: '', type: 'text' }), false);
   assert.equal(models.isPluginCollection({ name: 'items', type: 'collection', mode: 'dynamic' }), true);
@@ -461,11 +764,12 @@ test('details refuse saving when configuration loading failed', async () => {
   try {
     f.subject.config.important = 'saved';
     const loading = f.subject.load();
-    f.calls[0].resolve(response({ id: 'first', enabled: false, manifest: {} }));
+    f.calls[0].resolve(response({ id: 'first', enabled: false, manifest: { settings_ui: true } }));
     await setImmediate();
-    f.calls[1].resolve(response({}, false));
-    f.calls[2].resolve(response([]));
-    f.calls[3].resolve(response({ registerOnHome: true }));
+    f.calls[1].resolve(response({ registerOnHome: true }));
+    await setImmediate();
+    f.calls[2].resolve(response({}, false));
+    f.calls[3].resolve(response([]));
     await loading;
     await f.subject.saveSettings();
     assert.equal(f.calls.length, 4);
@@ -479,18 +783,20 @@ test('late detail configuration bodies cannot erase a newer loaded configuration
   try {
     let releaseBody;
     const first = f.subject.load();
-    f.calls[0].resolve(response({ id: 'first', enabled: false, manifest: {} }));
+    f.calls[0].resolve(response({ id: 'first', enabled: false, manifest: { settings_ui: true } }));
     await setImmediate();
-    f.calls[1].resolve({ ok: true, json: () => new Promise(resolve => { releaseBody = resolve; }) });
-    f.calls[2].resolve(response([]));
-    f.calls[3].resolve(response({ registerOnHome: true }));
+    f.calls[1].resolve(response({ registerOnHome: true }));
+    await setImmediate();
+    f.calls[2].resolve({ ok: true, json: () => new Promise(resolve => { releaseBody = resolve; }) });
+    f.calls[3].resolve(response([]));
     await setImmediate();
     const second = f.subject.load();
-    f.calls[4].resolve(response({ id: 'first', enabled: false, manifest: {} }));
+    f.calls[4].resolve(response({ id: 'first', enabled: false, manifest: { settings_ui: true } }));
     await setImmediate();
-    f.calls[5].resolve(response({ important: 'new' }));
-    f.calls[6].resolve(response([]));
-    f.calls[7].resolve(response({ registerOnHome: true }));
+    f.calls[5].resolve(response({ registerOnHome: true }));
+    await setImmediate();
+    f.calls[6].resolve(response({ important: 'new' }));
+    f.calls[7].resolve(response([]));
     await second;
     releaseBody({ important: 'old' });
     await first;
@@ -511,6 +817,21 @@ test('saving display settings cannot proceed after failed configuration save', a
   } finally { f.dispose(); }
 });
 
+test('plugin info reload failures preserve previously loaded metadata', async () => {
+  const f = fixture();
+  try {
+    const initial = f.subject.load();
+    f.calls[0].resolve(response({ id: 'first', hasReadme: true }));
+    await initial;
+    const retry = f.subject.load();
+    f.calls[1].reject(new Error('无法连接到 WinPilot'));
+    await retry;
+    assert.equal(f.subject.plugin.value.id, 'first');
+    assert.equal(f.subject.readmeAvailable.value, true);
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
 test('plugin details provide readme availability without an extra request', async () => {
   const f = trackedRequestFixture();
   try {
@@ -522,7 +843,7 @@ test('plugin details provide readme availability without an extra request', asyn
     assert.equal(f.calls.length, 1);
     assert.equal(f.controllers.size, 0);
     const reloading = f.subject.load();
-    assert.equal(f.subject.readmeAvailable.value, false);
+    assert.equal(f.subject.readmeAvailable.value, true);
     f.calls[1].resolve(response({ id: 'first', hasReadme: false }));
     await reloading;
     assert.equal(f.subject.readmeAvailable.value, false);

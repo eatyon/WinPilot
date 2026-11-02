@@ -1,36 +1,38 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import AppLoadError from '../../components/AppLoadError.vue';
+import AppLoading from '../../components/AppLoading.vue';
+import AppTooltip from '../../components/AppTooltip.vue';
+import { cloneVNode, computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
-import KeyboardKeyPicker from './KeyboardKeyPicker.vue';
-import { orderKeys } from './keyboardLayout';
-import AppIcon from '../../components/AppIcon.vue';
-import AppSelect from '../../components/AppSelect.vue';
-import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
+import KeyboardKeyPicker from '../../components/KeyboardKeyPicker.vue';
+import { orderKeys } from '../../ui/keyboardLayout';
+import { NEmpty, NButton, NCard, NCheckbox, NCollapseTransition, NImagePreview, type ImageRenderToolbarProps } from 'naive-ui';
+import RefreshToolbar from '../../components/RefreshToolbar.vue';
+import { safeModeEnabled } from '../security/safeMode';
 import { showToast } from '../../ui/toast';
 import { getPageScroller, lockScroll } from '../../ui/scrollLock';
 import { manageModalFocus } from '../../ui/modalFocus';
 import { manageModalTouch } from '../../ui/modalTouch';
-
-type IntervalOption = '1' | '3' | '5' | '10' | 'custom';
+import { bindImagePreviewTouchDrag } from './imagePreviewTouch';
+import {
+  formatRefreshTime,
+  isCustomRefreshIntervalValid,
+  refreshIntervalMilliseconds,
+  type RefreshInterval,
+} from '../../ui/refreshTiming';
 
 const imageUrl = ref<string>();
 const isImageViewerOpen = ref(false);
-const imageViewer = ref<HTMLElement>();
-const imageViewerImage = ref<HTMLImageElement>();
-const imageViewerScale = ref(1);
-const imageViewerOffsetX = ref(0);
-const imageViewerOffsetY = ref(0);
+const imageViewerToolbar = ref<HTMLElement>();
 const capturedAt = ref<Date>();
 const screenshotError = ref<string>();
 const isCapturing = ref(false);
 const autoRefreshEnabled = ref(false);
-const intervalOption = ref<IntervalOption>('5');
+const intervalOption = ref<RefreshInterval>('5');
 const customIntervalSeconds = ref(15);
 const keyboardEnabled = ref(false);
 const selectedKeys = ref<string[]>([]);
 const isSendingKeys = ref(false);
-const keyboardError = ref<string>();
-const keyboardStatus = ref<string>();
 let autoCaptureTimer: number | undefined;
 let relativeTimeTimer: number | undefined;
 let lastCaptureFailureAt: number | undefined;
@@ -39,43 +41,13 @@ let keyboardController: AbortController | undefined;
 let isPageActive = false;
 let releaseImageViewerScroll: (() => void) | undefined;
 const currentTime = ref(Date.now());
-const imageViewerPointers = new Map<number, { x: number; y: number }>();
-let imageViewerPanPointerId: number | undefined;
-let imageViewerPanStartX = 0;
-let imageViewerPanStartY = 0;
-let imageViewerPanOffsetX = 0;
-let imageViewerPanOffsetY = 0;
-let imageViewerPinchDistance = 0;
-let imageViewerPinchScale = 1;
-
 const isCustomIntervalValid = computed(
-  () =>
-    Number.isInteger(customIntervalSeconds.value) &&
-    customIntervalSeconds.value >= 1 &&
-    customIntervalSeconds.value <= 600,
+  () => isCustomRefreshIntervalValid(customIntervalSeconds.value),
 );
-const activeIntervalMilliseconds = computed(() => {
-  if (!autoRefreshEnabled.value) return 0;
-  const seconds =
-    intervalOption.value === 'custom' ? customIntervalSeconds.value : Number(intervalOption.value);
-  return intervalOption.value === 'custom' && !isCustomIntervalValid.value ? 0 : seconds * 1000;
-});
-const relativeCapturedAt = computed(() => {
-  if (!capturedAt.value) return '尚未刷新';
-  const elapsedSeconds = Math.max(0, Math.floor((currentTime.value - capturedAt.value.getTime()) / 1000));
-  if (elapsedSeconds === 0) return '刚刚';
-  if (elapsedSeconds < 60) return `${elapsedSeconds} 秒前`;
-  if (elapsedSeconds >= 3600) return '1 小时前';
-  return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
-});
-const imageViewerStyle = computed(() => ({
-  transform: `translate(${imageViewerOffsetX.value}px, ${imageViewerOffsetY.value}px) scale(${imageViewerScale.value})`,
-}));
-
-function clearKeyboardFeedback() {
-  keyboardError.value = undefined;
-  keyboardStatus.value = undefined;
-}
+const activeIntervalMilliseconds = computed(() =>
+  refreshIntervalMilliseconds(autoRefreshEnabled.value, intervalOption.value, customIntervalSeconds.value),
+);
+const relativeCapturedAt = computed(() => formatRefreshTime(capturedAt.value, currentTime.value));
 
 async function captureScreenshot() {
   if (!isPageActive || isCapturing.value) return;
@@ -83,7 +55,6 @@ async function captureScreenshot() {
   const controller = new AbortController();
   screenshotController = controller;
   isCapturing.value = true;
-  screenshotError.value = undefined;
   try {
     const response = await apiFetch('/api/desktop/screenshot', {
       cache: 'no-store',
@@ -95,6 +66,7 @@ async function captureScreenshot() {
     const nextImageUrl = URL.createObjectURL(imageBlob);
     if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
     imageUrl.value = nextImageUrl;
+    screenshotError.value = undefined;
     capturedAt.value = new Date();
     configureRelativeTime();
     lastCaptureFailureAt = undefined;
@@ -121,6 +93,7 @@ function clearAutomaticCapture() {
   }
 }
 
+// 页面可见且没有采集进行时才安排下一次刷新；以上次成功或失败时间控制重试间隔。
 function configureAutomaticCapture() {
   clearAutomaticCapture();
   if (!isPageActive || document.visibilityState !== 'visible' || isCapturing.value || activeIntervalMilliseconds.value <= 0) return;
@@ -137,7 +110,6 @@ function configureAutomaticCapture() {
 
 function updateSelectedKeys(keys: string[]) {
   if (safeModeEnabled.value || isSendingKeys.value) return;
-  clearKeyboardFeedback();
   selectedKeys.value = orderKeys(keys);
 }
 
@@ -145,14 +117,12 @@ async function sendSelectedKeys() {
   if (safeModeEnabled.value) return;
   if (!keyboardEnabled.value || isSendingKeys.value) return;
   if (selectedKeys.value.length === 0) {
-    clearKeyboardFeedback();
-    keyboardError.value = '请选择至少一个按键';
+    showToast('请选择至少一个按键');
     return;
   }
   const controller = new AbortController();
   keyboardController = controller;
   isSendingKeys.value = true;
-  clearKeyboardFeedback();
   try {
     const response = await apiFetch('/api/desktop/keyboard', {
       method: 'POST',
@@ -163,12 +133,10 @@ async function sendSelectedKeys() {
     if (!response.ok) throw new Error('键盘输入发送失败');
     if (keyboardController !== controller || !keyboardEnabled.value) return;
     selectedKeys.value = [];
-    keyboardStatus.value = '按键已发送';
     showToast('键盘输入已发送', 'success');
   } catch (error) {
     if (keyboardController === controller && !isAbortError(error)) {
       const message = userErrorMessage(error, '键盘输入发送失败');
-      keyboardError.value = message;
       showToast(message);
     }
   } finally {
@@ -183,12 +151,10 @@ function resetKeyboard() {
   keyboardController?.abort();
   keyboardController = undefined;
   selectedKeys.value = [];
-  clearKeyboardFeedback();
   isSendingKeys.value = false;
 }
 
 function openImageViewer() {
-  resetImageViewer();
   releaseImageViewerScroll ??= lockScroll(getPageScroller());
   isImageViewerOpen.value = true;
 }
@@ -197,107 +163,33 @@ function closeImageViewer() {
   isImageViewerOpen.value = false;
   releaseImageViewerScroll?.();
   releaseImageViewerScroll = undefined;
-  resetImageViewer();
 }
 
-function resetImageViewer() {
-  imageViewerScale.value = 1;
-  imageViewerOffsetX.value = 0;
-  imageViewerOffsetY.value = 0;
-  imageViewerPointers.clear();
-  imageViewerPanPointerId = undefined;
-  imageViewerPinchDistance = 0;
-}
-
-function handleImageViewerWheel(event: WheelEvent) {
-  const scaleFactor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
-  setImageViewerScale(imageViewerScale.value * scaleFactor);
-}
-
-function handleImageViewerPointerDown(event: PointerEvent) {
-  event.preventDefault();
-  imageViewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  const target = event.currentTarget as HTMLImageElement;
-  target.setPointerCapture(event.pointerId);
-  if (imageViewerPointers.size === 2) {
-    imageViewerPanPointerId = undefined;
-    imageViewerPinchDistance = getImageViewerPointerDistance();
-    imageViewerPinchScale = imageViewerScale.value;
-    return;
-  }
-  beginImageViewerPan(event.pointerId, event.clientX, event.clientY);
-}
-
-function handleImageViewerPointerMove(event: PointerEvent) {
-  if (!imageViewerPointers.has(event.pointerId)) return;
-  event.preventDefault();
-  imageViewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (imageViewerPointers.size === 2) {
-    if (imageViewerPinchDistance > 0)
-      setImageViewerScale(
-        (imageViewerPinchScale * getImageViewerPointerDistance()) / imageViewerPinchDistance,
-      );
-    return;
-  }
-  if (imageViewerPanPointerId !== event.pointerId || imageViewerScale.value <= 1) return;
-  setImageViewerOffset(
-    imageViewerPanOffsetX + event.clientX - imageViewerPanStartX,
-    imageViewerPanOffsetY + event.clientY - imageViewerPanStartY,
-  );
-}
-
-function handleImageViewerPointerEnd(event: PointerEvent) {
-  imageViewerPointers.delete(event.pointerId);
-  const target = event.currentTarget as HTMLImageElement;
-  if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
-  if (imageViewerPointers.size === 1) {
-    const [pointerId, pointer] = imageViewerPointers.entries().next().value as [
-      number,
-      { x: number; y: number },
-    ];
-    beginImageViewerPan(pointerId, pointer.x, pointer.y);
-    imageViewerPinchDistance = 0;
-    return;
-  }
-  imageViewerPanPointerId = undefined;
-  imageViewerPinchDistance = 0;
-}
-
-function beginImageViewerPan(pointerId: number, clientX: number, clientY: number) {
-  imageViewerPanPointerId = pointerId;
-  imageViewerPanStartX = clientX;
-  imageViewerPanStartY = clientY;
-  imageViewerPanOffsetX = imageViewerOffsetX.value;
-  imageViewerPanOffsetY = imageViewerOffsetY.value;
-}
-
-function getImageViewerPointerDistance() {
-  const [first, second] = [...imageViewerPointers.values()];
-  return Math.hypot(second.x - first.x, second.y - first.y);
-}
-
-function setImageViewerScale(nextScale: number) {
-  imageViewerScale.value = Math.min(6, Math.max(1, nextScale));
-  if (imageViewerScale.value === 1) {
-    imageViewerOffsetX.value = 0;
-    imageViewerOffsetY.value = 0;
-    return;
-  }
-  setImageViewerOffset(imageViewerOffsetX.value, imageViewerOffsetY.value);
-}
-
-function setImageViewerOffset(nextX: number, nextY: number) {
-  const stage = imageViewer.value;
-  const image = imageViewerImage.value;
-  if (!stage || !image || imageViewerScale.value <= 1) {
-    imageViewerOffsetX.value = 0;
-    imageViewerOffsetY.value = 0;
-    return;
-  }
-  const maximumX = Math.max(0, (image.offsetWidth * imageViewerScale.value - stage.clientWidth) / 2);
-  const maximumY = Math.max(0, (image.offsetHeight * imageViewerScale.value - stage.clientHeight) / 2);
-  imageViewerOffsetX.value = Math.min(maximumX, Math.max(-maximumX, nextX));
-  imageViewerOffsetY.value = Math.min(maximumY, Math.max(-maximumY, nextY));
+function renderImageToolbar({ nodes }: ImageRenderToolbarProps) {
+  const actions = [
+    [nodes.rotateClockwise, '顺时针旋转90度'],
+    [nodes.zoomOut, '缩小'],
+    [nodes.zoomIn, '放大'],
+    [nodes.close, '关闭大图'],
+  ] as const;
+  return h('div', {
+    class: 'image-preview-actions',
+    ref: (element: unknown) => {
+      imageViewerToolbar.value = element instanceof HTMLElement ? element : undefined;
+    },
+  }, actions.map(([node, label]) => {
+    const icon = cloneVNode(node);
+    icon.props = { ...icon.props, onClick: undefined, 'aria-hidden': true };
+    return h(AppTooltip, { text: label }, {
+      default: () => h(NButton, {
+        quaternary: true,
+        class: 'app-icon-button',
+        color: 'var(--n-toolbar-icon-color, var(--text))',
+        'aria-label': label,
+        onClick: node.props?.onClick,
+      }, { icon: () => icon }),
+    });
+  }));
 }
 
 function updateRelativeTime() {
@@ -324,20 +216,30 @@ watch([autoRefreshEnabled, intervalOption, customIntervalSeconds], configureAuto
 watch([keyboardEnabled, safeModeEnabled], ([enabled, restricted]) => {
   if (!enabled || restricted) resetKeyboard();
 }, { flush: 'sync' });
-watch(isImageViewerOpen, async (open, _previous, onCleanup) => {
-  if (!open) return;
+watch([isImageViewerOpen, imageViewerToolbar], async ([open, toolbar], _previous, onCleanup) => {
+  if (!open || !toolbar) return;
   let active = true;
   let releaseFocus: (() => void) | undefined;
   let releaseTouch: (() => void) | undefined;
+  let releaseDrag: (() => void) | undefined;
   onCleanup(() => {
     active = false;
+    releaseDrag?.();
     releaseTouch?.();
     releaseFocus?.();
   });
   await nextTick();
-  if (!active || !imageViewer.value) return;
-  releaseFocus = manageModalFocus(imageViewer.value);
-  releaseTouch = manageModalTouch(imageViewer.value);
+  if (!active || imageViewerToolbar.value !== toolbar) return;
+  const container = toolbar.closest<HTMLElement>('.n-image-preview-container');
+  if (!container) return;
+  container.setAttribute('role', 'dialog');
+  container.setAttribute('aria-modal', 'true');
+  container.setAttribute('aria-label', '桌面大图');
+  container.setAttribute('tabindex', '-1');
+  container.querySelector('img')?.setAttribute('alt', '当前桌面预览大图');
+  releaseFocus = manageModalFocus(container);
+  releaseTouch = manageModalTouch(container);
+  releaseDrag = bindImagePreviewTouchDrag(container);
 });
 
 onMounted(() => {
@@ -364,70 +266,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="desktop-viewer" aria-label="桌面">
-    <div class="desktop-control-bar">
-      <div class="capture-controls">
-        <label class="toggle-control">
-          <input v-model="autoRefreshEnabled" type="checkbox" />
-          <span>自动刷新</span>
-        </label>
-        <label class="field-control interval-control">
-          <span>间隔</span>
-          <AppSelect
-            v-model="intervalOption"
-            :options="[
-              { value: '1', label: '1 秒' },
-              { value: '3', label: '3 秒' },
-              { value: '5', label: '5 秒' },
-              { value: '10', label: '10 秒' },
-              { value: 'custom', label: '自定义' },
-            ]"
-          />
-        </label>
-        <label
-          v-if="intervalOption === 'custom'"
-          class="field-control interval-control custom-interval-control"
-        >
-          <span>秒</span>
-          <input
-            v-model.number="customIntervalSeconds"
-            type="number"
-            min="1"
-            max="600"
-            step="1"
-            inputmode="numeric"
-            :aria-invalid="!isCustomIntervalValid"
-          />
-        </label>
-        <p
-          v-if="intervalOption === 'custom' && !isCustomIntervalValid"
-          class="interval-validation"
-          role="alert"
-        >
-          请输入 1 至 600 的整数秒数
-        </p>
-      </div>
-      <div class="desktop-actions">
-        <span class="capture-time">
-          最近刷新：
-          <strong>{{ relativeCapturedAt }}</strong>
-        </span>
-        <button
-          class="button button-primary capture-button"
-          type="button"
-          :disabled="isCapturing"
-          @click="captureScreenshot"
-        >
-          {{ isCapturing ? '正在刷新…' : '刷新' }}
-        </button>
-      </div>
-    </div>
-    <div v-if="screenshotError" class="status-message error" role="alert">
-      <span>桌面刷新失败，请稍后重试</span>
-      <button class="button button-secondary" type="button" @click="captureScreenshot">重新刷新</button>
-    </div>
-    <p v-else-if="isCapturing && !imageUrl" class="status-message loading">正在刷新桌面…</p>
-    <div class="desktop-frame" aria-label="桌面预览">
+  <section class="desktop-viewer load-error-layout" aria-label="桌面">
+    <AppLoadError :show="Boolean(screenshotError)" :retry="captureScreenshot" :loading="isCapturing">{{ screenshotError }}</AppLoadError>
+    <NCard>
+      <RefreshToolbar
+        v-model:enabled="autoRefreshEnabled"
+        v-model:interval="intervalOption"
+        v-model:custom-seconds="customIntervalSeconds"
+        :valid="isCustomIntervalValid"
+        :refreshing="isCapturing"
+        :captured-at="relativeCapturedAt"
+        @refresh="captureScreenshot"
+      />
+    </NCard>
+    <NCard
+      class="desktop-frame"
+      content-class="desktop-frame-content"
+      :content-style="{ padding: 0 }"
+      :theme-overrides="{ color: 'var(--surface-subtle)', borderColor: 'var(--border-strong)' }"
+      aria-label="桌面预览"
+    >
       <button
         v-if="imageUrl"
         class="desktop-preview-button"
@@ -437,10 +295,12 @@ onBeforeUnmount(() => {
       >
         <img :src="imageUrl" alt="当前桌面预览" />
       </button>
-      <p v-else class="empty-state">暂无桌面预览</p>
-    </div>
-    <section
-      class="keyboard-panel"
+      <AppLoading v-if="isCapturing && !imageUrl" class="desktop-loading" label="正在刷新桌面" />
+      <NEmpty :show-icon="false" v-else-if="!imageUrl" class="empty-state">{{ screenshotError ? '无法加载桌面预览' : '暂无桌面预览' }}</NEmpty>
+    </NCard>
+    <NCard
+      tag="section"
+      class="keyboard-card"
       :class="{ 'safe-mode-locked': safeModeEnabled }"
       :inert="safeModeEnabled"
       aria-labelledby="keyboard-title"
@@ -449,78 +309,73 @@ onBeforeUnmount(() => {
         <div>
           <h2 id="keyboard-title">
             按键模拟
-            <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
-              <AppIcon name="lock" />
-            </span>
           </h2>
           <p>手动发送指定键盘按键，支持组合键</p>
         </div>
-        <label class="toggle-control">
-          <input v-model="keyboardEnabled" type="checkbox" :disabled="safeModeEnabled" />
-          <span>启用按键模拟</span>
-        </label>
+        <NCheckbox v-model:checked="keyboardEnabled" :disabled="safeModeEnabled">启用按键模拟</NCheckbox>
       </div>
-      <div v-if="keyboardEnabled && !safeModeEnabled" class="keyboard-panel-controls">
-        <KeyboardKeyPicker
-          :model-value="selectedKeys"
-          :disabled="isSendingKeys"
-          help="可选择单个按键或组合最多 3 个按键，确认后点击发送"
-          @update:model-value="updateSelectedKeys"
-          @limit="keyboardStatus = undefined; keyboardError = '每次最多选择 3 个按键'"
-        />
-        <p v-if="keyboardError" class="keyboard-message error" role="alert">{{ keyboardError }}</p>
-        <p v-else-if="keyboardStatus" class="keyboard-message success" role="status">{{ keyboardStatus }}</p>
-        <div class="keyboard-actions">
-          <button
-            class="button button-secondary"
-            type="button"
-            :disabled="isSendingKeys || !selectedKeys.length"
-            @click="resetKeyboard"
-          >
-            清空
-          </button>
-          <button
-            class="button button-primary"
-            type="button"
+      <NCollapseTransition :show="keyboardEnabled && !safeModeEnabled" :inert="!keyboardEnabled || safeModeEnabled || undefined">
+        <div class="keyboard-panel-controls">
+          <KeyboardKeyPicker
+            :model-value="selectedKeys"
             :disabled="isSendingKeys"
-            @click="sendSelectedKeys"
-          >
-            {{ isSendingKeys ? '正在发送…' : '发送' }}
-          </button>
+            help="可选择单个按键或组合最多 3 个按键，确认后点击发送"
+            @update:model-value="updateSelectedKeys"
+            @limit="showToast('每次最多选择 3 个按键')"
+          />
+          <div class="keyboard-actions">
+            <NButton
+              :disabled="isSendingKeys || !selectedKeys.length"
+              @click="resetKeyboard"
+            >
+              清空
+            </NButton>
+            <NButton
+              type="primary"
+              :loading="isSendingKeys"
+              :disabled="isSendingKeys || !selectedKeys.length"
+              @click="sendSelectedKeys"
+            >
+              {{ isSendingKeys ? '正在发送' : '发送' }}
+            </NButton>
+          </div>
         </div>
-      </div>
-    </section>
-    <div
-      v-if="isImageViewerOpen && imageUrl"
-      ref="imageViewer"
-      class="desktop-image-viewer"
-      role="dialog"
-      tabindex="-1"
-      aria-modal="true"
-      aria-label="桌面大图"
-      @click.self="closeImageViewer"
-      @wheel.prevent="handleImageViewerWheel"
-      @keydown.esc.stop.prevent="closeImageViewer"
-    >
-      <button
-        class="desktop-image-viewer-close"
-        type="button"
-        aria-label="关闭大图"
-        @click="closeImageViewer"
-      >
-        ×
-      </button>
-      <img
-        ref="imageViewerImage"
-        :src="imageUrl"
-        :style="imageViewerStyle"
-        alt="当前桌面预览大图"
-        @dblclick.prevent="resetImageViewer"
-        @pointerdown="handleImageViewerPointerDown"
-        @pointermove="handleImageViewerPointerMove"
-        @pointerup="handleImageViewerPointerEnd"
-        @pointercancel="handleImageViewerPointerEnd"
-      />
-    </div>
+      </NCollapseTransition>
+    </NCard>
+    <NImagePreview
+      v-if="imageUrl"
+      :src="imageUrl"
+      :show="isImageViewerOpen"
+      :render-toolbar="renderImageToolbar"
+      @close="closeImageViewer"
+    />
   </section>
 </template>
+
+<style>
+.desktop-viewer { display: grid; gap: var(--page-card-row-gap) 18px; }
+.desktop-frame { min-height: min(60vw, 680px); overflow: hidden; }
+.desktop-frame:has(img) { min-height: 0; }
+.desktop-frame img { display: block; width: 100%; max-width: 100%; height: auto; min-width: 0; object-fit: contain; }
+.desktop-preview-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.keyboard-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.keyboard-panel-heading h2 { margin: 0; font-size: 18px; }
+.keyboard-panel-heading p { margin: 7px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.55; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.keyboard-panel-controls { padding-top: 25px; }
+.keyboard-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+@media (max-width: 767px) {
+  .desktop-frame { min-height: 180px; }
+  .keyboard-panel-heading { align-items: stretch; flex-direction: column; }
+  .keyboard-actions { display: grid; grid-template-columns: 1fr 1fr; }
+}
+.desktop-frame-content { display: grid; min-height: 0; place-items: center; }
+.desktop-frame:not(:has(img)) { background: color-mix(in srgb, var(--canvas) 90%, var(--surface) 10%); }
+@media (min-width: 768px) {
+  .desktop-frame:not(:has(img)) { min-height: 0; aspect-ratio: 16 / 9; }
+}
+.desktop-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
+
+.n-image-preview-toolbar .n-base-icon { box-sizing: content-box; }
+.image-preview-actions { display: flex; align-items: center; gap: 4px; }
+.n-image-preview-toolbar .n-button .n-base-icon { padding: 0; font-size: inherit; }
+</style>

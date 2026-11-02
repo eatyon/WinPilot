@@ -1,4 +1,6 @@
+import { readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
+import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
@@ -8,14 +10,50 @@ import * as vue from 'vue';
 import * as apiErrors from '../support/apiErrors.mjs';
 import { combineRequestSignal } from '../../src/api/requestSignal.ts';
 import * as taskModels from '../../src/features/tasks/taskModels.ts';
-import * as keyboardLayout from '../../src/features/desktop/keyboardLayout.ts';
+import * as keyboardLayout from '../../src/ui/keyboardLayout.ts';
+import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
 
 const taskValidationModule = { exports: {}, require: () => taskModels };
 runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskValidation.ts', import.meta.url)), taskValidationModule);
+const presentationModule = { exports: {}, require: name => {
+  if (name === './taskModels') return taskModels;
+  if (name === './taskValidation') return taskValidationModule.exports;
+  if (name.endsWith('/keyboardLayout')) return keyboardLayout;
+  throw new Error(`Unexpected presentation import: ${name}`);
+} };
+runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskPresentation.ts', import.meta.url)), presentationModule);
+const submissionModule = { exports: {}, require: name => {
+  if (name === './taskModels') return taskModels;
+  if (name.endsWith('/keyboardLayout')) return keyboardLayout;
+  throw new Error(`Unexpected submission import: ${name}`);
+} };
+runInNewContext(loadScriptModule(new URL('../../src/features/tasks/taskSubmission.ts', import.meta.url)), submissionModule);
+
+test('task submission normalizes a detached copy without changing editor state or earlier continuations', () => {
+  const task = {
+    name: '  Example  ', enabled: true,
+    trigger: { ...taskModels.createTrigger(), type: 'Keyboard', processPaths: [' C:/app.exe ', ' '], keys: ['A', 'Ctrl'] },
+    actions: [
+      { ...taskModels.createAction(), type: 'Keyboard', keys: ['B', 'Alt'], continueOnFailure: true },
+      { ...taskModels.createAction(), continueOnFailure: true },
+    ],
+  };
+  const before = JSON.stringify(task);
+  const normalized = submissionModule.exports.normalizeTask(task);
+  assert.equal(JSON.stringify(task), before);
+  assert.equal(normalized.name, 'Example');
+  assert.equal(normalized.trigger.processPaths.join(','), 'C:/app.exe');
+  assert.equal(normalized.trigger.keys.join(','), 'Ctrl,A');
+  assert.equal(normalized.actions[0].keys.join(','), 'Alt,B');
+  assert.equal(normalized.actions[0].continueOnFailure, true);
+  assert.equal(normalized.actions[1].continueOnFailure, false);
+  normalized.trigger.keys.push('C');
+  assert.equal(JSON.stringify(task), before);
+});
 
 function fixture({ reducedMotion = false } = {}) {
   const code = loadScriptModule(new URL('../../src/features/tasks/TasksView.vue', import.meta.url),
-    'tasks, tasksLoaded, tags, registeredActions, registeredTriggers, extensionsLoaded, extensionsLoading, extensionsError, pageError, loadExtensions, actionResources, loadActionResource, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, describeTask, taskRows, filteredTasks, detailDisplay, extensionActionLabel, loadActionOptions, detailActionOptions, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers');
+    'openVariableHelp, variableHelpLoading, variableHelpOpenModal, registeredVariables, editorModal, runTargetModal, tasks, tasksLoaded, tags, registeredActions, registeredTriggers, extensionsLoaded, extensionsLoading, extensionsError, pageError, loadExtensions, actionResources, loadActionResource, detailTarget, editor, editorForm, focusTaskError, invalidActionField, invalidTriggerField, invalidProcessPath, fieldErrors, actionErrors, move, actionKey, toggleMultiOption, deleteTarget, runTarget, describeTask, taskRows, filteredTasks, taskSearch, taskEmptyDescription, detailDisplay, presentationContext, actionLabel, loadActionOptions, detailActionOptions, loadTasks, saveTask, deleteTask, toggleTaskEnabled, requestRun, runTask, selectTriggerParameter, parameterDefaults, pendingOperations, createAction, validate, selectActionType, openTaskEditor, actionPayload, channelOptions, requestControllers, processPathKeys, addProcessPath, removeProcessPath');
   const requests = [];
   const toasts = [];
   let unmount;
@@ -27,13 +65,17 @@ function fixture({ reducedMotion = false } = {}) {
   const context = {
     exports: {}, AbortController, DOMException, HTMLInputElement: class {},
     require: name => {
-      if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
+      if (name.endsWith('/useModalState')) return modalStateModule;
+      if (name.endsWith('/useDelayedLoading')) return delayedLoading;
+      if (name === 'vue') return { ...vue, useId: () => 'tasks-test', onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
       if (name.endsWith('/client')) return client;
       if (name.endsWith('/requestExecutor')) return executor.exports;
       if (name.endsWith('/toast')) return { showToast: text => toasts.push(text) };
       if (name.endsWith('/focusInvalidInput')) return focusModule.exports;
       if (name.endsWith('/safeMode')) return { safeModeEnabled: vue.ref(false) };
       if (name === './taskModels') return taskModels;
+      if (name === './taskPresentation') return presentationModule.exports;
+      if (name === './taskSubmission') return submissionModule.exports;
       if (name.endsWith('/keyboardLayout')) return keyboardLayout;
       if (name === './taskValidation') return taskValidationModule.exports;
       return {};
@@ -42,6 +84,8 @@ function fixture({ reducedMotion = false } = {}) {
   const scope = vue.effectScope();
   scope.run(() => runInNewContext(code, context));
   const subject = context.exports;
+  subject.actionCoreLabel = action => presentationModule.exports.actionCoreLabel(action, subject.presentationContext.value);
+  subject.extensionActionLabel = action => presentationModule.exports.extensionActionLabel(action, subject.presentationContext.value);
   subject.extensionsLoaded.value = true;
   subject.registeredActions.value = [{ pluginId: 'plugin', actionId: 'action', actionName: '运行任务', available: true, dynamicOptions: true, parameters: [{ key: 'name', type: 'Select', options: [] }] }];
   const action = { type: 'Extension', pluginId: 'plugin', actionId: 'action', parameters: { name: 'saved' } };
@@ -52,6 +96,82 @@ function fixture({ reducedMotion = false } = {}) {
   };
   return { subject, requests, toasts, action, open, reply, dispose: () => { unmount(); scope.stop(); } };
 }
+
+test('task action summaries preserve values, empty fallbacks and continuation placement', () => {
+  const f = fixture();
+  try {
+    const cases = [
+      [{ type: 'StartProgram' }, '启动程序 · 未指定'],
+      [{ type: 'StartProgram', programPath: 'C:/app.exe' }, '启动程序 · C:/app.exe'],
+      [{ type: 'Delay', delaySeconds: '' }, '延迟 0 秒'],
+      [{ type: 'Delay', delaySeconds: 5 }, '延迟 5 秒'],
+      [{ type: 'Shell' }, 'Shell · PowerShell · 未设置命令'],
+      [{ type: 'Shell', shell: 'CMD', command: 'echo hello' }, 'Shell · CMD · echo hello'],
+      [{ type: 'Keyboard' }, '按键模拟 · 未设置'],
+      [{ type: 'Keyboard', keys: ['A'] }, '按键模拟 · A'],
+      [{ type: 'StartTag' }, '启动快捷标签 · 未选择'],
+      [{ type: 'StartTag', tagName: '标签' }, '启动快捷标签 · 标签'],
+      [{ type: 'EndProcess' }, '结束进程 · 未指定'],
+      [{ type: 'EndProcess', processName: 'app.exe', currentUserOnly: true }, '结束进程 · app.exe · 当前用户'],
+      [{ type: 'SendNotification' }, '发送通知 · 未设置'],
+      [{ type: 'SendNotification', notificationContent: '完成' }, '发送通知 · 完成'],
+      [{ type: 'TaskState' }, '任务状态 · 请选择状态 · 未选择任务'],
+      [{ type: 'TaskState', state: 'Toggle', taskName: '任务' }, '任务状态 · 切换 · 任务'],
+      [{ type: 'TaskState', state: 'Enable', taskName: '任务' }, '任务状态 · 启用 · 任务'],
+      [{ type: 'TaskState', state: 'Disable', taskName: '任务' }, '任务状态 · 禁用 · 任务'],
+      [{ type: 'Extension' }, '扩展 · 未选择插件 · 未选择动作'],
+      [{ type: 'Extension', pluginId: 'plugin', actionId: 'action', parameters: { name: 'saved' } }, '运行任务 - saved'],
+    ];
+    for (const [fields, expected] of cases) {
+      const action = { ...taskModels.createAction(), ...fields };
+      assert.equal(f.subject.actionCoreLabel(action), expected);
+      assert.equal(f.subject.actionLabel(action, 0, 2), expected);
+      action.continueOnFailure = true;
+      assert.equal(f.subject.actionLabel(action, 0, 2), `${expected} · 失败后继续`);
+      assert.equal(f.subject.actionLabel(action, 1, 2), expected);
+    }
+  } finally { f.dispose(); }
+});
+
+test('variable help waits for data, blocks duplicate entries and retries after failure', async () => {
+  const f = fixture();
+  try {
+    const first = f.subject.openVariableHelp();
+    await f.subject.openVariableHelp();
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.subject.variableHelpLoading.value, true);
+    assert.equal(f.subject.variableHelpOpenModal.show, false);
+    f.requests[0].resolve({ ok: false });
+    await first;
+    assert.equal(f.subject.variableHelpLoading.value, false);
+    assert.equal(f.subject.variableHelpOpenModal.show, false);
+    assert.equal(f.toasts.at(-1), '无法读取变量');
+    const retry = f.subject.openVariableHelp();
+    f.requests[1].resolve({ ok: true, json: async () => [{ name: 'value' }] });
+    await retry;
+    assert.equal(f.subject.variableHelpOpenModal.show, true);
+    assert.equal(f.subject.registeredVariables.value[0].name, 'value');
+  } finally { f.dispose(); }
+});
+
+test('closing the task editor cancels pending variable help without opening a late dialog', async () => {
+  const f = fixture();
+  try {
+    f.subject.openTaskEditor();
+    const opening = f.subject.openVariableHelp();
+    f.subject.editorModal.close();
+    assert.equal(f.requests[0].init.signal.aborted, true);
+    f.requests[0].resolve({ ok: true, json: async () => [{ name: 'late' }] });
+    await opening;
+    assert.equal(f.subject.variableHelpOpenModal.show, false);
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('task search stays visible and is disabled only when the task list is empty', () => {
+  const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  assert.match(source, /<label class="tag-search">\s*<NInput\s+v-model:value="taskSearch"[^>]*:disabled="!tasks.length"/);
+});
 
 test('action render identities follow reordering without altering selected keys or persistence', () => {
   const f = fixture();
@@ -83,7 +203,7 @@ test('action render identities follow reordering without altering selected keys 
     assert.deepEqual(JSON.parse(JSON.stringify(f.subject.actionPayload(first))), { type: 'Keyboard', keys: ['A'] });
     assert.equal(f.requests.length, 0);
     const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
-    assert.match(source, /<article v-for="\(action, index\) in editor.actions" :key="actionKey\(action\)"/);
+    assert.match(source, /<div\s+v-for="\(action, index\) in editor.actions"\s+:key="actionKey\(action\)"/);
     assert.doesNotMatch(source, /keyboardOrderVersion/);
   } finally { f.dispose(); }
 });
@@ -199,6 +319,8 @@ test('disabled tasks can be manually run without enabling automatic triggers', a
     assert.equal(f.requests[0].init.method, 'POST');
     f.requests[0].resolve(new Response(null, { status: 204 }));
     await pending;
+    assert.equal(f.subject.runTargetModal.show, false);
+    f.subject.runTargetModal.afterLeave();
     assert.equal(f.subject.runTarget.value, undefined);
     assert.equal(task.enabled, false);
   } finally {
@@ -383,7 +505,10 @@ function attachEditorForm(f, fields, actions = []) {
     querySelector: () => ({
       closest: () => null,
       scrollIntoView: () => calls.push(`${name}:scroll`),
-      focus: () => calls.push(`${name}:focus`),
+      focus: () => {
+        assert.equal(f.subject.pendingOperations.has('save'), false);
+        calls.push(`${name}:focus`);
+      },
       animate: () => calls.push(`${name}:animate`),
     }),
   }));
@@ -921,6 +1046,27 @@ test('notification action requires an explicit sending channel and preserves the
   } finally { f.dispose(); }
 });
 
+test('task refresh retains its error and existing rows until a successful response', async () => {
+  const f = fixture();
+  try {
+    f.subject.tasks.value = [{ name: 'Existing' }];
+    f.subject.tasksLoaded.value = true;
+    f.subject.pageError.value = 'offline';
+    const failed = f.subject.loadTasks();
+    assert.equal(f.subject.pageError.value, 'offline');
+    assert.equal(f.subject.tasks.value[0].name, 'Existing');
+    f.requests[0].resolve(Response.json({ detail: 'still offline' }, { status: 500 }));
+    await failed;
+    assert.equal(f.subject.pageError.value, 'still offline');
+    const recovered = f.subject.loadTasks();
+    assert.equal(f.subject.pageError.value, 'still offline');
+    f.requests[1].resolve({ ok: true, json: async () => [{ name: 'Updated' }] });
+    await recovered;
+    assert.equal(f.subject.pageError.value, '');
+    assert.equal(f.subject.tasks.value[0].name, 'Updated');
+  } finally { f.dispose(); }
+});
+
 test('task list loading does not request editor resources or extension definitions', async () => {
   const f = fixture();
   try {
@@ -1354,6 +1500,8 @@ test('separate task operations do not cancel each other and toggleTaskEnabled fa
     f.requests[0].resolve({ ok: true });
     f.requests[1].resolve({ ok: false, json: async () => ({ detail: 'cannot saveTask' }) });
     await Promise.all([running, toggling]);
+    assert.equal(f.subject.runTargetModal.show, false);
+    f.subject.runTargetModal.afterLeave();
     assert.equal(f.subject.runTarget.value, undefined);
     assert.deepEqual(f.toasts, ['cannot saveTask']);
   } finally { f.dispose(); }
@@ -1512,4 +1660,81 @@ test('completed task dynamic option bodies release tracking and preserve their r
     f.dispose();
     if (loading) await loading;
   }
+});
+
+test('task empty states distinguish loading failure, an empty list and unmatched searches', () => {
+  const f = fixture();
+  try {
+    assert.equal(f.subject.taskEmptyDescription.value, '');
+    f.subject.pageError.value = 'offline';
+    assert.equal(f.subject.taskEmptyDescription.value, '无法加载任务列表');
+    f.subject.pageError.value = '';
+    f.subject.tasksLoaded.value = true;
+    assert.equal(f.subject.taskEmptyDescription.value, '暂无任务，点击“创建任务”开始');
+    f.subject.tasks.value = [{ name: 'Example', enabled: true, trigger: { type: 'Cron', cron: '0 0 * * *' }, actions: [] }];
+    assert.equal(f.subject.taskEmptyDescription.value, '');
+    f.subject.taskSearch.value = 'missing';
+    assert.equal(f.subject.taskEmptyDescription.value, '没有匹配的任务');
+    f.subject.taskSearch.value = '  EXAMPLE  ';
+    assert.equal(f.subject.taskEmptyDescription.value, '');
+    f.subject.taskSearch.value = '';
+    assert.equal(f.subject.taskEmptyDescription.value, '');
+    const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+    assert.match(source, /<NEmpty v-if="taskEmptyDescription"[^>]*:description="taskEmptyDescription"/);
+    const css = readFeatureStyles();
+    assert.match(css, /\.task-list \.content-empty \{[^}]*text-align: center;/);
+  } finally { f.dispose(); }
+});
+
+test('task name buttons keep their contents left-aligned', () => {
+  const css = readFeatureStyles();
+  assert.match(css, /\.task-name-button\s*\{[^}]*justify-content:\s*flex-start/);
+});
+
+test('process path removal uses theme danger colors without a tooltip', () => {
+  const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  const button = source.match(/<NButton\s+class="app-icon-button"\s+aria-label="删除"[^>]*@click="removeProcessPath\(editor.trigger.processPaths, index\)"[^>]*>/)?.[0];
+  assert.ok(button);
+  assert.match(button, /textColorHover: 'var\(--danger-solid-hover\)'/);
+  assert.match(button, /borderHover: '1px solid var\(--danger-solid-hover\)'/);
+  assert.doesNotMatch(source, /<AppTooltip[^>]*>\s*<NButton[^>]*@click="removeProcessPath/);
+});
+
+test('process path animation identities survive editing, duplicate values and middle removal', () => {
+  const f = fixture();
+  try {
+    const paths = vue.reactive(['', '', 'C:\\app.exe']);
+    const identities = [...f.subject.processPathKeys(paths)];
+    assert.equal(new Set(identities).size, 3);
+    assert.equal(f.subject.processPathKeys(vue.toRaw(paths))[0], identities[0]);
+    paths[0] = 'C:\\edited.exe';
+    assert.equal(f.subject.processPathKeys(paths)[0], identities[0]);
+    f.subject.removeProcessPath(paths, 1);
+    assert.deepEqual([...paths], ['C:\\edited.exe', 'C:\\app.exe']);
+    assert.deepEqual([...f.subject.processPathKeys(paths)], [identities[0], identities[2]]);
+    f.subject.addProcessPath(paths);
+    assert.equal(paths[2], '');
+    assert.notEqual(f.subject.processPathKeys(paths)[2], identities[1]);
+    f.subject.removeProcessPath(paths, -1);
+    f.subject.removeProcessPath(paths, 9);
+    f.subject.removeProcessPath(paths, 0.5);
+    assert.equal(paths.length, 3);
+    const saved = JSON.stringify(paths);
+    assert.equal(saved, '["C:\\\\edited.exe","C:\\\\app.exe",""]');
+    const other = [''];
+    assert.notEqual(f.subject.processPathKeys(other)[0], identities[0]);
+    while (paths.length) f.subject.removeProcessPath(paths, 0);
+    assert.equal(f.subject.processPathKeys(paths).length, 0);
+  } finally { f.dispose(); }
+});
+
+test('adjacent task action cards keep spacing outside their content', () => {
+  const source = readFileSync(new URL('../../src/features/tasks/TasksView.vue', import.meta.url), 'utf8');
+  const css = readFeatureStyles();
+  assert.match(source, /<NCard\b[^>]*class="task-action-card"[^>]*content-class="task-config-card"/);
+  assert.match(css, /\.task-action-spacing\s*\{[^}]*padding-top:\s*12px/);
+  assert.match(source, /<TransitionGroup name="task-action">\s*<div\s+v-for="\(action, index\) in editor.actions"\s+:key="actionKey\(action\)"/);
+  assert.match(css, /\.task-action-enter-from, \.task-action-leave-to\s*\{[^}]*grid-template-rows: 0fr/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^{}]*\.task-action-enter-active[^{}]*\{[^{}]*transition: none/);
+  assert.doesNotMatch(css, /\.task-config-card\s*\{[^}]*margin-top/);
 });

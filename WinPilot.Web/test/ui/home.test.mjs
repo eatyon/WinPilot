@@ -1,9 +1,25 @@
 import assert from 'node:assert/strict';
+import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import * as refreshTiming from '../../src/ui/refreshTiming.ts';
+
+test('feature execution uses the same loading label as plugin details', () => {
+  const source = readFileSync(new URL('../../src/features/home/HomeView.vue', import.meta.url), 'utf8');
+  assert.match(source, /executingFeatureKey === `\$\{plugin\.id\}:\$\{feature\.id\}`\s*\? '正在执行'/);
+  assert.doesNotMatch(source, /正在打开/);
+});
+
+test('status skeletons retain their value containers and inherit the same line height', () => {
+  const source = readFileSync(new URL('../../src/features/home/HomeView.vue', import.meta.url), 'utf8');
+  assert.match(source, /<strong :class="\{ unavailable: !item.available \}">\s*<NSkeleton v-if="isRefreshing && !status && !errorMessage" :width="80" height="1lh"/);
+  assert.equal(source.match(/<NSkeleton v-if="isRefreshing && !status && !errorMessage" :width="40" height="1lh"/g).length, 2);
+  assert.doesNotMatch(source, /<NSkeleton[^>]*\btext\b/);
+});
 
 function fixture() {
   const calls = [], toasts = [], events = [], intervals = new Map(), timeouts = new Map();
@@ -14,7 +30,7 @@ function fixture() {
   }
   const document = { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
   const code = loadScriptModule(new URL('../../src/features/home/HomeView.vue', import.meta.url),
-    'refreshStatus,refreshPlugins,pluginSummaries,pluginFeatureSummaries,relativeCapturedAt,executeFeature,confirmFeature,confirmingFeature,autoEnabled,configureAutomaticRefresh,handlePageResume');
+    'refreshStatus,refreshPlugins,pluginSummaries,pluginFeatureSummaries,relativeCapturedAt,executeFeature,beginFeature,confirmFeature,confirmingFeature,autoEnabled,configureAutomaticRefresh,handlePageResume');
   const context = { exports: {}, Date: Clock, AbortController, DOMException, document,
     EventSource: class { constructor() { events.push(this); } close() { this.closed = true; } },
     sessionStorage: { getItem: () => null },
@@ -22,6 +38,8 @@ function fixture() {
       setTimeout: cb => { timeouts.set(++timer, cb); return timer; }, clearTimeout: id => timeouts.delete(id),
       addEventListener() {}, removeEventListener() {} },
     require: name => {
+      if (name.endsWith('/refreshTiming')) return refreshTiming;
+      if (name.endsWith('/useModalState')) return modalStateModule;
       if (name === 'vue') return { ...vue, onMounted: cb => { mount = cb; }, onBeforeUnmount: cb => { unmount = cb; } };
       if (name === 'vue-router') return { useRouter: () => ({}) };
       if (name.endsWith('/client')) return { apiFetch: (url, init) => new Promise(resolve => calls.push({ url, init, resolve })), isAbortError: e => e?.name === 'AbortError', userErrorMessage: e => e.message };
@@ -46,11 +64,14 @@ test('home publishes plugin status and features together and retains both after 
     f.subject.pluginSummaries.value = [{ id: 'old' }];
     f.subject.pluginFeatureSummaries.value = [{ id: 'old' }];
     for (const failed of [false, true]) {
+      const pluginId = failed ? 'failed' : 'new';
       const pending = f.subject.refreshPlugins();
       f.calls.at(-1).resolve({ ok: true, json: async () => [{
-        id: failed ? 'failed' : 'new', enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true },
+        id: pluginId, enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true },
       }] });
       await setImmediate();
+      assert.ok(f.calls.some(call => call.url === `/api/plugins/${pluginId}/status`));
+      assert.ok(f.calls.some(call => call.url === `/api/plugins/${pluginId}/features`));
       f.calls.findLast(call => /^\/api\/plugins\/[^/]+\/status$/.test(call.url)).resolve({ ok: true, json: async () => ({ value: 1 }) });
       f.calls.findLast(call => call.url.endsWith('/settings/display/status')).resolve({ ok: true, json: async () => ({ registerOnHome: true, statusKeys: ['value'] }) });
       await setImmediate();
@@ -71,6 +92,31 @@ test('home publishes plugin status and features together and retains both after 
     }
     assert.equal(f.events[0].closed, true);
   } finally { f.dispose(); }
+});
+
+test('home cancels both plugin branches on leaving and ignores their late results', async () => {
+  const f = fixture();
+  let pending, branches;
+  try {
+    await setImmediate();
+    pending = f.subject.refreshPlugins();
+    f.calls.at(-1).resolve({ ok: true, json: async () => [{
+      id: 'sample', enabled: true, state: 'Running', manifest: { status_ui: true, features_ui: true },
+    }] });
+    await setImmediate();
+    branches = f.calls.filter(call => call.url.startsWith('/api/plugins/sample/'));
+    assert.equal(branches.length, 4);
+  } finally { f.dispose(); }
+  for (const call of branches) {
+    assert.equal(call.init.signal.aborted, true);
+    call.resolve({ ok: true, json: async () => ({
+      value: 1, registerOnHome: true, statusKeys: ['value'], featureIds: ['run'], features: [{ id: 'run' }],
+    }) });
+  }
+  await pending;
+  assert.equal(f.subject.pluginSummaries.value.length, 0);
+  assert.equal(f.subject.pluginFeatureSummaries.value.length, 0);
+  assert.equal(f.events.length, 0);
 });
 
 test('home clock starts on capture and stops at one hour or while hidden', async () => {
@@ -103,4 +149,20 @@ test('home confirmed actions share execution and ignore replies after leaving', 
   call.resolve({ ok: true, json: async () => ({ succeeded: true, message: 'done' }) });
   await execution;
   assert.equal(f.toasts.length, 0);
+});
+
+test('home refuses competing action entries until the current execution settles', async () => {
+  const f = fixture();
+  try {
+    const pending = f.subject.executeFeature({ id: 'sample' }, { id: 'first', mode: 'action' });
+    const call = f.calls.at(-1);
+    f.subject.beginFeature({ id: 'sample' }, { id: 'second', mode: 'action', confirm: true });
+    f.subject.beginFeature({ id: 'sample' }, { id: 'third', mode: 'action', confirm: false });
+    assert.equal(f.calls.filter(call => call.url.endsWith('/execute')).length, 1);
+    assert.equal(f.subject.confirmingFeature.value, undefined);
+    call.resolve({ ok: true, json: async () => ({ succeeded: true, message: 'done' }) });
+    await pending;
+    f.subject.beginFeature({ id: 'sample' }, { id: 'second', mode: 'action', confirm: true });
+    assert.equal(f.subject.confirmingFeature.value.feature.id, 'second');
+  } finally { f.dispose(); }
 });

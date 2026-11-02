@@ -1,0 +1,13 @@
+:root { --font-mono: v-mono, "Cascadia Mono", Consolas, monospace; --canvas: Canvas; --surface: Canvas; --surface-subtle: Canvas; --surface-hover: color-mix(in srgb, CanvasText 9%, Canvas); --text: CanvasText; --text-muted: GrayText; --text-subtle: GrayText; --border: ButtonBorder; --border-strong: ButtonBorder; --accent-text: var(--text); --accent-text-hover: var(--text); --accent-solid: var(--text); --accent-solid-hover: var(--text); --accent-contrast: var(--surface); --accent-bg: var(--surface-hover); --accent-border: var(--border-strong); --accent-focus-ring: var(--border-strong); --success-text: var(--text); --success-bg: var(--surface-hover); --success-border: var(--success-text); --warning-text: var(--text); --warning-bg: var(--surface-hover); --warning-border: var(--warning-text); --danger-text: var(--text); --danger-border: var(--danger-text); --danger-contrast: var(--surface); --danger-bg: var(--surface-hover); --danger-solid: var(--text); --danger-solid-hover: var(--text); --shadow-float: none; --control-height: 34px; --control-font-size: 14px; --control-radius: 10px; --radius-sm: var(--control-radius); --radius-md: var(--control-radius); --radius-lg: var(--control-radius); }
+* { box-sizing: border-box; }
+html { scrollbar-gutter: stable; }
+body { min-width: 320px; margin: 0; background: var(--canvas); font-family: 'Lato', 'Fira Code', sans-serif; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+button, a, label, summary, input[type="checkbox"], input[type="radio"], [role="button"], [role="option"], [role="menuitem"], [role="switch"] { -webkit-tap-highlight-color: transparent; }
+@media (hover: none) {
+  html { -webkit-tap-highlight-color: transparent; }
+}
+a { color: inherit; }
+code { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--text); font-family: var(--font-mono); font-size: 0.88em; transition: background-color .3s cubic-bezier(.4, 0, .2, 1), color .3s cubic-bezier(.4, 0, .2, 1), border-color .3s cubic-bezier(.4, 0, .2, 1); }

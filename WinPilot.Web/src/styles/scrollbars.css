@@ -1,0 +1,8 @@
+:where(body, body *) { scrollbar-width: thin; scrollbar-color: var(--scrollbar-color) transparent; }
+:where(body, body *)::-webkit-scrollbar { width: var(--scrollbar-width); height: var(--scrollbar-height); }
+:where(body, body *)::-webkit-scrollbar-track,
+:where(body, body *)::-webkit-scrollbar-corner { background: transparent; }
+:where(body, body *)::-webkit-scrollbar-thumb { border-radius: var(--scrollbar-radius); background: var(--scrollbar-color); }
+@media (hover: hover) and (pointer: fine) {
+  :where(body, body *)::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-color-hover); }
+}

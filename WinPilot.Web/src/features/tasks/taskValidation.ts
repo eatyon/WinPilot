@@ -1,5 +1,10 @@
-import type { Task, ParameterDefinition, RegisteredTrigger, RegisteredAction } from './taskModels';
-import { taskStateOptions } from './taskModels';
+import {
+  type Task,
+  type ParameterDefinition,
+  type RegisteredTrigger,
+  type RegisteredAction,
+  taskStateOptions,
+} from './taskModels';
 
 export function unavailableSelectValue(parameter: ParameterDefinition, value: unknown) {
   const selected = String(value ?? '');

@@ -1,37 +1,60 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RouterLink, useRoute, useRouter } from 'vue-router';
+import AppLoadError from '../../components/AppLoadError.vue';
+import { useModalState } from '../../ui/useModalState';
+import { useDelayedLoading } from '../../ui/useDelayedLoading';
+import AppLoading from '../../components/AppLoading.vue';
+import AppLinkButton from '../../components/AppLinkButton.vue';
+import { NEmpty, NFormItem, NButton, NInput, NCheckbox, NCheckboxGroup, NSpace, NCard } from 'naive-ui';
+import { useId, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { readApiError, isAbortError, userErrorMessage } from '../../api/client';
-import { createPluginRequests } from './PluginRequests';
+import { createPluginRequests } from './pluginRequests';
 import AppModal from '../../components/AppModal.vue';
-import AppIcon from '../../components/AppIcon.vue';
 import { showToast } from '../../ui/toast';
 import { renderMarkdown } from '../../ui/markdown';
-import type {
-  PluginFeatureDisplaySettings,
-  PluginInfo,
-  PluginStatusDisplaySettings,
-  PluginSettingsDisplaySettings,
-} from './PluginModels';
-import { stateLabel } from './PluginModels';
+import {
+  type PluginFeatureDisplaySettings,
+  type PluginInfo,
+  type PluginStatusDisplaySettings,
+  type PluginSettingsDisplaySettings,
+  stateLabel,
+  isPluginSetting,
+  isPluginCollection,
+  type PluginConfigurationDefinition,
+  type PluginFeatureDefinition,
+} from './pluginModels';
 import PluginSettingField from './PluginSettingField.vue';
-import { isPluginSetting as isDefinition, isPluginCollection as isCollection, type PluginCollectionDefinition as CollectionDefinition, type PluginSettingDefinition as SettingDefinition, type PluginFeatureDefinition } from './PluginModels';
-import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
+import { safeModeEnabled } from '../security/safeMode';
 
-type Definition = SettingDefinition | CollectionDefinition;
+const formId = useId();
+
+
 const capabilityItems = [
   ['status', '状态'],
   ['features', '功能'],
   ['settings', '配置'],
 ] as const;
 function hasUi(key: (typeof capabilityItems)[number][0]) {
-  return Boolean(plugin.value?.manifest?.[`${key}_ui` as 'status_ui' | 'features_ui' | 'settings_ui']);
+  return Boolean(
+    plugin.value?.manifest?.[`${key}_ui` as 'status_ui' | 'features_ui' | 'settings_ui'],
+  );
 }
 const requests = createPluginRequests();
 const route = useRoute();
 let loadGeneration = 0;
 const router = useRouter();
 const plugin = ref<PluginInfo>();
+const pageElement = ref<HTMLElement | null>(null);
+const highlightedCapability = ref('');
+watch([plugin, () => route.query.focus], () => {
+  highlightedCapability.value = '';
+  const target = route.query.focus;
+  if (!requests.active || !plugin.value || safeModeEnabled.value || (target !== 'status' && target !== 'features') || !hasUi(target)) return;
+  const entry = pageElement.value?.querySelector<HTMLButtonElement>(`[data-capability="${target}"]`);
+  entry?.scrollIntoView({ block: 'center', inline: 'nearest' });
+  entry?.focus({ preventScroll: true });
+  if (entry) highlightedCapability.value = target;
+}, { flush: 'post' });
 const error = ref('');
 const statusKeys = ref<string[]>([]);
 const statusSettings = ref<PluginStatusDisplaySettings>({
@@ -46,14 +69,22 @@ const featureSettings = ref<PluginFeatureDisplaySettings>({
   featureIds: [],
   homeTitle: '',
 });
-const statusSettingsOpen = ref(false);
-const featureSettingsOpen = ref(false);
-const settingsOpen = ref(false);
-const deleteOpen = ref(false);
+const statusSettingsOpenModal = useModalState(() => false);
+const statusSettingsOpen = statusSettingsOpenModal.data;
+const featureSettingsOpenModal = useModalState(() => false);
+const featureSettingsOpen = featureSettingsOpenModal.data;
+const settingsOpenModal = useModalState(() => false);
+const settingsOpen = settingsOpenModal.data;
+const deleteOpenModal = useModalState(() => false);
+const deleteOpen = deleteOpenModal.data;
 const savingStatusSettings = ref(false);
 const savingFeatureSettings = ref(false);
 const savingSettings = ref(false);
+const loadingCapability = ref<'status' | 'features' | 'settings' | ''>('');
+const showCapabilityLoading = useDelayedLoading(() => Boolean(loadingCapability.value));
+let capabilityGeneration = 0;
 const deleting = ref(false);
+const deletingData = ref<boolean>();
 const selectedStatusKeys = computed({
   get: () => statusSettings.value.statusKeys,
   set: (value) => {
@@ -67,28 +98,36 @@ const selectedFeatureIds = computed({
   },
 });
 const settingsDisplay = ref<PluginSettingsDisplaySettings>({ registerOnHome: true });
-const settingsDefinitions = ref<Definition[]>([]);
-const settingsConfig = ref<Record<string, any>>({});
+const settingsDefinitions = ref<PluginConfigurationDefinition[]>([]);
+const settingsConfig = ref<Record<string, unknown>>({});
 const readmeAvailable = computed(() => plugin.value?.hasReadme === true);
-const readmeOpen = ref(false);
+const readmeOpenModal = useModalState(() => false, Boolean, clearReadmeContent);
+const readmeOpen = readmeOpenModal.data;
 const readmeLoading = ref(false);
+const showReadmeLoading = useDelayedLoading(() => readmeLoading.value);
 const readmeHtml = ref('');
-const readmeError = ref('');
 let readmeController: AbortController | undefined;
 let settingsController: AbortController | undefined;
 
 function closeReadme() {
   readmeController?.abort();
   readmeController = undefined;
-  readmeOpen.value = false;
+  readmeLoading.value = false;
+  readmeOpenModal.close();
+}
+function clearReadmeContent() {
   readmeLoading.value = false;
   readmeHtml.value = '';
-  readmeError.value = '';
 }
 
 async function openReadme() {
-  if (!requests.active || !readmeAvailable.value || readmeOpen.value) return;
-  readmeOpen.value = true;
+  if (!requests.active || !readmeAvailable.value || readmeOpenModal.show || readmeLoading.value) return;
+  clearReadmeContent();
+  return loadReadme();
+}
+
+async function loadReadme() {
+  readmeController?.abort();
   const controller = new AbortController();
   readmeController = controller;
   readmeLoading.value = true;
@@ -96,7 +135,7 @@ async function openReadme() {
     const source = await requests.run(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}/readme`,
       { signal: controller.signal },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error('读取说明文档失败');
         return response.text();
       },
@@ -105,8 +144,10 @@ async function openReadme() {
     const html = await renderMarkdown(source);
     if (controller.signal.aborted) return;
     readmeHtml.value = html;
+    readmeOpenModal.open(true);
   } catch (cause) {
-    if (!controller.signal.aborted && !isAbortError(cause)) readmeError.value = userErrorMessage(cause, '读取说明文档失败');
+    if (requests.active && !controller.signal.aborted && !isAbortError(cause))
+      showToast(userErrorMessage(cause, '读取说明文档失败'), 'error');
   } finally {
     if (readmeController === controller) {
       readmeController = undefined;
@@ -114,40 +155,63 @@ async function openReadme() {
     }
   }
 }
-watch(safeModeEnabled, (enabled) => {
-  settingsController?.abort();
-  settingsConfig.value = {};
-  settingsDefinitions.value = [];
-  if (!enabled) return;
-  statusSettingsOpen.value = false;
-  featureSettingsOpen.value = false;
-  settingsOpen.value = false;
-  deleteOpen.value = false;
-}, { flush: 'sync' });
+watch(
+  safeModeEnabled,
+  (enabled) => {
+    settingsController?.abort();
+    capabilityGeneration++;
+    loadingCapability.value = '';
+    settingsConfig.value = {};
+    settingsDefinitions.value = [];
+    if (!enabled) return;
+    statusSettingsOpenModal.reset();
+    featureSettingsOpenModal.reset();
+    settingsOpenModal.reset();
+    deleteOpenModal.reset();
+  },
+  { flush: 'sync' },
+);
 async function loadStatusSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [status, settings] = await Promise.all([
-    requests.run<Record<string, unknown>>(`/api/plugins/${id}/status`, {}, response => {
+    requests.run<Record<string, unknown>>(`/api/plugins/${id}/status`, {}, (response) => {
       if (!response.ok) throw new Error('读取状态展示设置失败');
       return response.json();
     }),
-    requests.run<PluginStatusDisplaySettings>(`/api/plugins/${id}/settings/display/status`, {}, response => {
-      if (!response.ok) throw new Error('读取状态展示设置失败');
-      return response.json();
-    }),
+    requests.run<PluginStatusDisplaySettings>(
+      `/api/plugins/${id}/settings/display/status`,
+      {},
+      (response) => {
+        if (!response.ok) throw new Error('读取状态展示设置失败');
+        return response.json();
+      },
+    ),
   ]);
   statusKeys.value = Object.keys(status);
   statusSettings.value = settings;
 }
 
-async function openStatusSettings() {
-  if (safeModeEnabled.value) return;
+async function openCapability(
+  key: 'status' | 'features' | 'settings',
+  load: () => Promise<void>,
+  open: () => void,
+  fallback: string,
+) {
+  if (!requests.active || safeModeEnabled.value || loadingCapability.value) return;
+  const generation = ++capabilityGeneration;
+  loadingCapability.value = key;
   try {
-    await loadStatusSettings();
-    if (requests.active && !safeModeEnabled.value) statusSettingsOpen.value = true;
+    await load();
+    if (requests.active && !safeModeEnabled.value && generation === capabilityGeneration) open();
   } catch (cause) {
-    if (!isAbortError(cause)) showToast(userErrorMessage(cause, '读取状态展示设置失败'), 'error');
+    if (requests.active && generation === capabilityGeneration && !isAbortError(cause))
+      showToast(userErrorMessage(cause, fallback), 'error');
+  } finally {
+    if (generation === capabilityGeneration) loadingCapability.value = '';
   }
+}
+function openStatusSettings() {
+  return openCapability('status', loadStatusSettings, () => statusSettingsOpenModal.open(true), '读取状态展示设置失败');
 }
 async function saveStatusSettings() {
   if (savingStatusSettings.value || safeModeEnabled.value) return;
@@ -160,15 +224,16 @@ async function saveStatusSettings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(statusSettings.value),
       },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error('保存状态展示设置失败');
         return response.json();
       },
     );
-    statusSettingsOpen.value = false;
+    statusSettingsOpenModal.close();
     showToast('状态展示设置已保存', 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '保存状态展示设置失败'));
+    if (requests.active && !isAbortError(cause))
+      showToast(userErrorMessage(cause, '保存状态展示设置失败'));
   } finally {
     savingStatusSettings.value = false;
   }
@@ -176,26 +241,28 @@ async function saveStatusSettings() {
 async function loadFeatureSettings() {
   const id = encodeURIComponent(String(route.params.pluginId));
   const [declaredFeatures, settings] = await Promise.all([
-    requests.run<{ features?: PluginFeatureDefinition[] }>(`/api/plugins/${id}/features`, {}, response => {
-      if (!response.ok) throw new Error('读取功能展示设置失败');
-      return response.json();
-    }),
-    requests.run<PluginFeatureDisplaySettings>(`/api/plugins/${id}/settings/display/features`, {}, response => {
-      if (!response.ok) throw new Error('读取功能展示设置失败');
-      return response.json();
-    }),
+    requests.run<{ features?: PluginFeatureDefinition[] }>(
+      `/api/plugins/${id}/features`,
+      {},
+      (response) => {
+        if (!response.ok) throw new Error('读取功能展示设置失败');
+        return response.json();
+      },
+    ),
+    requests.run<PluginFeatureDisplaySettings>(
+      `/api/plugins/${id}/settings/display/features`,
+      {},
+      (response) => {
+        if (!response.ok) throw new Error('读取功能展示设置失败');
+        return response.json();
+      },
+    ),
   ]);
   features.value = declaredFeatures.features ?? [];
   featureSettings.value = settings;
 }
-async function openFeatureSettings() {
-  if (safeModeEnabled.value) return;
-  try {
-    await loadFeatureSettings();
-    if (requests.active && !safeModeEnabled.value) featureSettingsOpen.value = true;
-  } catch (cause) {
-    if (!isAbortError(cause)) showToast(userErrorMessage(cause, '读取功能展示设置失败'), 'error');
-  }
+function openFeatureSettings() {
+  return openCapability('features', loadFeatureSettings, () => featureSettingsOpenModal.open(true), '读取功能展示设置失败');
 }
 async function loadSettings() {
   settingsController?.abort();
@@ -203,31 +270,35 @@ async function loadSettings() {
   const signal = settingsController.signal;
   const id = encodeURIComponent(String(route.params.pluginId));
   const [display, definitions, configuration] = await Promise.all([
-    requests.run<PluginSettingsDisplaySettings>(`/api/plugins/${id}/settings/display/configuration`, { signal }, response => {
+    requests.run<PluginSettingsDisplaySettings>(
+      `/api/plugins/${id}/settings/display/configuration`,
+      { signal },
+      (response) => {
+        if (!response.ok) throw new Error('读取插件设置失败');
+        return response.json();
+      },
+    ),
+    requests.run<unknown[]>(`/api/plugins/${id}/configuration/schema`, { signal }, (response) => {
       if (!response.ok) throw new Error('读取插件设置失败');
       return response.json();
     }),
-    requests.run<unknown[]>(`/api/plugins/${id}/configuration/schema`, { signal }, response => {
-      if (!response.ok) throw new Error('读取插件设置失败');
-      return response.json();
-    }),
-    requests.run<Record<string, any>>(`/api/plugins/${id}/configuration`, { signal }, response => {
-      if (!response.ok) throw new Error('读取插件设置失败');
-      return response.json();
-    }),
+    requests.run<Record<string, unknown>>(
+      `/api/plugins/${id}/configuration`,
+      { signal },
+      (response) => {
+        if (!response.ok) throw new Error('读取插件设置失败');
+        return response.json();
+      },
+    ),
   ]);
   settingsDisplay.value = display;
-  settingsDefinitions.value = definitions.filter(value => isDefinition(value) || isCollection(value));
+  settingsDefinitions.value = definitions.filter(
+    (value) => isPluginSetting(value) || isPluginCollection(value),
+  );
   settingsConfig.value = configuration;
 }
-async function openSettings() {
-  if (safeModeEnabled.value) return;
-  try {
-    await loadSettings();
-    if (requests.active && !safeModeEnabled.value) settingsOpen.value = true;
-  } catch (cause) {
-    if (!isAbortError(cause)) showToast(userErrorMessage(cause, '读取插件设置失败'), 'error');
-  }
+function openSettings() {
+  return openCapability('settings', loadSettings, () => settingsOpenModal.open(true), '读取插件设置失败');
 }
 async function saveSettings() {
   if (savingSettings.value || safeModeEnabled.value) return;
@@ -235,25 +306,39 @@ async function saveSettings() {
   let configurationSaved = false;
   try {
     const id = encodeURIComponent(String(route.params.pluginId));
-    await requests.run(`/api/plugins/${id}/configuration`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settingsConfig.value),
-    }, async response => {
-      if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
-    });
+    await requests.run(
+      `/api/plugins/${id}/configuration`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsConfig.value),
+      },
+      async (response) => {
+        if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
+      },
+    );
     configurationSaved = true;
-    await requests.run(`/api/plugins/${id}/settings/display/configuration`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settingsDisplay.value),
-    }, response => {
-      if (!response.ok) throw new Error('保存配置展示设置失败');
-    });
-    settingsOpen.value = false;
+    await requests.run(
+      `/api/plugins/${id}/settings/display/configuration`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsDisplay.value),
+      },
+      (response) => {
+        if (!response.ok) throw new Error('保存配置展示设置失败');
+      },
+    );
+    settingsOpenModal.close();
     showToast('配置展示设置已保存', 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(configurationSaved ? '配置已保存，展示设置保存失败，请重试' : userErrorMessage(cause, '配置保存失败，请重试'), 'error');
+    if (requests.active && !isAbortError(cause))
+      showToast(
+        configurationSaved
+          ? '配置已保存，展示设置保存失败，请重试'
+          : userErrorMessage(cause, '配置保存失败，请重试'),
+        'error',
+      );
   } finally {
     savingSettings.value = false;
   }
@@ -269,15 +354,16 @@ async function saveFeatureSettings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(featureSettings.value),
       },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error('保存功能展示设置失败');
         return response.json();
       },
     );
-    featureSettingsOpen.value = false;
+    featureSettingsOpenModal.close();
     showToast('功能展示设置已保存', 'success');
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '保存功能展示设置失败'));
+    if (requests.active && !isAbortError(cause))
+      showToast(userErrorMessage(cause, '保存功能展示设置失败'));
   } finally {
     savingFeatureSettings.value = false;
   }
@@ -285,11 +371,12 @@ async function saveFeatureSettings() {
 async function deletePlugin(deleteData: boolean) {
   if (safeModeEnabled.value || deleting.value) return;
   deleting.value = true;
+  deletingData.value = deleteData;
   try {
     await requests.run(
       `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}?deleteData=${deleteData}`,
       { method: 'DELETE' },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error('删除插件失败');
       },
     );
@@ -299,65 +386,80 @@ async function deletePlugin(deleteData: boolean) {
     if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '删除插件失败'));
   } finally {
     deleting.value = false;
+    deletingData.value = undefined;
   }
 }
 async function load() {
   const generation = ++loadGeneration;
+  capabilityGeneration++;
+  loadingCapability.value = '';
   requests.cancelReads();
   closeReadme();
-  statusSettingsOpen.value = featureSettingsOpen.value = settingsOpen.value = deleteOpen.value = false;
-  plugin.value = undefined;
-  error.value = '';
+  readmeOpenModal.reset();
+  statusSettingsOpenModal.reset();
+  featureSettingsOpenModal.reset();
+  settingsOpenModal.reset();
+  deleteOpenModal.reset();
   try {
-    const loadedPlugin = await requests.run<PluginInfo>(`/api/plugins/${encodeURIComponent(String(route.params.pluginId))}`, {}, response => {
-      if (!response.ok) throw new Error('无法加载插件信息');
-      return response.json();
-    });
+    const loadedPlugin = await requests.run<PluginInfo>(
+      `/api/plugins/${encodeURIComponent(String(route.params.pluginId))}`,
+      {},
+      (response) => {
+        if (!response.ok) throw new Error('无法加载插件信息');
+        return response.json();
+      },
+    );
     if (!requests.active || generation !== loadGeneration) return;
     plugin.value = loadedPlugin;
-    await Promise.all([
-      loadedPlugin.manifest?.status_ui ? loadStatusSettings() : Promise.resolve(),
-      loadedPlugin.manifest?.features_ui ? loadFeatureSettings() : Promise.resolve(),
-      loadedPlugin.manifest?.settings_ui ? loadSettings() : Promise.resolve(),
-    ]);
+    if (requests.active && generation === loadGeneration) error.value = '';
   } catch (cause) {
-    if (requests.active && generation === loadGeneration && !isAbortError(cause)) error.value = userErrorMessage(cause, '无法加载插件信息');
+    if (requests.active && generation === loadGeneration && !isAbortError(cause))
+      error.value = userErrorMessage(cause, '无法加载插件信息');
   }
 }
 onMounted(load);
-watch(() => route.params.pluginId, () => { requests.cancelAll(); void load(); });
-onBeforeUnmount(() => { requests.dispose(); closeReadme(); });
+watch(
+  () => route.params.pluginId,
+  () => {
+    error.value = '';
+    plugin.value = undefined;
+    requests.cancelAll();
+    void load();
+  },
+);
+onBeforeUnmount(() => {
+  requests.dispose();
+  closeReadme();
+  readmeOpenModal.reset();
+});
 </script>
 
 <template>
-  <section class="plugin-detail-view">
-    <p v-if="error" class="status-message error">{{ error }}</p>
-    <template v-else-if="plugin">
-      <section class="plugin-detail-hero">
+  <section ref="pageElement" class="plugin-detail-view load-error-layout">
+    <AppLoadError :show="Boolean(error)" :retry="load">{{ error }}</AppLoadError>
+    <AppLoading v-if="!plugin && !error" label="正在读取插件信息" />
+    <NCard v-if="!plugin && error"><NEmpty :show-icon="false" description="无法加载插件信息" /></NCard>
+    <template v-if="plugin">
+      <NCard tag="section" content-class="plugin-detail-hero">
         <div>
           <p class="plugin-detail-id">{{ plugin.id }}</p>
           <h2>{{ plugin.manifest?.name ?? plugin.directoryName }}</h2>
           <p>{{ plugin.manifest?.description || '—' }}</p>
         </div>
         <div class="plugin-info-hero-actions">
-          <RouterLink class="button button-secondary" :to="`/plugins/${route.params.pluginId}`">
-            返回
-          </RouterLink>
-          <button
-            class="button button-danger"
-            :class="{ 'safe-mode-button': safeModeEnabled }"
-            type="button"
+          <AppLinkButton :to="`/plugins/${route.params.pluginId}`"> 返回 </AppLinkButton>
+          <NButton
+            attr-type="button"
             :disabled="safeModeEnabled"
-            :title="safeModeEnabled ? safeModeMessage : undefined"
-            @click="deleteOpen = true"
+            @click="deleteOpenModal.open(true)"
+            type="error"
           >
-            <AppIcon v-if="safeModeEnabled" name="lock" />
             删除
-          </button>
+          </NButton>
         </div>
-      </section>
+      </NCard>
       <section class="plugin-detail-grid">
-        <article class="plugin-detail-panel">
+        <NCard tag="article" content-class="plugin-detail-panel">
           <h3>插件元数据</h3>
           <dl class="plugin-info-list">
             <div>
@@ -366,7 +468,12 @@ onBeforeUnmount(() => { requests.dispose(); closeReadme(); });
                 <template v-if="plugin.manifest?.authors?.length">
                   <template v-for="(author, index) in plugin.manifest.authors" :key="index">
                     <span v-if="index" aria-hidden="true">、</span>
-                    <a v-if="author.links" :href="author.links" target="_blank" rel="noopener noreferrer">
+                    <a
+                      v-if="author.links"
+                      :href="author.links"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
                       {{ author.name || '—' }}
                     </a>
                     <span v-else>{{ author.name || '—' }}</span>
@@ -388,8 +495,8 @@ onBeforeUnmount(() => { requests.dispose(); closeReadme(); });
               <dd>{{ plugin.manifest?.main || '—' }}</dd>
             </div>
           </dl>
-        </article>
-        <article class="plugin-detail-panel">
+        </NCard>
+        <NCard tag="article" content-class="plugin-detail-panel">
           <h3>安装信息</h3>
           <dl class="plugin-info-list">
             <div>
@@ -405,187 +512,290 @@ onBeforeUnmount(() => { requests.dispose(); closeReadme(); });
               <dd class="path-value">{{ plugin.dataDirectory }}</dd>
             </div>
           </dl>
-        </article>
+        </NCard>
       </section>
-      <section class="plugin-detail-panel">
+      <NCard tag="section" content-class="plugin-detail-panel">
         <h3>能力声明</h3>
         <div class="feature-list">
-          <button
-            v-for="[key, label] in capabilityItems"
-            :key="key"
-            type="button"
-            :class="{
-              active: hasUi(key),
-              'feature-button': hasUi(key),
-              'safe-mode-button': safeModeEnabled && hasUi(key),
-            }"
-            :disabled="!hasUi(key) || safeModeEnabled"
-            :title="safeModeEnabled && hasUi(key) ? safeModeMessage : undefined"
-            @click="
-              key === 'status'
-                ? openStatusSettings()
-                : key === 'features'
-                  ? openFeatureSettings()
-                  : key === 'settings'
-                    ? openSettings()
-                    : undefined
-            "
-          >
-            <AppIcon v-if="safeModeEnabled && hasUi(key)" name="lock" />
-            {{ label }}：{{ hasUi(key) ? '已声明' : '未声明' }}
-          </button>
-        </div>
-      </section>
-      <section v-if="readmeAvailable" class="plugin-detail-panel">
-        <div class="program-panel-header">
-          <h3>说明文档</h3>
-          <button class="button button-secondary" type="button" aria-label="查看说明文档" aria-haspopup="dialog" @click="openReadme">查看</button>
-        </div>
-      </section>
-      <AppModal v-if="readmeOpen" title="说明文档" size="medium" @close="closeReadme">
-        <p v-if="readmeLoading" class="plugin-empty loading-hint" role="status">正在读取说明文档…</p>
-        <p v-else-if="readmeError" class="status-message error" role="alert">{{ readmeError }}</p>
-        <div v-else-if="readmeHtml" class="markdown-content" v-html="readmeHtml"></div>
-        <p v-else class="plugin-empty">说明文档为空</p>
-        <template #actions>
-          <button class="button button-secondary" type="button" @click="closeReadme">关闭</button>
-        </template>
-      </AppModal>
-      <AppModal v-if="statusSettingsOpen" :dismissible="!savingStatusSettings" title="状态展示设置" @close="statusSettingsOpen = false">
-        <label class="toggle-control">
-          <input v-model="statusSettings.registerOnHome" type="checkbox" />
-          <span>注册到首页</span>
-        </label>
-        <label class="field-control status-display-title">
-          <span>首页标题</span>
-          <input
-            v-model.trim="statusSettings.homeTitle"
-            type="text"
-            maxlength="100"
-            :placeholder="`${plugin.manifest?.name ?? plugin.id} 状态`"
-          />
-        </label>
-        <div class="status-display-options">
-          <strong>状态项</strong>
-          <label v-for="key in statusKeys" :key="key" class="toggle-control">
-            <input v-model="selectedStatusKeys" type="checkbox" :value="key" />
-            <span>{{ key }}</span>
-          </label>
-          <p v-if="!statusKeys.length">暂无可配置的状态项</p>
-        </div>
-        <template #actions>
-          <button class="button button-secondary" type="button" @click="statusSettingsOpen = false">
-            取消
-          </button>
-          <button
-            class="button button-primary"
-            type="button"
-            :disabled="savingStatusSettings"
-            @click="saveStatusSettings"
-          >
-            {{ savingStatusSettings ? '正在保存…' : '保存' }}
-          </button>
-        </template>
-      </AppModal>
-      <AppModal v-if="featureSettingsOpen" :dismissible="!savingFeatureSettings" title="功能展示设置" @close="featureSettingsOpen = false">
-        <label class="toggle-control">
-          <input v-model="featureSettings.registerOnHome" type="checkbox" />
-          <span>注册到首页</span>
-        </label>
-        <label class="field-control status-display-title">
-          <span>首页标题</span>
-          <input
-            v-model.trim="featureSettings.homeTitle"
-            type="text"
-            maxlength="100"
-            :placeholder="`${plugin.manifest?.name ?? plugin.id} 功能`"
-          />
-        </label>
-        <div class="status-display-options">
-          <strong>功能项</strong>
-          <label v-for="feature in features" :key="feature.id" class="toggle-control">
-            <input v-model="selectedFeatureIds" type="checkbox" :value="feature.id" />
-            <span>{{ feature.name }}</span>
-          </label>
-          <p v-if="!features.length">暂无可配置的功能项</p>
-        </div>
-        <template #actions>
-          <button class="button button-secondary" type="button" @click="featureSettingsOpen = false">
-            取消
-          </button>
-          <button
-            class="button button-primary"
-            type="button"
-            :disabled="savingFeatureSettings"
-            @click="saveFeatureSettings"
-          >
-            {{ savingFeatureSettings ? '正在保存…' : '保存' }}
-          </button>
-        </template>
-      </AppModal>
-      <AppModal v-if="settingsOpen" :dismissible="!savingSettings" title="配置展示设置" @close="settingsOpen = false">
-        <label class="toggle-control">
-          <input
-            :checked="!settingsDisplay.registerOnHome"
-            type="checkbox"
-            @change="settingsDisplay.registerOnHome = !($event.target as HTMLInputElement).checked"
-          />
-          <span>隐藏插件主页配置</span>
-        </label>
-        <div class="plugin-settings-fields">
-          <template v-for="setting in settingsDefinitions" :key="setting.name">
-            <PluginSettingField
-              v-if="isDefinition(setting)"
-              :field="setting"
-              v-model="settingsConfig[setting.name]"
-              :field-id="`info-setting-${setting.name}`"
-            />
-            <PluginSettingField v-else :field="setting" v-model="settingsConfig[setting.name]" />
+          <template v-for="[key, label] in capabilityItems" :key="key">
+            <NButton
+              :data-capability="key"
+              :class="{ 'capability-arrival': highlightedCapability === key }"
+              @animationend="(event: AnimationEvent) => { if (event.target === event.currentTarget) highlightedCapability = ''; }"
+              :type="hasUi(key) ? 'primary' : 'default'"
+              :secondary="hasUi(key)"
+              :loading="loadingCapability === key && showCapabilityLoading"
+              :aria-busy="loadingCapability === key"
+              :disabled="!hasUi(key) || safeModeEnabled || Boolean(loadingCapability && (loadingCapability !== key || !showCapabilityLoading))"
+              @click="
+                key === 'status'
+                  ? openStatusSettings()
+                  : key === 'features'
+                    ? openFeatureSettings()
+                    : key === 'settings'
+                      ? openSettings()
+                      : undefined
+              "
+            >
+              {{ label }}：{{ hasUi(key) ? '已声明' : '未声明' }}
+            </NButton>
           </template>
-          <p v-if="!settingsDefinitions.length" class="plugin-empty">暂无配置项</p>
         </div>
-        <template #actions>
-          <button class="button button-secondary" type="button" @click="settingsOpen = false">取消</button>
-          <button
-            class="button button-primary"
-            type="button"
-            :disabled="savingSettings"
-            @click="saveSettings"
+      </NCard>
+      <NCard tag="section" v-if="readmeAvailable" content-class="plugin-detail-panel">
+        <div class="content-section-header">
+          <h3>说明文档</h3>
+          <NButton
+            attr-type="button"
+            aria-label="查看说明文档"
+            aria-haspopup="dialog"
+            :loading="showReadmeLoading"
+            :aria-busy="readmeLoading"
+            :disabled="readmeLoading && !showReadmeLoading"
+            @click="openReadme"
+          >查看</NButton
           >
-            {{ savingSettings ? '正在保存…' : '保存' }}
-          </button>
+        </div>
+      </NCard>
+      <AppModal
+        :show="readmeOpenModal.show"
+        @after-leave="readmeOpenModal.afterLeave"
+        v-if="readmeOpen"
+        title="说明文档"
+        size="medium"
+        @close="closeReadme"
+      >
+        <div v-if="readmeHtml" class="markdown-content" v-html="readmeHtml"></div>
+        <NEmpty :show-icon="false" v-else class="plugin-empty">说明文档为空</NEmpty>
+        <template #actions>
+          <NButton attr-type="button" @click="closeReadme">关闭</NButton>
         </template>
       </AppModal>
       <AppModal
+        :show="statusSettingsOpenModal.show"
+        @after-leave="statusSettingsOpenModal.afterLeave"
+        v-if="statusSettingsOpen"
+        :dismissible="!savingStatusSettings"
+        title="状态展示设置"
+        @close="statusSettingsOpenModal.close()"
+      >
+        <div :inert="savingStatusSettings">
+          <NCheckbox v-model:checked="statusSettings.registerOnHome">注册到首页</NCheckbox>
+          <NFormItem
+            label="首页标题"
+            :label-props="{ for: `${formId}-field-0` }"
+            :show-feedback="false"
+            class="form-field status-display-title"
+          >
+            <NInput
+              :input-props="{ id: `${formId}-field-0` }"
+              :value="statusSettings.homeTitle"
+              @update:value="statusSettings.homeTitle = $event.trim()"
+              maxlength="100"
+              :placeholder="`${plugin.manifest?.name ?? plugin.id} 状态`"
+            />
+          </NFormItem>
+          <div class="status-display-options">
+            <strong>状态项</strong>
+            <NCheckboxGroup
+              v-model:value="selectedStatusKeys"
+            ><NSpace vertical
+              ><NCheckbox v-for="key in statusKeys" :key="key" :value="key">{{
+                  key
+                }}</NCheckbox></NSpace
+              ></NCheckboxGroup
+            >
+            <NEmpty v-if="!statusKeys.length" :show-icon="false" description="暂无可配置的状态项" />
+          </div>
+        </div>
+        <template #actions>
+          <NButton attr-type="button" :disabled="savingStatusSettings" @click="statusSettingsOpenModal.close()"> 取消 </NButton>
+          <NButton
+            :loading="savingStatusSettings"
+            attr-type="button"
+            :disabled="savingStatusSettings"
+            @click="saveStatusSettings"
+            type="primary"
+          >
+            {{ savingStatusSettings ? '正在保存' : '保存' }}
+          </NButton>
+        </template>
+      </AppModal>
+      <AppModal
+        :show="featureSettingsOpenModal.show"
+        @after-leave="featureSettingsOpenModal.afterLeave"
+        v-if="featureSettingsOpen"
+        :dismissible="!savingFeatureSettings"
+        title="功能展示设置"
+        @close="featureSettingsOpenModal.close()"
+      >
+        <div :inert="savingFeatureSettings">
+          <NCheckbox v-model:checked="featureSettings.registerOnHome">注册到首页</NCheckbox>
+          <NFormItem
+            label="首页标题"
+            :label-props="{ for: `${formId}-field-1` }"
+            :show-feedback="false"
+            class="form-field status-display-title"
+          >
+            <NInput
+              :input-props="{ id: `${formId}-field-1` }"
+              :value="featureSettings.homeTitle"
+              @update:value="featureSettings.homeTitle = $event.trim()"
+              maxlength="100"
+              :placeholder="`${plugin.manifest?.name ?? plugin.id} 功能`"
+            />
+          </NFormItem>
+          <div class="status-display-options">
+            <strong>功能项</strong>
+            <NCheckboxGroup
+              v-model:value="selectedFeatureIds"
+            ><NSpace vertical
+              ><NCheckbox v-for="feature in features" :key="feature.id" :value="feature.id">{{
+                  feature.name
+                }}</NCheckbox></NSpace
+              ></NCheckboxGroup
+            >
+            <NEmpty v-if="!features.length" :show-icon="false" description="暂无可配置的功能项" />
+          </div>
+        </div>
+        <template #actions>
+          <NButton attr-type="button" :disabled="savingFeatureSettings" @click="featureSettingsOpenModal.close()"> 取消 </NButton>
+          <NButton
+            :loading="savingFeatureSettings"
+            attr-type="button"
+            :disabled="savingFeatureSettings"
+            @click="saveFeatureSettings"
+            type="primary"
+          >
+            {{ savingFeatureSettings ? '正在保存' : '保存' }}
+          </NButton>
+        </template>
+      </AppModal>
+      <AppModal
+        :show="settingsOpenModal.show"
+        @after-leave="settingsOpenModal.afterLeave"
+        v-if="settingsOpen"
+        :dismissible="!savingSettings"
+        title="配置展示设置"
+        @close="settingsOpenModal.close()"
+      >
+        <NSpace vertical :size="16" class="plugin-configuration-display" :inert="savingSettings">
+          <NCheckbox
+            :checked="!settingsDisplay.registerOnHome"
+            @update:checked="settingsDisplay.registerOnHome = !$event"
+          >隐藏插件主页配置</NCheckbox
+          >
+          <div class="plugin-settings-fields">
+            <template v-for="setting in settingsDefinitions" :key="setting.name">
+              <PluginSettingField
+                v-if="isPluginSetting(setting)"
+                :field="setting"
+                v-model="settingsConfig[setting.name]"
+                :field-id="`info-setting-${setting.name}`"
+              />
+              <PluginSettingField v-else :field="setting" v-model="settingsConfig[setting.name]" />
+            </template>
+            <NEmpty :show-icon="false" v-if="!settingsDefinitions.length" class="plugin-empty">暂无配置项</NEmpty>
+          </div>
+        </NSpace>
+        <template #actions>
+          <NButton attr-type="button" :disabled="savingSettings" @click="settingsOpenModal.close()">取消</NButton>
+          <NButton
+            :loading="savingSettings"
+            attr-type="button"
+            :disabled="savingSettings"
+            @click="saveSettings"
+            type="primary"
+          >
+            {{ savingSettings ? '正在保存' : '保存' }}
+          </NButton>
+        </template>
+      </AppModal>
+      <AppModal
+        :show="deleteOpenModal.show"
+        @after-leave="deleteOpenModal.afterLeave"
         v-if="deleteOpen"
         title="删除插件"
         :dismissible="!deleting"
         :dismiss-on-backdrop="!deleting"
-        @close="deleteOpen = false"
+        @close="deleteOpenModal.close()"
       >
         <p>是否删除当前插件和配置文件</p>
         <template #actions>
-          <button
-            class="button button-secondary"
-            type="button"
-            :disabled="deleting"
-            @click="deleteOpen = false"
-          >
+          <NButton attr-type="button" :disabled="deleting" @click="deleteOpenModal.close()">
             取消
-          </button>
-          <button
-            class="button button-danger"
-            type="button"
+          </NButton>
+          <NButton
+            :loading="deleting && deletingData === false"
+            attr-type="button"
             :disabled="deleting"
             @click="deletePlugin(false)"
+            type="error"
           >
-            仅删除插件
-          </button>
-          <button class="button button-danger" type="button" :disabled="deleting" @click="deletePlugin(true)">
-            {{ deleting ? '正在删除…' : '删除插件和配置' }}
-          </button>
+            {{ deleting && deletingData === false ? '正在删除' : '仅删除插件' }}
+          </NButton>
+          <NButton
+            :loading="deleting && deletingData === true"
+            attr-type="button"
+            :disabled="deleting"
+            @click="deletePlugin(true)"
+            type="error"
+          >
+            {{ deleting && deletingData === true ? '正在删除' : '删除插件和配置' }}
+          </NButton>
         </template>
       </AppModal>
     </template>
   </section>
 </template>
+
+<style>
+.plugin-detail-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.plugin-detail-hero h2, .plugin-detail-panel h3 { margin: 0; }
+.plugin-detail-hero > div > p { margin: 6px 0 0; color: var(--text-muted); font-size: 14px; line-height: 1.55; }
+.plugin-detail-id { color: var(--text-subtle) !important; font-size: 12px !important; font-weight: 400; }
+.plugin-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--page-card-row-gap) 18px; }
+.plugin-info-list { display: grid; gap: 12px; margin: 18px 0 0; }
+.plugin-info-list div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; }
+.plugin-info-list dt { color: var(--text-muted); font-size: 13px; }
+.plugin-info-list dd { min-width: 0; margin: 0; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.plugin-info-list a { color: var(--accent-text); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) {
+  .plugin-info-list a:hover { text-decoration: underline; }
+}
+.path-value { color: var(--text-muted) !important; font-family: var(--font-mono); font-size: 12px !important; }
+.feature-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+@media (max-width: 640px) {
+  .plugin-detail-hero { align-items: stretch; flex-direction: column; }
+  .plugin-detail-grid { grid-template-columns: 1fr; }
+  .plugin-info-list div { grid-template-columns: 1fr; gap: 4px; }
+}
+.plugin-authors { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plugin-authors a { color: var(--text); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) {
+  .plugin-authors a:hover { color: var(--accent-text); text-decoration: none; }
+}
+.plugin-detail-hero > div > p, .plugin-info-list dt, .plugin-info-list dd, .plugin-info-list a, .path-value, .plugin-authors a, .status-display-options > p { transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.plugin-detail-view { max-width: none; }
+.plugin-info-hero-actions { display: flex; align-items: center; gap: 10px; }
+.status-display-options { display: grid; gap: 10px; margin-top: 18px; }
+.status-display-options > strong { font-size: 14px; font-weight: 500; }
+.status-display-options > p { margin: 0; color: var(--text-muted); font-size: 13px; }
+.status-display-title { margin-top: 18px; }
+.status-display-title input { width: 100%; min-width: 0; }
+.plugin-detail-hero .plugin-info-hero-actions { flex: 0 0 auto; }
+@media (max-width: 640px) {
+  .plugin-detail-hero .plugin-info-hero-actions { align-self: flex-end; }
+}
+</style>
+
+<style scoped>
+.capability-arrival {
+  outline-offset: 3px;
+  animation: capability-arrival 1s ease-out;
+}
+@keyframes capability-arrival {
+  0%, 70% { outline: 2px solid var(--accent-text); }
+  100% { outline: 2px solid transparent; }
+}
+</style>

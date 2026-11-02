@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
+import { modalStateModule } from '../support/modalState.mjs';
 import test, { afterEach } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import * as vue from 'vue';
+import { elements, attribute, binding } from '../support/template.mjs';
 import { readApiError } from '../support/apiErrors.mjs';
 
 const componentUrl = new URL('../../src/features/tasks/CronEditor.vue', import.meta.url);
 const componentSource = readFileSync(componentUrl, 'utf8');
+
+test('generator fields use evenly distributed library underline tabs without custom selected styling', () => {
+  assert.match(componentSource, /<NTabs\s+v-model:value="activeField"\s+type="line"\s+justify-content="space-evenly"[\s\S]*?aria-label="Cron 字段"\s*>\s*<NTab[\s\S]*?:name="index"/);
+  assert.match(componentSource, /:tab-style="\{ width: '100%', justifyContent: 'center', minHeight: '44px' \}"/);
+  assert.match(componentSource, /\.cron-generator-tabs :deep\(\.n-tabs-tab-wrapper\)\s*\{\s*flex: 1;\s*min-width: 0;/);
+  assert.doesNotMatch(componentSource, /NRadioButton|accentTokens|:aria-pressed="activeField|@click="activeField = index"|\.cron-generator-tabs\s*\{/);
+});
 const componentScript = loadScriptModule(componentUrl,
-  'generatorOpen,activeField,rules,generated,generatorError,openGenerator,updateExpression,updateDraftExpression,editExpression,applyExpression,nextRuns,previewError,previewLoading,showValidation,invalidControl,rulesElement,expressionInput,expressionValid,previewValidationMessage,specialSyntaxHelp,choices,weekdays');
+  'generatorOpenModal,generatorOpen,activeField,rules,generated,generatorError,openGenerator,updateExpression,updateDraftExpression,editExpression,applyExpression,nextRuns,previewError,previewLoading,showValidation,invalidControl,rulesElement,expressionInput,expressionValid,previewValidationMessage,specialSyntaxHelp,choices,weekdays');
 const signalScript = loadScriptModule(new URL('../../src/api/requestSignal.ts', import.meta.url));
 const executorScript = loadScriptModule(new URL('../../src/api/requestExecutor.ts', import.meta.url));
 const focusScript = loadScriptModule(new URL('../../src/ui/focusInvalidInput.ts', import.meta.url));
@@ -49,8 +58,8 @@ function fixture(expression, { reducedMotion = false } = {}) {
     window: { matchMedia: () => ({ matches: reducedMotion }) },
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id),
-    require: name => name === 'vue' ? { ...vue, useId: () => 'cron-test', onBeforeUnmount: callback => { unmount = callback; } }
-      : name.endsWith('/client') ? client : name.endsWith('/requestExecutor') ? executorModule.exports
+    require: name => name.endsWith('/useModalState') ? modalStateModule : name === 'vue' ? { ...vue, useId: () => 'cron-test', onBeforeUnmount: callback => { unmount = callback; } }
+      : name.endsWith('/theme') ? { useTheme: () => ({ accentTokens: vue.ref({ text: '#0067c0' }) }) } : name.endsWith('/client') ? client : name.endsWith('/requestExecutor') ? executorModule.exports
       : name.endsWith('/focusInvalidInput') ? focusModule.exports : {},
   };
   const scope = vue.effectScope();
@@ -102,15 +111,22 @@ test('both inputs wait for composition to finish without rejecting the committed
 });
 
 test('save error belongs to the expression field and shares its standard spacing', () => {
-  const mainField = componentSource.split('<template>')[1].split('<AppModal')[0];
-  assert.match(mainField, /<label class="field-control">[\s\S]*?<\/div>\s*<small v-if="error" class="field-error" role="alert">{{ error }}<\/small>\s*<\/label>/);
-  assert.equal([...mainField.matchAll(/class="field-error"/g)].length, 1);
+  const field = elements(componentSource, node => node.tag === 'NFormItem' && attribute(node, 'label') === 'Cron 表达式')[0];
+  assert.equal(binding(field, 'show-feedback'), 'Boolean(error)');
+  assert.equal(binding(field, 'validation-status'), "error ? 'error' : undefined");
+  assert.match(field.loc.source, /#feedback><span role="alert">{{ error }}<\/span>/);
 });
 
 test('expression inputs share edit handlers without character restriction listeners', () => {
   assert.doesNotMatch(componentSource, /@beforeinput|@paste|isCronText|blockInvalidCron/);
-  assert.ok(componentSource.includes('@input="editExpression($event)" @compositionend="editExpression($event)"'));
-  assert.ok(componentSource.includes('@input="editExpression($event, true)" @compositionend="editExpression($event, true)"'));
+  assert.ok(componentSource.includes('@update:value="updateExpression"'));
+  assert.ok(componentSource.includes('@update:value="editExpression($event, true)"'));
+});
+
+test('generator button stays inside the input suffix with the password icon button treatment', () => {
+  const mainField = componentSource.split('<template>')[1].split('<AppModal')[0];
+  assert.doesNotMatch(mainField, /NInputGroup/);
+  assert.match(mainField, /<NInput\b[\s\S]*?<template #suffix>[\s\S]*?<NButton\s+quaternary\s+circle\s+size="tiny"\s+attr-type="button"[\s\S]*?aria-label="生成 Cron 表达式"\s+@mousedown\.prevent\s+@click="openGenerator"[\s\S]*?<AppIcon name="clock"\s*\/>[\s\S]*?<\/template>\s*<\/NInput>/);
 });
 
 test('unrestricted manual input is still checked by preview and cannot confirm invalid syntax', async () => {
@@ -124,7 +140,7 @@ test('unrestricted manual input is still checked by preview and cannot confirm i
   await pending;
   await f.subject.applyExpression();
   assert.equal(f.subject.previewError.value, 'Cron 表达式格式无效');
-  assert.equal(f.subject.generatorOpen.value, true);
+  assert.equal(f.subject.generatorOpenModal.show, true);
   assert.deepEqual(f.emissions, []);
 });
 
@@ -189,7 +205,7 @@ test('preview distinguishes malformed syntax, no next occurrence and network err
 });
 
 test('invalid selections skip requests and closing or unmounting cancels pending work', async () => {
-  for (const close of [f => { f.subject.generatorOpen.value = false; }, f => f.unmount()]) {
+  for (const close of [f => { f.subject.generatorOpenModal.close(); }, f => f.unmount()]) {
     const f = fixture('0 0 8 * * *');
     f.subject.openGenerator();
     f.subject.rules.value[1].values = [];
@@ -207,7 +223,7 @@ test('invalid selections skip requests and closing or unmounting cancels pending
 });
 
 test('closing or unmounting during debounce prevents requests and repeated cleanup is safe', async () => {
-  for (const close of [f => { f.subject.generatorOpen.value = false; }, f => f.unmount()]) {
+  for (const close of [f => { f.subject.generatorOpenModal.close(); }, f => f.unmount()]) {
     const f = fixture('0 0 8 * * *');
     f.subject.openGenerator();
     assert.equal(f.timers.size, 1);
@@ -241,9 +257,9 @@ test('opening and cancelling the generator never changes the expression or save 
   f.props.error = '保存校验错误';
   assert.deepEqual(f.emissions, []);
   f.subject.openGenerator();
-  assert.equal(f.subject.generatorOpen.value, true);
+  assert.equal(f.subject.generatorOpenModal.show, true);
   f.subject.rules.value[1].mode = 'every';
-  f.subject.generatorOpen.value = false;
+  f.subject.generatorOpenModal.close();
   assert.equal(f.props.modelValue, '0 30 */2 * * 0');
   assert.equal(f.props.error, '保存校验错误');
   assert.deepEqual(f.emissions, []);
@@ -264,14 +280,14 @@ test('generator restores interval, range and multiple values across six fields',
   f.subject.applyExpression();
   assert.deepEqual(f.emissions, ['0 0/5 8-18 1,15 1,6,12 0,6']);
   assert.equal(f.props.error, '');
-  assert.equal(f.subject.generatorOpen.value, false);
+  assert.equal(f.subject.generatorOpenModal.show, false);
 });
 
 test('reopening discards cancelled drafts and reads the current expression', () => {
   const f = fixture('0 0 8 * * *');
   f.subject.openGenerator();
   f.subject.rules.value[2].values = [9];
-  f.subject.generatorOpen.value = false;
+  f.subject.generatorOpenModal.close();
   f.subject.openGenerator();
   assert.equal(f.subject.generated.value, '0 0 8 * * *');
   f.props.modelValue = '0 15 10 * * 6';
@@ -293,7 +309,7 @@ test('malformed input is preserved and format errors are displayed by preview in
     const f = fixture(expression);
     f.props.error = '保存校验错误';
     f.subject.openGenerator();
-    assert.equal(f.subject.generatorOpen.value, true);
+    assert.equal(f.subject.generatorOpenModal.show, true);
     assert.equal(f.subject.generated.value, expression);
     const pending = f.flushPreview();
     assert.equal(new URL(f.requests[0].url, 'http://localhost').searchParams.get('expression'), expression);
@@ -337,7 +353,7 @@ test('invalid or cleared manual drafts are not replaced by defaults and show pre
     await pending;
     assert.equal(f.subject.previewError.value, message);
     assert.equal(f.props.modelValue, '0 0 8 * * *');
-    f.subject.generatorOpen.value = false;
+    f.subject.generatorOpenModal.close();
     assert.deepEqual(f.emissions, []);
   }
 });
@@ -368,12 +384,12 @@ test('invalid and empty manual expressions focus and shake only on confirmation 
     f.subject.openGenerator();
     f.subject.updateDraftExpression(expression);
     const calls = [];
-    f.subject.expressionInput.value = { scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
+    f.subject.expressionInput.value = { closest: () => null, scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
     await f.completePreview({ detail: 'Cron 表达式格式无效' }, 400);
     assert.equal(f.subject.showValidation.value, false);
     assert.deepEqual(calls, []);
     await f.subject.applyExpression();
-    assert.equal(f.subject.generatorOpen.value, true);
+    assert.equal(f.subject.generatorOpenModal.show, true);
     assert.equal(f.subject.showValidation.value, true);
     assert.deepEqual(calls, ['focus', 'animate']);
     assert.deepEqual(f.emissions, []);
@@ -387,7 +403,7 @@ test('manual syntax failures respect reduced motion', async () => {
   const f = fixture('invalid', { reducedMotion: true });
   f.subject.openGenerator();
   const calls = [];
-  f.subject.expressionInput.value = { scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
+  f.subject.expressionInput.value = { closest: () => null, scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
   await f.completePreview({ detail: 'Cron 表达式格式无效' }, 400);
   await f.subject.applyExpression();
   assert.deepEqual(calls, ['focus']);
@@ -398,7 +414,7 @@ test('network and server failures prevent confirmation without blaming or shakin
     const f = fixture('0 0 8 * * *');
     f.subject.openGenerator();
     const calls = [];
-    f.subject.expressionInput.value = { scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
+    f.subject.expressionInput.value = { closest: () => null, scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
     const pending = f.flushPreview();
     if (networkFailure) f.requests[0].reject(new Error('无法连接到 WinPilot'));
     else f.requests[0].resolve(Response.json({ detail: '无法计算执行时间，请重试' }, { status: 500 }));
@@ -406,7 +422,7 @@ test('network and server failures prevent confirmation without blaming or shakin
     await f.subject.applyExpression();
     assert.deepEqual(calls, []);
     assert.deepEqual(f.emissions, []);
-    assert.equal(f.subject.generatorOpen.value, true);
+    assert.equal(f.subject.generatorOpenModal.show, true);
     assert.equal(f.subject.expressionValid.value, undefined);
     assert.notEqual(f.subject.previewError.value, '');
   }
@@ -467,7 +483,7 @@ test('a closed modal cannot confirm even after a successful preview', async () =
   const f = fixture('0 0 8 * * *');
   f.subject.openGenerator();
   await f.completePreview();
-  f.subject.generatorOpen.value = false;
+  f.subject.generatorOpenModal.close();
   await f.subject.applyExpression();
   assert.deepEqual(f.emissions, []);
 });
@@ -539,7 +555,7 @@ test('invalid intervals, reversed ranges and empty selections cannot be applied'
     assert.notEqual(f.subject.generatorError.value, '');
     f.subject.applyExpression();
     assert.deepEqual(f.emissions, []);
-    assert.equal(f.subject.generatorOpen.value, true);
+    assert.equal(f.subject.generatorOpenModal.show, true);
   }
 });
 
@@ -549,7 +565,7 @@ test('typing directly clears the save error without opening the generator', () =
   f.subject.updateExpression('0 0 9 * * *');
   assert.equal(f.props.error, '');
   assert.deepEqual(f.emissions, ['0 0 9 * * *']);
-  assert.equal(f.subject.generatorOpen.value, false);
+  assert.equal(f.subject.generatorOpenModal.show, false);
 });
 
 test('weekday ranges, intervals and Sunday selections use zero through six', async () => {
@@ -632,7 +648,7 @@ test('temporary empty values remain neutral until confirmation and edits clear v
   await f.subject.applyExpression();
   assert.equal(f.subject.showValidation.value, true);
   assert.equal(f.subject.invalidControl.value, 'start');
-  assert.equal(f.subject.generatorOpen.value, true);
+  assert.equal(f.subject.generatorOpenModal.show, true);
   assert.deepEqual(f.emissions, []);
   f.subject.rules.value[0].start = 60;
   assert.equal(f.subject.showValidation.value, false);
@@ -640,7 +656,7 @@ test('temporary empty values remain neutral until confirmation and edits clear v
   f.subject.rules.value[0].start = 0;
   assert.equal(f.subject.generatorError.value, '');
   assert.equal(f.timers.size, 1);
-  f.subject.generatorOpen.value = false;
+  f.subject.generatorOpenModal.close();
   f.subject.openGenerator();
   assert.equal(f.subject.showValidation.value, false);
 });
@@ -660,12 +676,12 @@ test('confirmation selects the first invalid tab and focuses and animates only i
     const calls = [];
     f.subject.rulesElement.value = { querySelector: selector => {
       calls.push(selector);
-      return { scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
+      return { closest: () => null, scrollIntoView() {}, focus: () => calls.push('focus'), animate: () => calls.push('animate') };
     } };
     await f.subject.applyExpression();
     assert.equal(f.subject.activeField.value, 1);
     assert.equal(f.subject.invalidControl.value, control);
-    assert.deepEqual(calls, [`[data-control="${control}"] input`, 'focus', 'animate']);
+    assert.deepEqual(calls, [`[data-cron-mode="${changes.mode}"] [data-control="${control}"] :is(input, [role="checkbox"])`, 'focus', 'animate']);
     assert.deepEqual(f.emissions, []);
   }
 });
@@ -677,11 +693,11 @@ test('reduced motion keeps focus without animation and closing prevents late foc
     f.subject.rules.value[0].step = 0;
     const calls = [];
     f.subject.rulesElement.value = { querySelector: () => ({
-      scrollIntoView() {},
+      closest: () => null, scrollIntoView() {},
       focus: () => calls.push('focus'), animate: () => calls.push('animate'),
     }) };
     const confirming = f.subject.applyExpression();
-    if (close) f.subject.generatorOpen.value = false;
+    if (close) f.subject.generatorOpenModal.close();
     await confirming;
     assert.deepEqual(calls, close ? [] : ['focus']);
   }
@@ -689,18 +705,19 @@ test('reduced motion keeps focus without animation and closing prevents late foc
 
 test('confirmation errors stay beside their controls while preview keeps status and request errors separate', () => {
   const source = componentSource;
-  const controls = [...source.matchAll(/<label class="field-control" data-control="(start|end|step)">([\s\S]*?)<\/label>/g)];
+  const controls = elements(source, node => node.tag === 'NFormItem' && ['start', 'end', 'step'].includes(attribute(node, 'data-control')));
   assert.equal(controls.length, 4);
-  for (const [, control, content] of controls) {
-    assert.ok(content.indexOf('<input') < content.indexOf('<small'));
-    assert.ok(content.includes(`v-if="invalidControl === '${control}'"`));
-    assert.ok(content.includes('{{ generatorError }}'));
+  for (const field of controls) {
+    const control = attribute(field, 'data-control');
+    assert.ok(field.loc.source.indexOf('<AppNumberInput') < field.loc.source.indexOf('#feedback'));
+    assert.equal(binding(field, 'show-feedback'), `Boolean(invalidControl === '${control}')`);
+    assert.match(field.loc.source, /{{\s*generatorError\s*}}/);
   }
-  assert.match(source, /<small v-if="invalidControl === 'values'" class="field-error"/);
+  assert.ok(elements(source, node => node.tag === 'NFormItem').some(field => binding(field, 'show-feedback') === "invalidControl === 'values'" && field.loc.source.includes('<template #feedback><span role="alert">{{ generatorError }}</span></template>')));
   const preview = source.split('<div class="cron-preview-body">')[1].split('</div>')[0];
-  assert.ok(preview.includes('{{ previewValidationMessage }}'));
+  assert.match(preview, /{{\s*previewValidationMessage\s*}}/);
   assert.ok(!preview.includes('{{ generatorError }}'));
-  assert.ok(preview.includes('{{ previewError }}'));
+  assert.match(preview, /{{\s*previewError\s*}}/);
   assert.doesNotMatch(source, /\.cron-generator \.field-error\s*\{/);
 });
 
@@ -738,8 +755,9 @@ test('generator expression reuses the host help hint with compact special syntax
   assert.ok(!help.includes('高级语法'));
   const source = componentSource;
   assert.ok(source.includes('<HelpHint :label="specialSyntaxHelp" />'));
-  assert.match(source, /<label :for="expressionId">Cron 表达式<\/label>/);
-  assert.match(source, /<input :id="expressionId" ref="expressionInput" :value="generated"[\s\S]*?@input="editExpression\(\$event, true\)"/);
+  assert.ok(elements(source, node => node.tag === 'NFormItem').some(field => binding(field, 'label-props') === '{ for: expressionId }' && field.loc.source.includes('<span>Cron 表达式</span>')));
+  assert.match(source, /<NInput[\s\S]*?:value="generated"[\s\S]*?id: expressionId[\s\S]*?@update:value="editExpression\(\$event, true\)"/);
+  assert.ok(source.includes('?.inputElRef ?? undefined'));
   assert.doesNotMatch(source, /readonly/);
   f.subject.openGenerator();
   assert.equal(f.subject.generated.value, '0 30 8 L * *');
@@ -761,4 +779,8 @@ test('parsing preserves unsupported syntax and deduplicates numeric selections w
   f.subject.rules.value[0].values.push(59);
   assert.equal(f.subject.generated.value, '0,30,59 0 8 L * MON-FRI');
   assert.deepEqual(Array.from(f.subject.rules.value[1].values), [0]);
+});
+test('specified Cron values fill the form width for a responsive multi-column grid', () => {
+  const source = readFileSync(new URL('../../src/features/tasks/CronEditor.vue', import.meta.url), 'utf8');
+  assert.match(source, /\.cron-generator-values\s*\{[^}]*width: 100%;[^}]*grid-template-columns: repeat\(auto-fit, minmax\(64px, 1fr\)\)/);
 });

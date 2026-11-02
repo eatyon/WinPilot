@@ -3,7 +3,7 @@ import test from 'node:test';
 import { getPageScroller, lockScroll } from '../../src/ui/scrollLock.ts';
 
 function fixture() {
-  const document = {};
+  const document = { querySelector: () => null };
   const element = () => ({ ownerDocument: document, style: { overflow: '', overscrollBehavior: '' }, scrollTop: 320 });
   document.documentElement = element();
   document.body = element();
@@ -19,6 +19,27 @@ test('page scrolling uses the document root with a documentElement fallback', ()
     assert.equal(getPageScroller(), document.documentElement);
     document.scrollingElement = null;
     assert.equal(getPageScroller(), document.documentElement);
+  } finally { globalThis.document = previous; }
+});
+
+test('workspace scrolling and modal locks use the scrollbar inner container without gutter compensation', () => {
+  const previous = globalThis.document;
+  const { document, element } = fixture();
+  const workspace = element();
+  workspace.style.scrollbarGutter = '';
+  workspace.style.paddingRight = '';
+  document.querySelector = (selector) => selector === '[data-page-scroller] > .n-scrollbar-container' ? workspace : null;
+  globalThis.document = document;
+  try {
+    assert.equal(getPageScroller(), workspace);
+    const release = lockScroll(getPageScroller());
+    assert.equal(workspace.style.overflow, 'hidden');
+    assert.equal(workspace.style.paddingRight, '');
+    assert.equal(document.documentElement.style.overflow, '');
+    release();
+    assert.equal(workspace.style.overflow, '');
+    assert.equal(workspace.style.paddingRight, '');
+    assert.equal(workspace.scrollTop, 320);
   } finally { globalThis.document = previous; }
 });
 

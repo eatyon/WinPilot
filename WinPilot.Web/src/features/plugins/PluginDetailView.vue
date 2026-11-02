@@ -1,19 +1,32 @@
 <script setup lang="ts">
+import AppLoadError from '../../components/AppLoadError.vue';
+import { useModalState } from '../../ui/useModalState';
+import AppLoading from '../../components/AppLoading.vue';
+import { NButton, NCard, NEmpty, NText } from 'naive-ui';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getPageScroller } from '../../ui/scrollLock';
-import { readApiError, isAbortError, userErrorMessage, WinPilotConnectionError } from '../../api/client';
-import { createPluginRequests } from './PluginRequests';
+import {
+  readApiError,
+  isAbortError,
+  userErrorMessage,
+} from '../../api/client';
+import { createPluginRequests } from './pluginRequests';
+import { configurationError } from './pluginConfiguration';
 import { showToast } from '../../ui/toast';
 import AppModal from '../../components/AppModal.vue';
-import type { PluginInfo, PluginSettingsDisplaySettings } from './PluginModels';
+import {
+  type PluginInfo,
+  type PluginSettingsDisplaySettings,
+  isPluginSetting,
+  isPluginCollection,
+  type PluginConfigurationDefinition,
+  type PluginFeatureDefinition,
+} from './pluginModels';
 import PluginHeader from './PluginHeader.vue';
 import PluginSettingField from './PluginSettingField.vue';
-import { isPluginSetting as isDefinition, isPluginCollection as isCollection, type PluginCollectionDefinition as CollectionDefinition, type PluginSettingDefinition as SettingDefinition, type PluginFeatureDefinition } from './PluginModels';
-import AppIcon from '../../components/AppIcon.vue';
-import { safeModeEnabled, safeModeMessage } from '../security/safeMode';
+import { safeModeEnabled } from '../security/safeMode';
 
-type Definition = SettingDefinition | CollectionDefinition;
 
 type PluginFeatureExecutionResult = { succeeded: boolean; message: string };
 
@@ -23,28 +36,37 @@ const router = useRouter();
 const id = computed(() => String(route.params.pluginId ?? ''));
 const plugin = ref<PluginInfo>();
 const status = reactive<Record<string, unknown>>({});
-const config = reactive<Record<string, any>>({});
-const definitions = ref<Definition[]>([]);
+const config = reactive<Record<string, unknown>>({});
+const definitions = ref<PluginConfigurationDefinition[]>([]);
 const features = ref<PluginFeatureDefinition[]>([]);
-const settingsDisplay = ref<PluginSettingsDisplaySettings>({ registerOnHome: true });
+const settingsDisplay = ref<PluginSettingsDisplaySettings>({ registerOnHome: false });
+const sections = reactive({
+  status: { loading: false, loaded: false, error: '' },
+  features: { loading: false, loaded: false, error: '' },
+  settings: { loading: false, loaded: false, error: '' },
+});
 const loading = ref(false);
+const hasLoaded = ref(false);
 const error = ref('');
 const saving = ref(false);
 const toggling = ref(false);
 const settingsLoaded = ref(false);
 let loadGeneration = 0;
 const executingFeatureId = ref('');
-const confirmingFeature = ref<PluginFeatureDefinition>();
+const busy = computed(() => loading.value || saving.value || toggling.value || Boolean(executingFeatureId.value));
+const confirmingFeatureModal = useModalState<PluginFeatureDefinition | undefined>(() => undefined);
+const confirmingFeature = confirmingFeatureModal.data;
 let restoreTarget: { path: string; y: number } | undefined;
 try {
   const saved = JSON.parse(sessionStorage.getItem('winpilot-plugin-detail-restore') ?? 'null');
   if (saved?.path === route.fullPath && Number.isFinite(saved.y)) restoreTarget = saved;
-} catch {
-}
+} catch {}
 const restoringScroll = ref(Boolean(restoreTarget && restoreTarget.y > 0));
 let stateEvents: EventSource | undefined;
 let isPageActive = false;
-const pluginRunning = computed(() => plugin.value?.enabled === true && plugin.value.state === 'Running');
+const pluginRunning = computed(
+  () => plugin.value?.enabled === true && plugin.value.state === 'Running',
+);
 function featureButtonLabel(feature: PluginFeatureDefinition): string {
   return feature.mode === 'page' ? '进入' : '执行';
 }
@@ -76,57 +98,103 @@ function displayStatusValue(value: unknown, key?: string): string {
   return String(value);
 }
 
-async function load() {
+async function load(sectionKey?: keyof typeof sections) {
   const generation = ++loadGeneration;
-  stateEvents?.close();
-  stateEvents = undefined;
+  if (!sectionKey || sectionKey === 'status') {
+    stateEvents?.close();
+    stateEvents = undefined;
+  }
   requests.cancelReads();
+  for (const section of Object.values(sections)) section.loading = false;
   loading.value = true;
-  error.value = '';
   try {
-    const current = await requests.run<PluginInfo>(`/api/plugins/${encodeURIComponent(id.value)}?waitForLifecycle=true`, { cache: 'no-store' }, response => {
-      if (!response.ok) throw new Error('无法加载插件');
-      return response.json();
-    });
+    const current = await requests.run<PluginInfo>(
+      `/api/plugins/${encodeURIComponent(id.value)}?waitForLifecycle=true`,
+      { cache: 'no-store' },
+      (response) => {
+        if (!response.ok) throw new Error('无法加载插件');
+        return response.json();
+      },
+    );
     if (!requests.active || generation !== loadGeneration) return;
     plugin.value = current;
-    const isRunning = pluginRunning.value;
-    const [state, savedConfig, rawDefinitions, display, declaredFeatures] =
-      await Promise.all([
-        isRunning && plugin.value.manifest?.status_ui
-          ? requests.run<Record<string, unknown> | undefined>(`/api/plugins/${encodeURIComponent(id.value)}/status`, {}, response => response.ok ? response.json() : undefined)
-          : Promise.resolve(undefined),
-        requests.run<Record<string, unknown>>(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {}, response => {
-          if (!response.ok) throw new Error('读取插件设置失败');
-          return response.json();
-        }),
-        requests.run<unknown[]>(`/api/plugins/${encodeURIComponent(id.value)}/configuration/schema`, {}, response => {
-          if (!response.ok) throw new Error('读取插件设置失败');
-          return response.json();
-        }),
-        requests.run<PluginSettingsDisplaySettings>(`/api/plugins/${encodeURIComponent(id.value)}/settings/display/configuration`, {}, response => {
-          if (!response.ok) throw new Error('读取插件设置失败');
-          return response.json();
-        }),
-        isRunning && plugin.value.manifest?.features_ui
-          ? requests.run<{ features?: PluginFeatureDefinition[] } | undefined>(`/api/plugins/${encodeURIComponent(id.value)}/features`, {}, response => response.ok ? response.json() : undefined)
-          : Promise.resolve(undefined),
-      ]);
-    if (!requests.active || generation !== loadGeneration) return;
-    Object.keys(status).forEach((key) => delete status[key]);
-    if (state) Object.assign(status, state);
-    Object.keys(config).forEach(key => delete config[key]);
-    Object.assign(config, savedConfig);
-    definitions.value = rawDefinitions.filter(value => isDefinition(value) || isCollection(value));
-    settingsDisplay.value = display;
-    features.value = declaredFeatures?.features ?? [];
-    settingsLoaded.value = true;
-    if (pluginRunning.value) connectStateEvents();
+    error.value = '';
+    const active = () => requests.active && generation === loadGeneration;
+    const base = `/api/plugins/${encodeURIComponent(id.value)}`;
+    const read = <T,>(path: string, message: string) => requests.run<T>(
+      `${base}/${path}`, {}, (response) => {
+        if (!response.ok) throw new Error(message);
+        return response.json();
+      },
+    );
+    async function loadSection<T>(
+      key: keyof typeof sections,
+      readData: () => Promise<T>,
+      apply: (data: T) => void,
+    ) {
+      if (sectionKey && key !== sectionKey) return;
+      const section = sections[key];
+      section.loading = true;
+      try {
+        const data = await readData();
+        if (!active()) return;
+        apply(data);
+        section.loaded = true;
+        section.error = '';
+      } catch (cause) {
+        if (active() && !isAbortError(cause))
+          section.error = userErrorMessage(cause, '无法加载插件内容');
+      } finally {
+        if (active()) section.loading = false;
+      }
+    }
+    await Promise.all([
+      loadSection('status', () => pluginRunning.value && current.manifest?.status_ui
+        ? read<Record<string, unknown>>('status', '无法加载状态')
+        : Promise.resolve({}), (state) => {
+        Object.keys(status).forEach((key) => delete status[key]);
+        Object.assign(status, state);
+        if (pluginRunning.value && current.manifest?.status_ui) connectStateEvents();
+      }),
+      loadSection('features', () => pluginRunning.value && current.manifest?.features_ui
+        ? read<{ features?: PluginFeatureDefinition[] }>('features', '无法加载功能')
+        : Promise.resolve({ features: [] }), (declared) => {
+        features.value = declared.features ?? [];
+      }),
+      loadSection('settings', async () => {
+        if (!current.manifest?.settings_ui) return { configuration: {}, definitions: [] };
+        const display = await read<PluginSettingsDisplaySettings>(
+          'settings/display/configuration', '读取插件设置失败',
+        );
+        if (!active()) throw new DOMException('请求已取消', 'AbortError');
+        settingsDisplay.value = display;
+        if (!display.registerOnHome) return { configuration: {}, definitions: [] };
+        const [configuration, definitions] = await Promise.all([
+          read<Record<string, unknown>>('configuration', '读取插件设置失败'),
+          read<unknown[]>('configuration/schema', '读取插件设置失败'),
+        ]);
+        return { configuration, definitions };
+      }, (data) => {
+        Object.keys(config).forEach((key) => delete config[key]);
+        Object.assign(config, data.configuration);
+        definitions.value = data.definitions.filter(
+          (value) => isPluginSetting(value) || isPluginCollection(value),
+        );
+        settingsLoaded.value = true;
+      }),
+    ]);
+    if (active()) hasLoaded.value = true;
   } catch (cause) {
-    if (requests.active && generation === loadGeneration && !isAbortError(cause)) error.value = userErrorMessage(cause, '无法加载插件主页');
+    if (requests.active && generation === loadGeneration && !isAbortError(cause))
+      error.value = userErrorMessage(cause, '无法加载插件主页');
   } finally {
     if (generation === loadGeneration) loading.value = false;
   }
+}
+
+function retryLoad(sectionKey?: keyof typeof sections) {
+  if (busy.value) return;
+  return load(sectionKey);
 }
 
 function connectStateEvents() {
@@ -138,13 +206,12 @@ function connectStateEvents() {
     try {
       Object.keys(status).forEach((key) => delete status[key]);
       Object.assign(status, JSON.parse(event.data));
-    } catch {
-    }
+    } catch {}
   };
 }
 
 async function toggle() {
-  if (toggling.value) return;
+  if (busy.value) return;
   const current = plugin.value;
   if (!current) return;
   if (!current.canChangeEnabled) return;
@@ -156,7 +223,7 @@ async function toggle() {
     const updated = await requests.run<PluginInfo>(
       `/api/plugins/${encodeURIComponent(id.value)}/${current.enabled ? 'disable' : 'enable'}`,
       { method: 'POST' },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error(failureMessage);
         return response.json();
       },
@@ -169,88 +236,57 @@ async function toggle() {
       showToast(failureMessage, 'error');
     else showToast(`插件已${updated.enabled ? '启用' : '禁用'}`, 'success');
   } catch (cause) {
-    if (requests.active && id.value === current.id && !isAbortError(cause) && !(cause instanceof WinPilotConnectionError))
+    if (
+      requests.active &&
+      id.value === current.id &&
+      !isAbortError(cause)
+    )
       showToast(failureMessage, 'error');
+  } finally {
+    toggling.value = false;
   }
-  finally { toggling.value = false; }
 }
 
 async function saveSettings() {
-  if (safeModeEnabled.value || saving.value || loading.value || !settingsLoaded.value) return;
-  const invalid = definitions.value.find(
-    (setting) =>
-      isDefinition(setting) &&
-      setting.type !== 'number' &&
-      setting.required &&
-      (config[setting.name] === '' || config[setting.name] === undefined),
-  ) as SettingDefinition | undefined;
-  if (invalid) {
-    showToast(`${invalid.label || invalid.name}不能为空`, 'error');
-    return;
-  }
-  const invalidCollection = definitions.value
-    .filter(isCollection)
-    .flatMap((collection) => {
-      if (collection.mode !== 'dynamic' || !collection.item) return [];
-      if (!Array.isArray(config[collection.name])) return [];
-      if (
-        config[collection.name].some(
-          (item: Record<string, any>) =>
-            typeof item.__winpilot?.remark !== 'string' || !item.__winpilot.remark.trim(),
-        )
-      )
-        return [{ name: '__winpilot.remark' }];
-      const fields = collection.item.fields;
-      return config[collection.name]
-        .map((item: Record<string, any>) =>
-          fields.find(
-            (field) =>
-              field.type !== 'number' &&
-              field.required &&
-              (item[field.name] === undefined ||
-                item[field.name] === null ||
-                item[field.name] === '' ||
-                (Array.isArray(item[field.name]) && item[field.name].length === 0)),
-          ),
-        )
-        .filter(Boolean);
-    })
-    .find(Boolean);
-  if (invalidCollection) {
-    showToast(
-      invalidCollection.name === '__winpilot.remark' ? '备注不能为空' : `${invalidCollection.label || invalidCollection.name}不能为空`,
-      'error',
-    );
+  if (safeModeEnabled.value || busy.value || !settingsLoaded.value) return;
+  const validationError = configurationError(definitions.value, config);
+  if (validationError) {
+    showToast(validationError, 'error');
     return;
   }
   saving.value = true;
   loadGeneration++;
   requests.cancelReads();
   try {
-    await requests.run(`/api/plugins/${encodeURIComponent(id.value)}/configuration`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    }, async response => {
-      if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
-    });
+    await requests.run(
+      `/api/plugins/${encodeURIComponent(id.value)}/configuration`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      },
+      async (response) => {
+        if (!response.ok) throw new Error(await readApiError(response, '配置保存失败，请重试'));
+      },
+    );
     showToast('配置已保存', 'success');
     await load();
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '配置保存失败，请重试'), 'error');
+    if (requests.active && !isAbortError(cause))
+      showToast(userErrorMessage(cause, '配置保存失败，请重试'), 'error');
   } finally {
     saving.value = false;
   }
 }
 
 async function executeFeature(feature: PluginFeatureDefinition) {
-  if (feature.mode !== 'action' || executingFeatureId.value) return;
+  if (feature.mode !== 'action' || busy.value) return;
   executingFeatureId.value = feature.id;
   try {
     const result = await requests.run<PluginFeatureExecutionResult>(
       `/api/plugins/${encodeURIComponent(id.value)}/features/${encodeURIComponent(feature.id)}/execute`,
       { method: 'POST' },
-      response => {
+      (response) => {
         if (!response.ok) throw new Error('执行功能失败');
         return response.json();
       },
@@ -258,7 +294,8 @@ async function executeFeature(feature: PluginFeatureDefinition) {
     showToast(result.message, result.succeeded ? 'success' : 'error');
     return result.succeeded;
   } catch (cause) {
-    if (requests.active && !isAbortError(cause)) showToast(userErrorMessage(cause, '执行功能失败'), 'error');
+    if (requests.active && !isAbortError(cause))
+      showToast(userErrorMessage(cause, '执行功能失败'), 'error');
   } finally {
     executingFeatureId.value = '';
   }
@@ -266,20 +303,25 @@ async function executeFeature(feature: PluginFeatureDefinition) {
 
 function beginFeature(feature: PluginFeatureDefinition) {
   if (feature.mode === 'page') {
-    sessionStorage.setItem('winpilot-plugin-detail-scroll', JSON.stringify({ path: route.fullPath, y: getPageScroller().scrollTop }));
+    sessionStorage.setItem(
+      'winpilot-plugin-detail-scroll',
+      JSON.stringify({ path: route.fullPath, y: getPageScroller().scrollTop }),
+    );
     sessionStorage.setItem('winpilot-plugin-page-source', 'plugin-detail');
-    void router.push(`/plugins/${encodeURIComponent(id.value)}/features/${encodeURIComponent(feature.id)}`);
+    void router.push(
+      `/plugins/${encodeURIComponent(id.value)}/features/${encodeURIComponent(feature.id)}`,
+    );
     return;
   }
-  if (feature.mode !== 'action') return;
+  if (feature.mode !== 'action' || busy.value) return;
   if (feature.confirm === false) void executeFeature(feature);
-  else confirmingFeature.value = feature;
+  else confirmingFeatureModal.open(feature);
 }
 
 async function confirmFeature() {
   const feature = confirmingFeature.value;
   if (!feature || executingFeatureId.value) return;
-  if (await executeFeature(feature)) confirmingFeature.value = undefined;
+  if (await executeFeature(feature)) confirmingFeatureModal.close();
 }
 
 onMounted(async () => {
@@ -298,20 +340,32 @@ onMounted(async () => {
 });
 watch(id, async () => {
   requests.cancelAll();
+  error.value = '';
   plugin.value = undefined;
+  hasLoaded.value = false;
   settingsLoaded.value = false;
+  settingsDisplay.value = { registerOnHome: false };
+  for (const section of Object.values(sections)) {
+    section.loading = false;
+    section.loaded = false;
+    section.error = '';
+  }
   features.value = [];
   Object.keys(status).forEach((key) => delete status[key]);
   definitions.value = [];
-  confirmingFeature.value = undefined;
+  confirmingFeatureModal.close();
   await load();
 });
-watch(safeModeEnabled, () => {
-  Object.keys(config).forEach(key => delete config[key]);
-  definitions.value = [];
-  settingsLoaded.value = false;
-  void load();
-}, { flush: 'sync' });
+watch(
+  safeModeEnabled,
+  () => {
+    Object.keys(config).forEach((key) => delete config[key]);
+    definitions.value = [];
+    settingsLoaded.value = false;
+    void load();
+  },
+  { flush: 'sync' },
+);
 onBeforeUnmount(() => {
   requests.dispose();
   loadGeneration++;
@@ -321,72 +375,89 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="plugin-home-view" :style="restoringScroll ? { visibility: 'hidden' } : undefined">
-    <p v-if="error" class="status-message error">{{ error }}</p>
-    <p v-if="loading && !plugin" class="plugin-empty loading-hint">正在加载插件…</p>
-    <template v-else-if="plugin">
-      <PluginHeader :plugin="plugin" :changing="toggling" @toggle="toggle" />
-      <section v-if="plugin.manifest?.status_ui" class="plugin-module">
-        <div class="plugin-module-heading"><h3>状态</h3></div>
-        <p v-if="!pluginRunning" class="plugin-empty">{{ plugin.enabled ? '插件未加载' : '插件未启用' }}</p>
+  <section class="plugin-home-view load-error-layout" :style="restoringScroll ? { visibility: 'hidden' } : undefined">
+    <AppLoadError :show="Boolean(error)" :disabled="busy" :retry="() => retryLoad()">{{ error }}</AppLoadError>
+    <NCard v-if="error && !plugin"><NEmpty :show-icon="false" description="无法加载插件内容" /></NCard>
+    <AppLoading v-if="loading && !hasLoaded && !error" label="正在加载插件" />
+    <template v-if="plugin && hasLoaded">
+      <PluginHeader :plugin="plugin" :changing="busy" @toggle="toggle" />
+      <NCard tag="section" v-if="plugin.manifest?.status_ui" content-class="plugin-module">
+        <div class="plugin-module-heading"><NText tag="h3" :depth="1">状态</NText></div>
+        <AppLoadError :show="Boolean(sections.status.error)" :disabled="busy" :retry="() => retryLoad('status')">{{ sections.status.error }}</AppLoadError>
+        <NText tag="p" :depth="3" v-if="!pluginRunning" class="plugin-empty">
+          {{ plugin.enabled ? '插件未加载' : '插件未启用' }}
+        </NText>
+        <AppLoading v-else-if="sections.status.loading && !sections.status.loaded" label="正在加载状态" />
         <dl v-else-if="Object.keys(status).length" class="plugin-status-list">
           <div v-for="(value, key) in status" :key="key" class="plugin-status-row">
             <dt>{{ key }}</dt>
             <dd>{{ displayStatusValue(value, String(key)) }}</dd>
           </div>
         </dl>
-        <p v-else-if="settingsLoaded" class="plugin-empty">暂无状态数据</p>
-      </section>
-      <section v-if="plugin.manifest?.features_ui" class="plugin-module">
-        <div class="plugin-module-heading"><h3>功能</h3></div>
-        <p v-if="!pluginRunning" class="plugin-empty">{{ plugin.enabled ? '插件未加载' : '插件未启用' }}</p>
+        <NText tag="p" :depth="3" v-else-if="!sections.status.error" class="plugin-empty">暂无状态数据</NText>
+      </NCard>
+      <NCard tag="section" v-if="plugin.manifest?.features_ui" content-class="plugin-module">
+        <div class="plugin-module-heading"><NText tag="h3" :depth="1">功能</NText></div>
+        <AppLoadError :show="Boolean(sections.features.error)" :disabled="busy" :retry="() => retryLoad('features')">{{ sections.features.error }}</AppLoadError>
+        <NText tag="p" :depth="3" v-if="!pluginRunning" class="plugin-empty">
+          {{ plugin.enabled ? '插件未加载' : '插件未启用' }}
+        </NText>
+        <AppLoading v-else-if="sections.features.loading && !sections.features.loaded" label="正在加载功能" />
         <div v-else-if="features.length" class="plugin-features-list">
-          <article v-for="feature in features" :key="feature.id" class="plugin-feature-item">
+          <NCard
+            tag="article"
+            v-for="feature in features"
+            :key="feature.id"
+            content-class="plugin-feature-item"
+            embedded
+            size="small"
+          >
             <div>
               <h4>{{ feature.name }}</h4>
               <p v-if="feature.description">{{ feature.description }}</p>
             </div>
             <div class="plugin-feature-controls">
-              <button
-                class="button button-secondary"
-                type="button"
+              <NButton
+                :loading="executingFeatureId === feature.id"
+                attr-type="button"
                 :aria-label="`${featureButtonLabel(feature)}${feature.name}`"
-                :disabled="executingFeatureId === feature.id"
+                :disabled="feature.mode === 'action' && busy"
                 @click="beginFeature(feature)"
               >
-                {{ executingFeatureId === feature.id ? '正在执行…' : featureButtonLabel(feature) }}
-              </button>
+                {{ executingFeatureId === feature.id ? '正在执行' : featureButtonLabel(feature) }}
+              </NButton>
             </div>
-          </article>
+          </NCard>
         </div>
-        <p v-else-if="settingsLoaded" class="plugin-empty">暂无功能声明</p>
-      </section>
-      <section
-        v-if="plugin.manifest?.settings_ui && settingsDisplay.registerOnHome && definitions.length"
-        class="plugin-module"
+        <NText tag="p" :depth="3" v-else-if="!sections.features.error" class="plugin-empty">暂无功能声明</NText>
+      </NCard>
+      <NCard
+        tag="section"
+        v-if="plugin.manifest?.settings_ui && (sections.settings.error || (settingsDisplay.registerOnHome && (sections.settings.loading || definitions.length)))"
+        content-class="plugin-module"
         :class="{ 'safe-mode-locked': safeModeEnabled }"
         :inert="safeModeEnabled"
       >
         <div class="plugin-module-heading">
-          <h3>
+          <NText tag="h3" :depth="1">
             配置
-            <span v-if="safeModeEnabled" class="safe-mode-lock-icon" :title="safeModeMessage">
-              <AppIcon name="lock" />
-            </span>
-          </h3>
-          <button
-            class="button button-primary"
-            type="button"
-            :disabled="saving || loading || !settingsLoaded || safeModeEnabled"
+          </NText>
+          <NButton
+            :loading="saving"
+            attr-type="button"
+            :disabled="busy || !settingsLoaded || safeModeEnabled"
             @click="saveSettings"
+            type="primary"
           >
-            {{ saving ? '正在保存…' : '保存配置' }}
-          </button>
+            {{ saving ? '正在保存' : '保存配置' }}
+          </NButton>
         </div>
-        <div class="plugin-settings-fields">
+        <AppLoadError :show="Boolean(sections.settings.error)" :disabled="busy" :retry="() => retryLoad('settings')">{{ sections.settings.error }}</AppLoadError>
+        <AppLoading v-if="sections.settings.loading && !settingsLoaded" label="正在读取插件设置" />
+        <div v-else class="plugin-settings-fields" :inert="busy">
           <template v-for="setting in definitions" :key="setting.name">
             <PluginSettingField
-              v-if="isDefinition(setting)"
+            v-if="isPluginSetting(setting)"
               :field="setting"
               v-model="config[setting.name]"
               :field-id="`setting-${setting.name}`"
@@ -394,33 +465,55 @@ onBeforeUnmount(() => {
             <PluginSettingField v-else :field="setting" v-model="config[setting.name]" />
           </template>
         </div>
-      </section>
+      </NCard>
       <AppModal
+        :show="confirmingFeatureModal.show"
+        @after-leave="confirmingFeatureModal.afterLeave"
         v-if="confirmingFeature"
         title="提示"
-        :dismiss-on-backdrop="!executingFeatureId"
-        @close="confirmingFeature = undefined"
+        :dismissible="!executingFeatureId"
+        @close="confirmingFeatureModal.close()"
       >
         <p>确定要执行“{{ confirmingFeature.name }}”吗？</p>
         <template #actions>
-          <button
-            class="button button-secondary"
-            type="button"
+          <NButton
+            attr-type="button"
             :disabled="Boolean(executingFeatureId)"
-            @click="confirmingFeature = undefined"
+            @click="confirmingFeatureModal.close()"
           >
             取消
-          </button>
-          <button
-            class="button button-primary"
-            type="button"
+          </NButton>
+          <NButton
+            :loading="Boolean(executingFeatureId)"
+            attr-type="button"
             :disabled="Boolean(executingFeatureId)"
             @click="confirmFeature"
+            type="primary"
           >
-            {{ executingFeatureId ? '正在执行…' : '确认执行' }}
-          </button>
+            {{ executingFeatureId ? '正在执行' : '确认执行' }}
+          </NButton>
         </template>
       </AppModal>
     </template>
   </section>
 </template>
+
+<style>
+.plugin-home-view { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; width: 100%; max-width: none; margin: 0 auto; gap: var(--page-card-row-gap) 18px; }
+.plugin-module { display: grid; gap: 18px; }
+.plugin-module-heading, .plugin-status-list, .plugin-status-row { transition: border-color .3s cubic-bezier(.4, 0, .2, 1); }
+.plugin-module-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.plugin-module-heading h3 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+.plugin-status-list { display: grid; margin: 0; border-top: 1px solid var(--border); }
+.plugin-status-row { display: grid; grid-template-columns: minmax(160px, .3fr) minmax(0, 1fr); gap: 18px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+.plugin-status-row dt, .plugin-status-row dd { transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.plugin-status-row dt { min-width: 0; color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
+.plugin-status-row dd { min-width: 0; margin: 0; color: var(--text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 640px) {
+  .plugin-module-heading { align-items: center; flex-direction: row; }
+  .plugin-status-row { grid-template-columns: minmax(112px, .4fr) minmax(0, 1fr); gap: 12px; }
+}
+@media (max-width: 420px) {
+  .plugin-status-row { grid-template-columns: 1fr; gap: 4px; }
+}
+</style>

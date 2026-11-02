@@ -1,35 +1,44 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
-import type { PluginView } from './PluginPageTypes';
-import { mountPluginView } from './PluginPageMount';
-import pickerStyles from '../../../components/AppPicker.css?inline';
-import controlStyles from './PluginPageUi.css?inline';
+import { nextTick, onBeforeUnmount, onErrorCaptured, onMounted, ref, shallowRef, type Component } from 'vue';
+import type { PluginView } from './pluginPageTypes';
+import { preparePluginView } from './pluginPageRuntime';
 
 const props = defineProps<{ view: PluginView; signal: AbortSignal }>();
 const emit = defineEmits<{ failed: [error: unknown]; ready: [] }>();
 const container = ref<HTMLElement>();
 const loading = ref(true);
-let runtime: ReturnType<typeof mountPluginView> | undefined;
+const component = shallowRef<Component>();
+let runtime: ReturnType<typeof preparePluginView> | undefined;
+
+function fail(cause: unknown) {
+  runtime?.dispose();
+  component.value = undefined;
+  if (!props.signal.aborted) emit('failed', cause);
+}
+onErrorCaptured(cause => { fail(cause); return false; });
 
 onMounted(async () => {
   if (!container.value) return;
   try {
-    const root = container.value.attachShadow({ mode: 'open' });
-    runtime = mountPluginView(root, props.view, props.signal, cause => console.error('插件视图清理失败', cause), pickerStyles + '\n' + controlStyles);
-    await runtime.ready;
-    if (!props.signal.aborted) emit('ready');
+    runtime = preparePluginView(container.value, props.view, props.signal, cause => console.error('插件视图清理失败', cause));
+    runtime.signal.addEventListener('abort', () => { component.value = undefined; }, { once: true });
+    const prepared = await runtime.ready;
+    if (runtime.signal.aborted) return;
+    component.value = prepared;
+    await nextTick();
+    if (!runtime.signal.aborted) emit('ready');
   }
   catch (cause) {
-    if (!props.signal.aborted) {
-      emit('failed', cause);
-    }
+    fail(cause);
   } finally { loading.value = false; }
 });
 onBeforeUnmount(() => runtime?.dispose());
 </script>
 
 <template>
-  <div ref="container" class="plugin-surface" :class="{ 'is-loading': loading }" />
+  <div ref="container" class="plugin-surface" :class="{ 'is-loading': loading }">
+    <component :is="component" v-if="component" />
+  </div>
 </template>
 
 <style scoped>

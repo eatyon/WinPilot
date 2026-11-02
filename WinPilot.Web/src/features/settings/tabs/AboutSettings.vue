@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { createSettingsRequests } from '../SettingsRequests';
+import { useModalState } from '../../../ui/useModalState';
+import { useDelayedLoading } from '../../../ui/useDelayedLoading';
+import AppTooltip from '../../../components/AppTooltip.vue';
+import { NButton, NCard, NCollapseTransition, NEmpty, NFormItem, NText } from 'naive-ui';
+import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
+import { createSettingsRequests } from '../settingsRequests';
 import { readApiError, isAbortError, WinPilotConnectionError } from '../../../api/client';
 import AppIcon from '../../../components/AppIcon.vue';
 import AppModal from '../../../components/AppModal.vue';
 import AppSelect from '../../../components/AppSelect.vue';
-import { safeModeEnabled, safeModeMessage } from '../../security/safeMode';
+import { safeModeEnabled } from '../../security/safeMode';
 import { showToast } from '../../../ui/toast';
 import { renderMarkdown } from '../../../ui/markdown';
+
+const formId = useId();
 
 const requests = createSettingsRequests();
 const repositoryUrl = 'https://github.com/eatyon/WinPilot';
@@ -21,11 +27,14 @@ const updateMessage = ref('');
 const updateMessageType = ref<'neutral' | 'success' | 'error'>('neutral');
 const updateReleaseUrl = ref('');
 const canInstallUpdate = ref(false);
-const updateSettingsOpen = ref(false);
+const updateSettingsOpenModal = useModalState(() => false);
+const updateSettingsOpen = updateSettingsOpenModal.data;
 const updateVersion = ref('');
 const updateNotes = ref('');
-const updateNotesOpen = ref(false);
+const updateNotesOpenModal = useModalState(() => false, Boolean, clearUpdateNotesContent);
+const updateNotesOpen = updateNotesOpenModal.data;
 const updateNotesLoading = ref(false);
+const showUpdateNotesLoading = useDelayedLoading(() => updateNotesLoading.value);
 const updateNotesHtml = ref('');
 let updateNotesGeneration = 0;
 type UpdateSource = 'GitHub' | 'Cnb';
@@ -35,30 +44,54 @@ const checkedUpdateSettings = ref<UpdateSettings>({ source: 'GitHub', channel: '
 const draftSource = ref<UpdateSource>('GitHub');
 const draftChannel = ref<UpdateChannel>('Stable');
 const loadingUpdateSettings = ref(false);
+const showUpdateSettingsLoading = useDelayedLoading(() => loadingUpdateSettings.value);
 const savingUpdateSettings = ref(false);
-const updateSources = [{ value: 'GitHub', label: 'GitHub' }, { value: 'Cnb', label: 'CNB' }];
-const updateChannels = [{ value: 'Stable', label: '正式版' }, { value: 'Preview', label: '测试版' }];
+const updateSources = [
+  { value: 'GitHub', label: 'GitHub' },
+  { value: 'Cnb', label: 'CNB' },
+];
+const updateChannels = [
+  { value: 'Stable', label: '正式版' },
+  { value: 'Preview', label: '测试版' },
+];
 let updateStatusTimer: number | undefined;
 let updateReconnectDeadline = 0;
 
 async function openUpdateSettings() {
-  if (!requests.active || safeModeEnabled.value || loadingUpdateSettings.value || checkingUpdate.value || installingUpdate.value) return;
+  if (
+    !requests.active ||
+    safeModeEnabled.value ||
+    loadingUpdateSettings.value ||
+    updateNotesLoading.value ||
+    checkingUpdate.value ||
+    installingUpdate.value
+  )
+    return;
   loadingUpdateSettings.value = true;
   try {
     const response = await requests.fetch('/api/settings/updates');
     if (!response.ok) throw new Error();
-    const settings = await requests.json(response) as UpdateSettings;
+    const settings = (await requests.json(response)) as UpdateSettings;
     draftSource.value = settings.source;
     draftChannel.value = settings.channel;
-    if (!safeModeEnabled.value) updateSettingsOpen.value = true;
+    if (!safeModeEnabled.value) updateSettingsOpenModal.open(true);
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
-    if (!(cause instanceof WinPilotConnectionError)) showToast('无法读取更新设置，请稍后重试');
-  } finally { loadingUpdateSettings.value = false; }
+    showToast('无法读取更新设置，请稍后重试');
+  } finally {
+    loadingUpdateSettings.value = false;
+  }
 }
 
 async function saveUpdateSettings() {
-  if (!requests.active || safeModeEnabled.value || savingUpdateSettings.value || checkingUpdate.value || installingUpdate.value) return;
+  if (
+    !requests.active ||
+    safeModeEnabled.value ||
+    savingUpdateSettings.value ||
+    checkingUpdate.value ||
+    installingUpdate.value
+  )
+    return;
   savingUpdateSettings.value = true;
   try {
     const response = await requests.fetch('/api/settings/updates', {
@@ -69,25 +102,30 @@ async function saveUpdateSettings() {
     if (!response.ok) {
       throw new Error(await readApiError(response, '保存更新设置失败，请稍后重试', requests.json));
     }
-    const settings = await requests.json(response) as UpdateSettings;
+    const settings = (await requests.json(response)) as UpdateSettings;
     draftSource.value = settings.source;
     draftChannel.value = settings.channel;
     resetUpdateResult();
-    updateSettingsOpen.value = false;
+    updateSettingsOpenModal.close();
     showToast('更新设置已保存', 'success');
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
-    if (!(cause instanceof WinPilotConnectionError)) showToast(cause instanceof Error ? cause.message : '保存更新设置失败，请稍后重试');
-  } finally { savingUpdateSettings.value = false; }
+    showToast(cause instanceof Error ? cause.message : '保存更新设置失败，请稍后重试');
+  } finally {
+    savingUpdateSettings.value = false;
+  }
 }
 
 function closeUpdateSettings() {
-  if (!savingUpdateSettings.value) updateSettingsOpen.value = false;
+  if (!savingUpdateSettings.value) updateSettingsOpenModal.close();
 }
 
 function closeUpdateNotes() {
   updateNotesGeneration++;
-  updateNotesOpen.value = false;
+  updateNotesLoading.value = false;
+  updateNotesOpenModal.close();
+}
+function clearUpdateNotesContent() {
   updateNotesLoading.value = false;
   updateNotesHtml.value = '';
 }
@@ -103,14 +141,19 @@ function resetUpdateResult() {
 }
 
 async function openUpdateNotes() {
-  if (!requests.active || !updateReleaseUrl.value || updateNotesOpen.value) return;
-  updateNotesOpen.value = true;
-  if (!updateNotes.value.trim()) return;
+  if (
+    !requests.active || !updateReleaseUrl.value || updateNotesOpenModal.show || updateNotesLoading.value ||
+    loadingUpdateSettings.value || checkingUpdate.value || installingUpdate.value
+  ) return;
+  clearUpdateNotesContent();
   const generation = ++updateNotesGeneration;
   updateNotesLoading.value = true;
   try {
-    const html = await renderMarkdown(updateNotes.value);
-    if (generation === updateNotesGeneration && requests.active) updateNotesHtml.value = html;
+    const html = updateNotes.value.trim() ? await renderMarkdown(updateNotes.value) : '';
+    if (generation === updateNotesGeneration && requests.active) {
+      updateNotesHtml.value = html;
+      updateNotesOpenModal.open(true);
+    }
   } catch {
     if (generation === updateNotesGeneration && requests.active) {
       closeUpdateNotes();
@@ -122,7 +165,7 @@ async function openUpdateNotes() {
 }
 
 watch(safeModeEnabled, (enabled) => {
-  if (enabled) updateSettingsOpen.value = false;
+  if (enabled) updateSettingsOpenModal.reset();
 });
 
 onMounted(async () => {
@@ -135,7 +178,15 @@ onMounted(async () => {
 });
 
 async function checkForUpdates() {
-  if (!requests.active || checkingUpdate.value || installingUpdate.value || savingUpdateSettings.value) return;
+  if (
+    !requests.active ||
+    checkingUpdate.value ||
+    loadingUpdateSettings.value ||
+    updateNotesLoading.value ||
+    installingUpdate.value ||
+    savingUpdateSettings.value
+  )
+    return;
   checkingUpdate.value = true;
   resetUpdateResult();
   try {
@@ -152,11 +203,11 @@ async function checkForUpdates() {
       channel: UpdateChannel;
     };
     if (result.checkFailed) {
-      const sourceName = updateSources.find(source => source.value === result.source)?.label ?? '所选更新源';
+      const sourceName =
+        updateSources.find((source) => source.value === result.source)?.label ?? '所选更新源';
       updateMessage.value = `无法通过 ${sourceName} 检查更新，请稍后重试`;
       updateMessageType.value = 'error';
-    }
-    else if (result.updateAvailable && result.latestVersion) {
+    } else if (result.updateAvailable && result.latestVersion) {
       updateReleaseUrl.value = result.releaseUrl ?? releaseUrl;
       updateVersion.value = result.latestVersion;
       checkedUpdateSettings.value = { source: result.source, channel: result.channel };
@@ -170,7 +221,8 @@ async function checkForUpdates() {
     }
   } catch (cause) {
     if (!requests.active || isAbortError(cause)) return;
-    updateMessage.value = cause instanceof WinPilotConnectionError ? '' : '暂时无法检查更新，请稍后重试';
+    updateMessage.value =
+      '暂时无法检查更新，请稍后重试';
     updateMessageType.value = 'error';
   } finally {
     checkingUpdate.value = false;
@@ -178,7 +230,16 @@ async function checkForUpdates() {
 }
 
 async function installUpdate() {
-  if (!requests.active || installingUpdate.value || checkingUpdate.value || savingUpdateSettings.value || !canInstallUpdate.value) return;
+  if (
+    !requests.active ||
+    installingUpdate.value ||
+    checkingUpdate.value ||
+    loadingUpdateSettings.value ||
+    updateNotesLoading.value ||
+    savingUpdateSettings.value ||
+    !canInstallUpdate.value
+  )
+    return;
   installingUpdate.value = true;
   updateReconnectDeadline = 0;
   updateMessageType.value = 'neutral';
@@ -189,7 +250,9 @@ async function installUpdate() {
       body: JSON.stringify({ version: updateVersion.value, ...checkedUpdateSettings.value }),
     });
     if (!response.ok) {
-      throw new Error(await readApiError(response, '无法启动在线更新，请前往版本发布页面手动下载', requests.json));
+      throw new Error(
+        await readApiError(response, '无法启动在线更新，请前往版本发布页面手动下载', requests.json),
+      );
     }
     updateMessage.value = '正在准备更新…';
     await loadUpdateStatus();
@@ -199,7 +262,10 @@ async function installUpdate() {
       await loadUpdateStatus();
       return;
     }
-    finishUpdate(cause instanceof Error ? cause.message : '无法启动在线更新，请前往版本发布页面手动下载', 'error');
+    finishUpdate(
+      cause instanceof Error ? cause.message : '无法启动在线更新，请前往版本发布页面手动下载',
+      'error',
+    );
   }
 }
 
@@ -223,10 +289,11 @@ async function loadUpdateStatus() {
       totalBytes?: number;
       message: string;
     };
+    // 重启后更新状态会回到 Idle，必须核对实际运行版本才能确认安装结果。
     if (status.state === 'Idle') {
       const aboutResponse = await requests.fetch('/api/about');
       if (!aboutResponse.ok) throw new Error();
-      const about = await requests.json(aboutResponse) as { version?: string };
+      const about = (await requests.json(aboutResponse)) as { version?: string };
       if (!about.version) finishUpdate('无法确认更新结果', 'neutral');
       else {
         const success = about.version.split('+')[0] === updateVersion.value;
@@ -266,185 +333,255 @@ async function loadUpdateStatus() {
   }
 }
 
-onBeforeUnmount(() => { closeUpdateNotes(); requests.dispose(); window.clearTimeout(updateStatusTimer); });
+onBeforeUnmount(() => {
+  closeUpdateNotes();
+  requests.dispose();
+  window.clearTimeout(updateStatusTimer);
+});
 </script>
 
 <template>
   <div class="settings-tab-content about-settings">
-    <section class="settings-section about-product-section">
+    <NCard
+      tag="section"
+      class="about-product-section"
+      :content-style="{ display: 'flex', alignItems: 'center', gap: '18px' }"
+    >
       <div class="about-product-mark" aria-hidden="true">
-        <img class="about-product-foreground" src="/favicon-foreground-mask.png" alt="" draggable="false" />
+        <img
+          class="about-product-foreground"
+          src="/favicon-foreground-mask.png"
+          alt=""
+          draggable="false"
+        />
       </div>
       <div class="about-product-copy">
-        <p class="section-kicker">本机控制与自动化</p>
+        <p class="section-kicker">设备管理与自动化</p>
         <h3>WinPilot</h3>
         <p>
           当前版本
           <strong>v{{ version || '—' }}</strong>
         </p>
       </div>
-    </section>
+    </NCard>
 
-    <section class="settings-section">
+    <NCard tag="section">
       <div class="about-update-heading">
         <div class="settings-section-heading">
           <h3>软件更新</h3>
           <p>检查新版本，获取功能改进和问题修复说明</p>
         </div>
-        <button
-          class="button button-secondary about-update-settings-button"
-          type="button"
-          :disabled="safeModeEnabled || loadingUpdateSettings || installingUpdate"
-          :title="safeModeEnabled ? safeModeMessage : installingUpdate ? '更新期间无法修改设置' : '更新设置'"
-          aria-label="更新设置"
-          @click="openUpdateSettings"
+        <AppTooltip
+          :text="safeModeEnabled
+              ? undefined
+              : installingUpdate
+                ? '更新期间无法修改设置'
+                : '更新设置'"
+          :disabled-trigger="safeModeEnabled || loadingUpdateSettings || installingUpdate"
         >
-          <AppIcon name="settings" />
-        </button>
+          <NButton
+            quaternary
+            class="app-icon-button"
+            attr-type="button"
+            :loading="showUpdateSettingsLoading"
+            :aria-busy="loadingUpdateSettings"
+            :disabled="safeModeEnabled || (loadingUpdateSettings && !showUpdateSettingsLoading) || updateNotesLoading || checkingUpdate || installingUpdate"
+            aria-label="更新设置"
+            @click="openUpdateSettings"
+          >
+            <template #icon><AppIcon name="settings" /></template>
+          </NButton>
+        </AppTooltip>
       </div>
       <div class="about-update-actions">
-        <button
-          class="button button-primary"
-          type="button"
-          :disabled="checkingUpdate || savingUpdateSettings || installingUpdate"
+        <NButton
+          :loading="checkingUpdate"
+          attr-type="button"
+          :disabled="checkingUpdate || loadingUpdateSettings || updateNotesLoading || savingUpdateSettings || installingUpdate"
           @click="checkForUpdates"
+          type="primary"
         >
-          {{ checkingUpdate ? '正在检查…' : '检查更新' }}
-        </button>
-        <button
+          {{ checkingUpdate ? '正在检查' : '检查更新' }}
+        </NButton>
+        <NButton
           v-if="canInstallUpdate"
-          class="button button-primary"
-          type="button"
-          :disabled="installingUpdate || savingUpdateSettings"
+          :loading="installingUpdate"
+          attr-type="button"
+          :disabled="installingUpdate || loadingUpdateSettings || updateNotesLoading || savingUpdateSettings"
           @click="installUpdate"
+          type="primary"
         >
-          {{ installingUpdate ? '正在下载…' : '下载并安装' }}
-        </button>
+          {{ installingUpdate ? '正在下载' : '下载并安装' }}
+        </NButton>
       </div>
-      <p
-        v-if="updateMessage"
-        class="about-update-status"
-        :class="updateMessageType"
-        role="status"
-      >
-        {{ updateMessage }}
-        <button v-if="updateReleaseUrl" class="about-update-notes-link" type="button" @click="openUpdateNotes">查看更新说明</button>
-      </p>
-    </section>
+      <NCollapseTransition :show="Boolean(updateMessage)" :inert="!updateMessage || undefined">
+        <div class="about-update-feedback">
+          <NText
+            tag="p"
+            class="about-update-status"
+            :type="updateMessageType === 'neutral' ? undefined : updateMessageType"
+            :depth="updateMessageType === 'neutral' ? 2 : undefined"
+            role="status"
+          >
+            {{ updateMessage }}
+            <NButton
+              text
+              v-if="updateReleaseUrl"
+              :loading="showUpdateNotesLoading"
+              :aria-busy="updateNotesLoading"
+              :disabled="(updateNotesLoading && !showUpdateNotesLoading) || loadingUpdateSettings || checkingUpdate || installingUpdate"
+              @click="openUpdateNotes"
+            >
+              查看更新说明
+            </NButton>
+          </NText>
+        </div>
+      </NCollapseTransition>
+    </NCard>
 
-    <section class="settings-section">
+    <NCard tag="section">
       <div class="settings-section-heading">
         <h3>项目与支持</h3>
         <p>查看项目资料、反馈问题或获取已发布版本</p>
       </div>
       <div class="about-link-list">
-        <a :href="repositoryUrl" target="_blank" rel="noopener noreferrer">
+        <div class="about-link-row">
           <span>项目主页</span>
-          <span>GitHub</span>
-        </a>
-        <a :href="issueUrl" target="_blank" rel="noopener noreferrer">
+          <NButton text tag="a" :href="repositoryUrl" target="_blank" rel="noopener noreferrer">GitHub</NButton>
+        </div>
+        <div class="about-link-row">
           <span>问题反馈</span>
-          <span>提交 Issue</span>
-        </a>
-        <a :href="releaseUrl" target="_blank" rel="noopener noreferrer">
+          <NButton text tag="a" :href="issueUrl" target="_blank" rel="noopener noreferrer">提交 Issue</NButton>
+        </div>
+        <div class="about-link-row">
           <span>版本发布</span>
-          <span>查看 Releases</span>
-        </a>
+          <NButton text tag="a" :href="releaseUrl" target="_blank" rel="noopener noreferrer">查看 Releases</NButton>
+        </div>
       </div>
-    </section>
+    </NCard>
 
-    <section class="settings-section">
+    <NCard tag="section">
       <div class="settings-section-heading">
         <h3>开源许可</h3>
         <p>WinPilot 采用 AGPL-3.0-only 许可证发布；第三方组件及其许可证声明可在仓库中查看</p>
       </div>
       <div class="about-link-list">
-        <a :href="`${repositoryUrl}/blob/main/LICENSE`" target="_blank" rel="noopener noreferrer">
+        <div class="about-link-row">
           <span>软件许可证</span>
-          <span>AGPL-3.0-only</span>
-        </a>
-        <a :href="noticesUrl" target="_blank" rel="noopener noreferrer">
+          <NButton text tag="a" :href="`${repositoryUrl}/blob/main/LICENSE`" target="_blank" rel="noopener noreferrer">AGPL-3.0-only</NButton>
+        </div>
+        <div class="about-link-row">
           <span>第三方组件声明</span>
-          <span>查看声明</span>
-        </a>
+          <NButton text tag="a" :href="noticesUrl" target="_blank" rel="noopener noreferrer">查看声明</NButton>
+        </div>
       </div>
-    </section>
-    <AppModal v-if="updateNotesOpen" :title="`更新说明 v${updateVersion}`" size="medium" @close="closeUpdateNotes">
-      <p v-if="updateNotesLoading" class="loading-hint">正在加载…</p>
-      <div v-else-if="updateNotesHtml" class="markdown-content" v-html="updateNotesHtml"></div>
-      <p v-else>此版本暂无发布说明</p>
+    </NCard>
+    <AppModal
+      :show="updateNotesOpenModal.show"
+      @after-leave="updateNotesOpenModal.afterLeave"
+      v-if="updateNotesOpen"
+      :title="`更新说明 v${updateVersion}`"
+      size="medium"
+      @close="closeUpdateNotes"
+    >
+      <div v-if="updateNotesHtml" class="markdown-content" v-html="updateNotesHtml"></div>
+      <NEmpty v-else :show-icon="false" description="此版本暂无发布说明" />
       <template #actions>
-        <button class="button button-secondary" type="button" @click="closeUpdateNotes">关闭</button>
-        <a class="button button-primary" :href="updateReleaseUrl" target="_blank" rel="noopener noreferrer">前往发布页面</a>
+        <NButton attr-type="button" @click="closeUpdateNotes">关闭</NButton>
+        <NButton
+          :href="updateReleaseUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          type="primary"
+          tag="a"
+        >前往发布页面</NButton
+        >
       </template>
     </AppModal>
-    <AppModal v-if="updateSettingsOpen" title="更新设置" @close="closeUpdateSettings">
+    <AppModal
+      :show="updateSettingsOpenModal.show"
+      @after-leave="updateSettingsOpenModal.afterLeave"
+      v-if="updateSettingsOpen"
+      title="更新设置"
+      :dismissible="!savingUpdateSettings"
+      @close="closeUpdateSettings"
+    >
       <div class="about-update-settings-fields">
-        <label class="about-update-settings-field">
-          <span>更新源</span>
-          <AppSelect v-model="draftSource" :options="updateSources" :disabled="savingUpdateSettings" aria-label="更新源" />
-        </label>
-        <label class="about-update-settings-field">
-          <span>版本通道</span>
-          <AppSelect v-model="draftChannel" :options="updateChannels" :disabled="savingUpdateSettings" aria-label="版本通道" />
-        </label>
+        <NFormItem
+          label="更新源"
+          :label-props="{ id: `${formId}-source-label` }"
+          :show-feedback="false"
+          class="form-field"
+        >
+          <AppSelect
+            v-model="draftSource"
+            :labelled-by="`${formId}-source-label`"
+            :options="updateSources"
+            :disabled="savingUpdateSettings"
+            aria-label="更新源"
+          />
+        </NFormItem>
+        <NFormItem
+          label="版本通道"
+          :label-props="{ id: `${formId}-channel-label` }"
+          :show-feedback="false"
+          class="form-field"
+        >
+          <AppSelect
+            v-model="draftChannel"
+            :labelled-by="`${formId}-channel-label`"
+            :options="updateChannels"
+            :disabled="savingUpdateSettings"
+            aria-label="版本通道"
+          />
+        </NFormItem>
       </div>
       <template #actions>
-        <button class="button button-secondary" type="button" :disabled="savingUpdateSettings" @click="closeUpdateSettings">取消</button>
-        <button class="button button-primary" type="button" :disabled="savingUpdateSettings || checkingUpdate || installingUpdate" @click="saveUpdateSettings">{{ savingUpdateSettings ? '正在保存…' : '保存' }}</button>
+        <NButton
+          attr-type="button"
+          :disabled="savingUpdateSettings"
+          @click="closeUpdateSettings"
+        >取消</NButton
+        >
+        <NButton
+          :loading="savingUpdateSettings"
+          attr-type="button"
+          :disabled="savingUpdateSettings || checkingUpdate || installingUpdate"
+          @click="saveUpdateSettings"
+          type="primary"
+        >{{ savingUpdateSettings ? '正在保存' : '保存' }}</NButton
+        >
       </template>
     </AppModal>
   </div>
 </template>
 
+<style>
+.section-kicker { margin: 0 0 5px; color: var(--accent-text); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.n-card.about-product-section { min-height: 172px; background: linear-gradient(135deg, color-mix(in srgb, var(--brand-accent) 12%, var(--brand-surface)), var(--brand-surface) 65%); }
+.about-product-mark { position: relative; width: 64px; height: 64px; flex: 0 0 64px; overflow: hidden; border-radius: 15px; background: var(--accent-solid); user-select: none; }
+.about-product-foreground { position: absolute; inset: -2.56px; display: block; width: calc(100% + 5.12px); height: calc(100% + 5.12px); pointer-events: none; user-select: none; }
+.about-product-copy h3 { margin: 0; font-size: 24px; letter-spacing: -0.025em; font-weight: 600; }
+.about-product-copy > p:last-child { margin: 8px 0 0; color: var(--text-muted); font-size: 14px; }
+.about-product-copy strong { color: var(--text); font-family: var(--font-mono); font-weight: 500; }
+.about-link-list { display: grid; border-top: 1px solid var(--border); }
+.about-link-list, .about-link-row { transition: border-color .3s cubic-bezier(.4, 0, .2, 1), color .3s cubic-bezier(.4, 0, .2, 1); }
+.about-link-row { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); color: var(--text); font-size: 14px; }
+.about-link-row .n-button { font-size: 13px; }
+.about-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.about-update-feedback { padding-top: 14px; }
+.about-update-status { margin: 0; }
+</style>
+
 <style scoped>
-.about-update-notes-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-text);
-  font: inherit;
-  cursor: pointer;
-}
-.about-update-notes-link:hover { text-decoration: underline; }
-.about-update-status {
-  color: var(--text-muted);
-}
-.about-update-status.success {
-  color: var(--success-text);
-}
-.about-update-status.error {
-  color: var(--danger-text);
-}
 .about-update-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
-.about-update-settings-button {
-  flex: 0 0 auto;
-  padding-inline: 9px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-muted);
-}
-.about-update-settings-button:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--surface-hover);
-  color: var(--accent-text);
-}
-.about-update-settings-button:disabled {
-  color: var(--text-subtle);
-  opacity: .72;
-}
 .about-update-settings-fields {
   display: grid;
   gap: 20px;
-}
-.about-update-settings-field {
-  display: grid;
-  gap: 8px;
-  font-size: 14px;
 }
 </style>

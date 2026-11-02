@@ -1,0 +1,4 @@
+@import '../features/settings/styles.css';
+@import '../features/tasks/styles.css';
+@import '../features/plugins/styles.css';
+@import '../features/security/styles.css';

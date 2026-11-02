@@ -7,16 +7,19 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/plugins/*.test.mjs test/ui/*.test.mjs",
+    "test": "node --experimental-strip-types --test test/api/*.test.mjs test/plugins/*.test.mjs test/ui/*.test.mjs",
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@lucide/vue": "1.61.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.16",
     "markdown-it": "^15.0.2",
+    "naive-ui": "2.45.3",
+    "vfonts": "0.0.3",
     "vue": "^3.5.41",
     "vue-router": "5.3.1"
   },
@@ -24,7 +27,10 @@
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/compiler-dom": "^3.5.41",
+    "@vue/compiler-sfc": "^3.5.41",
     "@vue/tsconfig": "^0.9.1",
+    "postcss": "^8.5.26",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
     "vue-tsc": "^3.3.11"

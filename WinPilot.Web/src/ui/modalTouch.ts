@@ -2,6 +2,7 @@ import { getModalInteractionRoot } from './modalFocus.ts';
 
 const modals: HTMLElement[] = [];
 
+// 仅处理最上层弹窗的单指滚动；内部无可继续滚动的容器时阻止手势传递到背景页面。
 export function manageModalTouch(modal: HTMLElement): () => void {
   const document = modal.ownerDocument;
   const view = document.defaultView;

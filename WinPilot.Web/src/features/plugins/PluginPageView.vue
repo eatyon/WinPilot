@@ -1,10 +1,17 @@
 <script setup lang="ts">
+import AppLoadError from '../../components/AppLoadError.vue';
+import AppLoading from '../../components/AppLoading.vue';
+import { NButton, NCard } from 'naive-ui';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch, isAbortError, userErrorMessage } from '../../api/client';
 import PluginPageHost from './page/PluginPageHost.vue';
+import type { PluginFeatureDefinition } from './pluginModels';
 
-type PluginFeature = { id: string; name: string; description?: string; mode: 'page'; entry: string };
+type PluginFeature = PluginFeatureDefinition & {
+  mode: 'page';
+  entry: string;
+};
 const route = useRoute();
 const router = useRouter();
 const pluginId = computed(() => String(route.params.pluginId ?? ''));
@@ -31,7 +38,8 @@ function stopHeartbeat() {
 function closeSession(id: string) {
   if (!id) return;
   void fetch(`/api/plugin-page-sessions/${encodeURIComponent(id)}`, {
-    method: 'DELETE', keepalive: true,
+    method: 'DELETE',
+    keepalive: true,
   }).catch(() => undefined);
 }
 
@@ -40,8 +48,13 @@ function checkSession(id: string) {
   const controller = new AbortController();
   heartbeatController = controller;
   const timeout = window.setTimeout(() => controller.abort(), 10_000);
-  void fetch(`/api/plugin-page-sessions/${encodeURIComponent(id)}/heartbeat`, { method: 'POST', signal: controller.signal })
-    .then(response => { if (response.status === 404 && !controller.signal.aborted) handleSessionExpired(id); })
+  void apiFetch(`/api/plugin-page-sessions/${encodeURIComponent(id)}/heartbeat`, {
+    method: 'POST',
+    signal: controller.signal,
+  })
+    .then((response) => {
+      if (response.status === 404 && !controller.signal.aborted) handleSessionExpired(id);
+    })
     .catch(() => undefined)
     .finally(() => {
       window.clearTimeout(timeout);
@@ -74,7 +87,6 @@ async function load() {
   }
   feature.value = undefined;
   pageReady.value = false;
-  error.value = '';
   try {
     const sessionResponse = await apiFetch(
       `/api/plugins/${encodeURIComponent(pluginId.value)}/features/${encodeURIComponent(featureId.value)}/page-sessions`,
@@ -88,11 +100,16 @@ async function load() {
       webVersion: string;
     };
     const sessionId = session.id;
+    // 创建请求可能在页面切换后才返回，仍须回收后端已创建的旧页面会话。
     if (disposed || generation !== loadGeneration) {
       closeSession(sessionId);
       return;
     }
-    if (!sessionId || session.feature?.mode !== 'page' || typeof session.feature.entry !== 'string') {
+    if (
+      !sessionId ||
+      session.feature?.mode !== 'page' ||
+      typeof session.feature.entry !== 'string'
+    ) {
       closeSession(sessionId);
       throw new Error('页面功能不存在');
     }
@@ -100,6 +117,7 @@ async function load() {
     feature.value = session.feature;
     webVersion.value = session.webVersion;
     pageSessionId.value = sessionId;
+    error.value = '';
     startHeartbeat(sessionId);
   } catch (cause) {
     if (!disposed && generation === loadGeneration && !isAbortError(cause))
@@ -123,7 +141,9 @@ function handleSessionExpired(id: string) {
 }
 
 function handlePageReady(id: string) {
-  if (!disposed && pageSessionId.value === id) pageReady.value = true;
+  if (!disposed && pageSessionId.value === id) {
+    pageReady.value = true;
+  }
 }
 
 function handlePageFailed(id: string, message: string) {
@@ -135,7 +155,6 @@ function handlePageFailed(id: string, message: string) {
   error.value = message || '无法加载插件页面';
 }
 
-
 const pageTitle = computed(() =>
   feature.value && pluginName.value ? `${pluginName.value} - ${feature.value.name}` : '',
 );
@@ -143,7 +162,10 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   void load();
 });
-watch([pluginId, featureId], load);
+watch([pluginId, featureId], () => {
+  error.value = '';
+  void load();
+});
 onBeforeUnmount(() => {
   const pageSource = sessionStorage.getItem('winpilot-plugin-page-source');
   const destination = router.currentRoute.value.path;
@@ -163,23 +185,26 @@ onBeforeUnmount(() => {
   stopHeartbeat();
   if (pageSessionId.value) closeSession(pageSessionId.value);
 });
-
 </script>
 
 <template>
   <section class="plugin-feature-page-view">
-    <header class="plugin-module plugin-feature-page-header">
+    <NCard
+      tag="header"
+      class="plugin-feature-page-header"
+      content-class="plugin-feature-page-heading"
+    >
       <div>
         <h2>{{ pageTitle }}</h2>
-        <p v-if="feature?.description" class="plugin-feature-page-description">{{ feature.description }}</p>
+        <p v-if="feature?.description" class="plugin-feature-page-description">
+          {{ feature.description }}
+        </p>
       </div>
-      <button class="button button-secondary" type="button" @click="goBack">返回</button>
-    </header>
-    <div v-if="error" class="status-message error">
-      <span>{{ error }}</span>
-    </div>
+      <NButton attr-type="button" @click="goBack">返回</NButton>
+    </NCard>
+    <AppLoadError :show="Boolean(error)" :retry="load">{{ error }}</AppLoadError>
     <PluginPageHost
-      v-else-if="feature && pageSessionId"
+      v-if="!error && feature && pageSessionId"
       :key="pageSessionId"
       :plugin-id="pluginId"
       :entry="feature.entry"
@@ -189,16 +214,36 @@ onBeforeUnmount(() => {
       @failed="handlePageFailed"
       @ready="handlePageReady"
     />
-    <p v-if="!error && !pageReady" class="plugin-empty loading-hint" role="status">正在加载功能页…</p>
+    <AppLoading v-if="!error && !pageReady" label="正在加载功能页" />
   </section>
 </template>
 
 <style scoped>
-.plugin-feature-page-view { min-width: 0; }
-.plugin-feature-page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.plugin-feature-page-header h2 { margin: 0; }
-.plugin-feature-page-description { margin: 6px 0 0; color: var(--text-muted); font-size: 14px; }
+.plugin-feature-page-view {
+  min-width: 0;
+}
+.plugin-feature-page-header {
+  margin-bottom: 24px;
+}
+.plugin-feature-page-view :deep(.plugin-feature-page-heading) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.plugin-feature-page-header h2 {
+  margin: 0;
+}
+.plugin-feature-page-description {
+  transition: color .3s cubic-bezier(.4, 0, .2, 1);
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
 @media (max-width: 640px) {
-  .plugin-feature-page-header { align-items: stretch; flex-direction: column; }
+  .plugin-feature-page-view :deep(.plugin-feature-page-heading) {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 </style>

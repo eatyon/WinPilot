@@ -1,0 +1,28 @@
+.login-brand-symbol, .product-symbol { position: relative; display: block; color: transparent; font-size: 0; }
+.login-brand-symbol::before, .product-symbol::before, .login-brand-symbol::after, .product-symbol::after { position: absolute; inset: 0; content: ''; }
+.login-brand-symbol::before, .product-symbol::before { background: var(--accent-solid); mask: url('/favicon-background-mask.png') center / contain no-repeat; -webkit-mask: url('/favicon-background-mask.png') center / contain no-repeat; }
+.login-brand-symbol::after, .product-symbol::after { background: #fff; mask: url('/favicon-foreground-mask.png') center / contain no-repeat; -webkit-mask: url('/favicon-foreground-mask.png') center / contain no-repeat; }
+.login-brand-symbol, .product-symbol, .about-product-mark { transition: background-color .3s cubic-bezier(.4, 0, .2, 1); }
+
+@property --brand-surface { syntax: '<color>'; inherits: true; initial-value: transparent; }
+@property --brand-canvas { syntax: '<color>'; inherits: true; initial-value: transparent; }
+@property --brand-accent { syntax: '<color>'; inherits: true; initial-value: transparent; }
+@property --brand-accent-text { syntax: '<color>'; inherits: true; initial-value: transparent; }
+
+.login-view, .n-card.about-product-section {
+  --brand-surface: var(--surface);
+  --brand-canvas: var(--canvas);
+  --brand-accent: var(--accent-solid);
+  --brand-accent-text: var(--accent-text);
+  transition:
+    --brand-surface .3s cubic-bezier(.4, 0, .2, 1),
+    --brand-canvas .3s cubic-bezier(.4, 0, .2, 1),
+    --brand-accent .3s cubic-bezier(.4, 0, .2, 1),
+    --brand-accent-text .3s cubic-bezier(.4, 0, .2, 1),
+    color .3s cubic-bezier(.4, 0, .2, 1),
+    border-color .3s cubic-bezier(.4, 0, .2, 1),
+    box-shadow .3s cubic-bezier(.4, 0, .2, 1);
+}
+.login-brand, .login-copy p, .login-footer, .about-product-copy h3, .about-product-copy > p, .about-product-copy strong {
+  transition: color .3s cubic-bezier(.4, 0, .2, 1), border-color .3s cubic-bezier(.4, 0, .2, 1);
+}

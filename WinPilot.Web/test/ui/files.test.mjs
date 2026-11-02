@@ -1,14 +1,38 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
+import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { loadScriptModule } from '../support/scriptModule.mjs';
+import { elements, attribute, binding } from '../support/template.mjs';
 import * as vue from 'vue';
+import * as fileSelection from '../../src/features/files/useFileSelection.ts';
 import * as apiErrors from '../support/apiErrors.mjs';
+
+test('file creation fields use vertical library spacing with separate actions', () => {
+  const source = readFileSync(new URL('../../src/features/files/FilesView.vue', import.meta.url), 'utf8');
+  const dialogs = elements(source, node => node.tag === 'AppModal' && attribute(node, 'title') === '新建');
+  assert.equal(dialogs.length, 1);
+  const layout = dialogs[0].children.find(node => node.type === 1 && node.tag === 'NSpace');
+  assert.ok(layout);
+  assert.ok(layout.props.some(prop => prop.type === 6 && prop.name === 'vertical'));
+  assert.equal(binding(layout, 'size'), '16');
+  assert.deepEqual(layout.children.filter(node => node.type === 1 && node.tag === 'NFormItem').map(node => attribute(node, 'label')), ['类型', '名称']);
+  assert.ok(dialogs[0].children.some(node => node.type === 1 && node.tag === 'template' && node.props.some(prop => prop.type === 7 && prop.name === 'slot' && prop.arg?.content === 'actions')));
+});
+
+test('drive loading failure is left aligned across the grid without hiding browsing guidance', () => {
+  const source = readFileSync(new URL('../../src/features/files/FilesView.vue', import.meta.url), 'utf8');
+  assert.match(source, /<p v-else>选择驱动器开始浏览<\/p>/);
+  assert.match(source, /<NEmpty[^>]*description="无法加载驱动器列表"[^>]*class="file-roots-empty"/);
+  assert.match(source, /\.file-roots-empty\s*\{[^}]*grid-column: 1 \/ -1;[^}]*align-items: flex-start;[^}]*text-align: left;/);
+});
 
 function fixture({ abortSignal = AbortSignal } = {}) {
   const code = loadScriptModule(new URL('../../src/features/files/FilesView.vue', import.meta.url),
-    'browse, browseTarget, resetTargetDirectory, startEdit, confirmEditSave, submitFileOperation, uploadSelectedFiles, confirmDownload, directory, targetDirectory, targetPath, editTarget, editContent, editOriginalLength, uploadFiles, uploadDirectoryPath, uploadItems, downloadTargets, transferKind, requests, loading, submitting');
+    'pageError, loadRoots, rootsLoading, rootsLoaded, roots, browse, browseTarget, resetTargetDirectory, startEdit, loadEdit, closeEdit, editLoaded, editLoading, editTargetModal, confirmEditSave, submitFileOperation, uploadSelectedFiles, confirmDownload, directory, targetDirectory, targetPath, editTarget, editContent, editOriginalLength, uploadFiles, uploadDirectoryPath, uploadItems, downloadTargets, transferKind, requests, loading, submitting, formatTime, selectedEntries, fileSelection, allPagedEntriesSelected, somePagedEntriesSelected, toggleEntrySelection, togglePagedSelection, page, pageSize, fileSearch');
   const requests = [], toasts = [], revokedUrls = [];
   const anchor = { click() {}, remove() {} };
   const safeModeEnabled = vue.ref(false);
@@ -18,7 +42,10 @@ function fixture({ abortSignal = AbortSignal } = {}) {
     URL: { createObjectURL: () => 'blob:download', revokeObjectURL: url => revokedUrls.push(url) },
     document: { createElement: () => anchor, body: { append() {} } },
     require: name => {
-      if (name === 'vue') return { ...vue, onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
+      if (name.endsWith('/useDelayedLoading')) return delayedLoading;
+      if (name.endsWith('/useModalState')) return modalStateModule;
+      if (name === './useFileSelection') return fileSelection;
+      if (name === 'vue') return { ...vue, useId: () => 'files-test', onMounted: () => {}, onBeforeUnmount: callback => { unmount = callback; } };
       if (name.endsWith('/client')) return { ...apiErrors,
         apiFetch: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
         isAbortError: error => error?.name === 'AbortError',
@@ -31,10 +58,101 @@ function fixture({ abortSignal = AbortSignal } = {}) {
   };
   const scope = vue.effectScope();
   scope.run(() => runInNewContext(code, context));
+  context.exports.selectedPageCount = context.exports.fileSelection.selectedPageCount;
   return { subject: context.exports, requests, toasts, safeModeEnabled, anchor, revokedUrls, dispose: () => { unmount(); scope.stop(); } };
 }
 const directory = path => ({ path, entries: [], parentPath: null, isSensitiveSystemPath: false });
 const ok = value => ({ ok: true, json: async () => value });
+
+test('initial drive loading has its own pending state and preserves the list during refresh', async () => {
+  const f = fixture();
+  try {
+    const initial = f.subject.loadRoots();
+    assert.equal(f.subject.rootsLoading.value, true);
+    assert.equal(f.subject.rootsLoaded.value, false);
+    assert.equal(f.subject.loading.value, false);
+    f.requests[0].resolve(ok([{ path: 'C:\\', name: '系统', kind: 'fixed' }]));
+    await initial;
+    assert.equal(f.subject.rootsLoading.value, false);
+    assert.equal(f.subject.rootsLoaded.value, true);
+    const refresh = f.subject.loadRoots();
+    assert.equal(f.subject.roots.value.length, 1);
+    f.requests[1].reject(new Error('无法连接到 WinPilot'));
+    await refresh;
+    assert.equal(f.subject.roots.value.length, 1);
+    assert.equal(f.subject.rootsLoading.value, false);
+    assert.equal(f.subject.pageError.value, '无法连接到 WinPilot');
+    assert.equal(f.toasts.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('file selection follows paths across row replacement, pagination and search', async () => {
+  const f = fixture();
+  try {
+    const s = f.subject;
+    const entries = ['alpha', 'beta', 'gamma'].map(name => ({ name, path: `C:\\${name}` }));
+    s.directory.value = { ...directory('C:\\'), entries };
+    s.pageSize.value = 2;
+    await vue.nextTick();
+    s.toggleEntrySelection(entries[0], true);
+    s.toggleEntrySelection({ ...entries[0] }, true);
+    assert.equal(s.selectedEntries.value.length, 1);
+    assert.equal(s.selectedPageCount.value, 1);
+    assert.equal(s.somePagedEntriesSelected.value, true);
+    assert.equal(s.allPagedEntriesSelected.value, false);
+    s.directory.value = { ...directory('C:\\'), entries: entries.map(entry => ({ ...entry })) };
+    assert.equal(s.selectedPageCount.value, 1);
+    s.togglePagedSelection(true);
+    assert.equal(s.allPagedEntriesSelected.value, true);
+    s.page.value = 2;
+    assert.equal(s.selectedPageCount.value, 0);
+    s.togglePagedSelection(true);
+    assert.equal(s.selectedEntries.value.length, 3);
+    s.togglePagedSelection(false);
+    assert.deepEqual(Array.from(s.selectedEntries.value, entry => entry.name), ['alpha', 'beta']);
+    s.fileSearch.value = 'beta';
+    await vue.nextTick();
+    assert.equal(s.page.value, 1);
+    assert.equal(s.allPagedEntriesSelected.value, true);
+    s.togglePagedSelection(false);
+    assert.deepEqual(Array.from(s.selectedEntries.value, entry => entry.name), ['alpha']);
+    s.toggleEntrySelection({ ...entries[0] }, false);
+    assert.equal(s.selectedEntries.value.length, 0);
+    assert.equal(s.somePagedEntriesSelected.value, false);
+    assert.equal(s.allPagedEntriesSelected.value, false);
+  } finally { f.dispose(); }
+});
+
+test('file timestamps keep slash-separated local dates with padded fields and 24-hour midnight', () => {
+  const f = fixture();
+  try {
+    assert.equal(f.subject.formatTime('2026-01-09T00:06:00'), '2026/01/09 00:06');
+    assert.equal(f.subject.formatTime('2026-10-19T00:46:00'), '2026/10/19 00:46');
+    assert.equal(f.subject.formatTime('2026-12-31T23:59:00'), '2026/12/31 23:59');
+  } finally { f.dispose(); }
+});
+
+test('file pagination clamps after list shrink and stops observing after its scope is disposed', async () => {
+  const scope = vue.effectScope();
+  const current = vue.ref(directory('C:\\'));
+  const selection = scope.run(() => fileSelection.useFileSelection(current));
+  try {
+    current.value.entries = ['a', 'b', 'c'].map(name => ({ name, path: name }));
+    selection.pageSize.value = 1;
+    await vue.nextTick();
+    selection.page.value = 3;
+    assert.equal(selection.pagedEntries.value[0].name, 'c');
+    current.value.entries = current.value.entries.slice(0, 1);
+    await vue.nextTick();
+    assert.equal(selection.page.value, 1);
+    assert.equal(selection.pageCount.value, 1);
+    scope.stop();
+    selection.page.value = 3;
+    selection.fileSearch.value = 'missing';
+    await vue.nextTick();
+    assert.equal(selection.page.value, 3);
+  } finally { scope.stop(); }
+});
 
 test('directory response bodies cannot overwrite a newer navigation', async () => {
   const f = fixture();
@@ -93,28 +211,90 @@ test('writes reject duplicate submission and failed writes retain form state', a
   } finally { f.dispose(); }
 });
 
-test('edit reads are latest-only and saving uses the original target snapshot', async () => {
+test('edit reads block competing entries and saving uses the original target snapshot', async () => {
   const f = fixture();
   try {
     const first = f.subject.startEdit({ path: 'first' });
-    const second = f.subject.startEdit({ path: 'second' });
-    f.requests[1].resolve(ok({ content: 'new', length: 3, lastWriteTime: 'time', encoding: 'utf-8' }));
-    await second;
-    f.requests[0].resolve(ok({ content: 'old' }));
+    await f.subject.startEdit({ path: 'second' });
+    assert.equal(f.requests.length, 1);
+    f.requests[0].resolve(ok({ content: 'new', length: 3, lastWriteTime: 'time', encoding: 'utf-8' }));
     await first;
-    assert.equal(f.subject.editTarget.value.path, 'second');
+    assert.equal(f.subject.editTarget.value.path, 'first');
     assert.equal(f.subject.editContent.value, 'new');
     const save = f.subject.confirmEditSave();
     await f.subject.confirmEditSave();
-    assert.equal(f.requests.length, 3);
+    assert.equal(f.requests.length, 2);
     f.subject.editTarget.value = undefined;
-    f.requests[2].resolve({ ok: true });
+    f.requests[1].resolve({ ok: true });
     await setImmediate();
-    assert.ok(f.requests[3].url.endsWith('path=second'));
-    f.requests[3].resolve(ok({ length: 9, lastWriteTime: 'later' }));
+    assert.ok(f.requests[2].url.endsWith('path=first'));
+    f.requests[2].resolve(ok({ length: 9, lastWriteTime: 'later' }));
     await save;
     assert.equal(f.subject.editTarget.value, undefined);
     assert.equal(f.subject.editOriginalLength.value, 3);
+  } finally { f.dispose(); }
+});
+
+test('file editor opens after reading and failed reads leave the entry available for retry', async () => {
+  const f = fixture();
+  try {
+    const pending = f.subject.startEdit({ path: 'file', name: 'file' });
+    assert.equal(f.subject.editTargetModal.show, false);
+    assert.equal(f.subject.editLoading.value, true);
+    assert.equal(f.subject.editLoaded.value, false);
+    await f.subject.confirmEditSave();
+    await f.subject.loadEdit();
+    assert.equal(f.requests.length, 1);
+    f.requests[0].reject(new Error('读取失败'));
+    await pending;
+    assert.equal(f.subject.editTargetModal.show, false);
+    assert.equal(f.toasts.length, 1);
+    assert.equal(f.subject.pageError.value, '');
+    const retry = f.subject.startEdit({ path: 'file', name: 'file' });
+    f.requests[1].resolve(ok({ content: '', length: 0, lastWriteTime: 'time', encoding: 'utf-8' }));
+    await retry;
+    assert.equal(f.subject.editLoaded.value, true);
+    assert.equal(f.subject.editTargetModal.show, true);
+  } finally { f.dispose(); }
+});
+
+test('a successful write followed by a failed metadata read reports saved and blocks stale saves', async () => {
+  const f = fixture();
+  try {
+    const opened = f.subject.startEdit({ path: 'file', name: 'file' });
+    f.requests[0].resolve(ok({ content: 'old', length: 3, lastWriteTime: 'time', encoding: 'utf-8' }));
+    await opened;
+    f.subject.editContent.value = 'changed';
+    const saved = f.subject.confirmEditSave();
+    f.requests[1].resolve({ ok: true });
+    await setImmediate();
+    f.requests[2].reject(new Error('offline'));
+    await saved;
+    assert.match(f.toasts.at(-1).text, /文件已保存.*重新打开/);
+    assert.equal(f.subject.editContent.value, 'changed');
+    assert.equal(f.subject.editLoaded.value, false);
+    assert.equal(f.subject.submitting.value, false);
+    await f.subject.confirmEditSave();
+    assert.equal(f.requests.length, 3);
+  } finally { f.dispose(); }
+});
+
+test('closing a file editor aborts reading and cannot populate a reopened editor', async () => {
+  const f = fixture();
+  try {
+    const first = f.subject.startEdit({ path: 'first' });
+    f.subject.closeEdit();
+    assert.equal(f.subject.editTargetModal.show, false);
+    assert.equal(f.requests[0].init.signal.aborted, true);
+    const second = f.subject.startEdit({ path: 'second' });
+    f.requests[0].resolve(ok({ content: 'old' }));
+    await first;
+    assert.equal(f.subject.editLoaded.value, false);
+    assert.equal(f.subject.editContent.value, '');
+    f.requests[1].resolve(ok({ content: 'new', length: 3, lastWriteTime: 'time', encoding: 'utf-8' }));
+    await second;
+    assert.equal(f.subject.editContent.value, 'new');
+    assert.equal(f.toasts.length, 0);
   } finally { f.dispose(); }
 });
 
@@ -365,4 +545,9 @@ test('download releases its blob URL even if the browser click fails', async () 
     assert.equal(f.subject.requests.size, 0);
     assert.equal(f.toasts.at(-1).text, 'download failed');
   } finally { f.dispose(); }
+});
+test('file names reserve line height for descenders while retaining ellipsis', () => {
+  const source = readFileSync(new URL('../../src/features/files/FilesView.vue', import.meta.url), 'utf8');
+  assert.match(source, /\.file-name-copy\s*\{[^}]*line-height:\s*1\.5;/);
+  assert.match(source, /\.file-name strong[^}]*text-overflow:\s*ellipsis;/);
 });

@@ -1,0 +1,7 @@
+.settings-section-heading h3 { margin: 0; font-size: 16px; letter-spacing: -0.015em; }
+.settings-section-heading p, .settings-help { margin: 9px 0 0; color: var(--text-muted); font-size: 14px; line-height: 1.6; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
+.settings-tab-content { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--page-card-row-gap) 18px; }
+.settings-section-heading { margin-bottom: 20px; }
+@media (max-width: 767px) {
+  .settings-tab-content { grid-template-columns: 1fr; }
+}

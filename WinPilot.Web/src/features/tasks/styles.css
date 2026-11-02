@@ -1,0 +1,11 @@
+.task-action-transition { display: grid; grid-template-rows: 1fr; min-width: 0; }
+.task-action-content { min-height: 0; }
+.task-action-enter-active, .task-action-leave-active { transition: grid-template-rows .2s var(--n-bezier, cubic-bezier(.4, 0, .2, 1)), opacity .2s var(--n-bezier, cubic-bezier(.4, 0, .2, 1)); }
+.task-action-enter-active > .task-action-content, .task-action-leave-active > .task-action-content { overflow: hidden; }
+.task-action-leave-active { pointer-events: none; }
+.task-action-enter-from, .task-action-leave-to { grid-template-rows: 0fr; opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .task-action-enter-active, .task-action-leave-active, .task-action-move { transition: none; }
+}
+.task-action-fields, .task-trigger-fields { display: grid; gap: 12px; min-width: 0; }
+.task-validation-feedback { padding-top: 12px; }
