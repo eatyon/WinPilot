@@ -4,9 +4,15 @@ namespace WinPilot.Features.Notifications.CommandBots.Commands;
 
 internal static class CommandHelpReply
 {
-    internal static async Task SendAsync(string prefix, IReadOnlyList<RegisteredPluginCommand> plugins,
-        Func<string, int, Task> replyText, Func<byte[], int, Task> replyImage,
-        ILogger logger, string channel, CancellationToken token, IEnumerable<string>? diagnosticSecrets = null)
+    internal static async Task SendAsync(
+        string prefix,
+        IReadOnlyList<RegisteredPluginCommand> plugins,
+        Func<string, int, Task> replyText,
+        Func<byte[], int, Task> replyImage,
+        ILogger logger,
+        string channel,
+        CancellationToken token,
+        IEnumerable<string>? diagnosticSecrets = null)
     {
         var commands = CommandProcessor.Definitions;
         var pageCount = (commands.Count + plugins.Count + CommandListReply.PageSize - 1) / CommandListReply.PageSize;
@@ -30,8 +36,11 @@ internal static class CommandHelpReply
             }
             catch (Exception exception) when (!token.IsCancellationRequested)
             {
-                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
-                    "{Channel}「帮助」命令{Stage}失败，尝试改用文字回复", channel, stage);
+                logger.LogWarning(
+                    NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                    "{Channel}「帮助」命令{Stage}失败，尝试改用文字回复",
+                    channel,
+                    stage);
             }
             var text = CommandProcessor.HelpText(prefix, pluginPage, corePage, title);
             foreach (var part in CommandListReply.SplitText(text))

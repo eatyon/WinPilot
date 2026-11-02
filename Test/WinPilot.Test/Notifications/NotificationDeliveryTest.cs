@@ -17,10 +17,22 @@ public sealed class NotificationDeliveryTest
         var notifications = new LockedImageNotifications(kind);
         try
         {
-            var delivery = NotificationDelivery.SendAsync(notifications, new("title\nbody"), "QQBot", CancellationToken.None,
-                imageContent: [1], imageContentType: "image/png", logger: logger);
-            if (kind == "success") await delivery;
-            else Assert.Same(notifications.Failure, await Assert.ThrowsAnyAsync<Exception>(() => delivery));
+            var delivery = NotificationDelivery.SendAsync(
+                notifications,
+                new("title\nbody"),
+                "QQBot",
+                CancellationToken.None,
+                imageContent: [1],
+                imageContentType: "image/png",
+                logger: logger);
+            if (kind == "success")
+            {
+                await delivery;
+            }
+            else
+            {
+                Assert.Same(notifications.Failure, await Assert.ThrowsAnyAsync<Exception>(() => delivery));
+            }
             var entry = Assert.Single(logger.Entries);
             Assert.Equal(LogLevel.Warning, entry.Level);
             Assert.Contains(notifications.Path!, entry.Message);
@@ -30,7 +42,10 @@ public sealed class NotificationDeliveryTest
         finally
         {
             notifications.Lock?.Dispose();
-            if (notifications.Path is not null) File.Delete(notifications.Path);
+            if (notifications.Path is not null)
+            {
+                File.Delete(notifications.Path);
+            }
         }
     }
 
@@ -49,11 +64,19 @@ public sealed class NotificationDeliveryTest
     {
         var logger = new RecordingLogger();
         var notifications = new LockedImageNotifications("success", false);
-        await NotificationDelivery.SendAsync(notifications, new("title\nbody"), "QQBot", CancellationToken.None,
-            imageContent: [1], imageContentType: "image/png", logger: logger);
+        await NotificationDelivery.SendAsync(
+            notifications,
+            new("title\nbody"),
+            "QQBot",
+            CancellationToken.None,
+            imageContent: [1],
+            imageContentType: "image/png",
+            logger: logger);
         Assert.False(File.Exists(notifications.Path));
         Assert.Empty(logger.Entries);
-        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "WinPilot-notification-test-" + Guid.NewGuid().ToString("N") + ".png");
+        var path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "WinPilot-notification-test-" + Guid.NewGuid().ToString("N") + ".png");
         try
         {
             await File.WriteAllBytesAsync(path, [1]);
@@ -61,7 +84,10 @@ public sealed class NotificationDeliveryTest
             Assert.True(File.Exists(path));
             Assert.Empty(logger.Entries);
         }
-        finally { File.Delete(path); }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -101,7 +127,10 @@ public sealed class NotificationDeliveryTest
         finally
         {
             locked?.Dispose();
-            if (path is not null) File.Delete(path);
+            if (path is not null)
+            {
+                File.Delete(path);
+            }
         }
     }
 
@@ -109,12 +138,21 @@ public sealed class NotificationDeliveryTest
     {
         internal FileStream? Lock;
         internal string? Path;
+
         internal Exception Failure { get; } = kind == "cancel" ? new OperationCanceledException() : new IOException("delivery failure");
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
         {
             Path = message.ImagePath;
-            if (lockImage) Lock = new FileStream(Path!, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return kind == "success" ? Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)])
+            if (lockImage)
+            {
+                Lock = new FileStream(Path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+            }
+            return kind == "success"
+                ? Task.FromResult<IReadOnlyList<NotificationChannelResult>>([new("Test", true)])
                 : Task.FromException<IReadOnlyList<NotificationChannelResult>>(Failure);
         }
     }
@@ -122,9 +160,18 @@ public sealed class NotificationDeliveryTest
     private sealed class RecordingLogger : ILogger
     {
         internal List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Add((level, formatter(state, exception), exception));
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            =>
+            Entries.Add((level, formatter(state, exception), exception));
     }
 }

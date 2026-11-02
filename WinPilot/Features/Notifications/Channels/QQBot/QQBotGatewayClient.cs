@@ -6,13 +6,20 @@ using System.Text.Json;
 
 namespace WinPilot.Features.Notifications;
 
+/// <summary>
+/// 封装 QQBot 令牌、网关地址与 WebSocket 消息收发，连接生命周期由调用方管理。
+/// </summary>
 internal static class QQBotGatewayClient
 {
     private const string TokenUrl = "https://bots.qq.com/app/getAppAccessToken";
     private const string GatewayUrl = "https://api.sgroup.qq.com/gateway";
     internal const int Intents = 1 << 25;
 
-    internal static async Task<string> GetAccessTokenAsync(HttpClient client, string appId, string secret, CancellationToken token)
+    internal static async Task<string> GetAccessTokenAsync(
+        HttpClient client,
+        string appId,
+        string secret,
+        CancellationToken token)
     {
         using var response = await client.PostAsJsonAsync(TokenUrl, new { appId, clientSecret = secret }, token);
         response.EnsureSuccessStatusCode();
@@ -31,7 +38,11 @@ internal static class QQBotGatewayClient
     }
 
     internal static string? StringAt(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+        value.ValueKind == JsonValueKind.Object
+        && value.TryGetProperty(name, out var item)
+        && item.ValueKind == JsonValueKind.String
+            ? item.GetString()
+            : null;
 
     internal static async Task SendAsync(WebSocket socket, string text, CancellationToken token)
     {
@@ -39,6 +50,9 @@ internal static class QQBotGatewayClient
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, token);
     }
 
+    /// <summary>
+    /// 拼接一条完整网关消息，限制累计大小；返回可在内部 JSON 文档释放后使用的副本。
+    /// </summary>
     internal static async Task<JsonElement> ReceiveAsync(WebSocket socket, CancellationToken token)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(8192);
@@ -50,15 +64,23 @@ internal static class QQBotGatewayClient
             {
                 result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer, 0, 8192), token);
                 if (result.MessageType == WebSocketMessageType.Close)
+                {
                     throw new QQBotGatewayClosedException((int?)result.CloseStatus);
+                }
                 if (data.Length + result.Count > 1024 * 1024)
+                {
                     throw new InvalidDataException("QQBot 网关消息超过大小限制");
+                }
                 data.Write(buffer, 0, result.Count);
             } while (!result.EndOfMessage);
             using var document = JsonDocument.Parse(data.GetBuffer().AsMemory(0, (int)data.Length));
             return document.RootElement.Clone();
         }
-        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+        // 消息可能包含敏感数据，归还池化缓冲区前清空内容。
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 }
 

@@ -4,6 +4,9 @@ using WinPilot.Core.Notifications;
 
 namespace WinPilot.Features.Notifications;
 
+/// <summary>
+/// 按渠道要求读取并重新编码图片，统一生成图片文件名和 HTTP 内容类型。
+/// </summary>
 internal static class NotificationContent
 {
     internal static async Task<byte[]> ReadPngBytesAsync(string path, CancellationToken token) =>
@@ -22,7 +25,10 @@ internal static class NotificationContent
     {
         using var input = new MemoryStream(bytes);
         using var image = Image.FromStream(input);
-        if (image.RawFormat.Guid == ImageFormat.Jpeg.Guid) return bytes;
+        if (image.RawFormat.Guid == ImageFormat.Jpeg.Guid)
+        {
+            return bytes;
+        }
         using var bitmap = new Bitmap(image);
         using var output = new MemoryStream();
         bitmap.Save(output, ImageFormat.Jpeg);

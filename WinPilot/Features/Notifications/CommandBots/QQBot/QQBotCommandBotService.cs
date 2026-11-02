@@ -1,11 +1,11 @@
 using System.Text.Json;
 using WinPilot.Core;
-using WinPilot.Features.Desktop;
-using WinPilot.Core.SystemStatus;
 using WinPilot.Core.Programs;
+using WinPilot.Core.SystemStatus;
+using WinPilot.Features.Desktop;
+using WinPilot.Features.Plugins;
 using WinPilot.Features.Programs;
 using WinPilot.Features.Tasks;
-using WinPilot.Features.Plugins;
 
 namespace WinPilot.Features.Notifications.CommandBots;
 
@@ -22,13 +22,35 @@ public sealed class QQBotCommandBotService : CommandBotService
     private bool bindingInProgress;
     private bool connectionActive;
 
-    public QQBotCommandBotService(PortableDataPaths paths, ILogger<QQBotCommandBotService> logger, CommandBotConfiguration configuration,
-        DesktopScreenshotService? screenshots = null, ISystemResourceMonitor? systemMonitor = null,
-        ProgramTagService? tags = null, IProgramManager? programs = null, TaskService? tasks = null, PluginCommandRegistry? pluginCommands = null)
-        : base(paths, configuration, logger, "QQBot", screenshots, systemMonitor, tags, programs, tasks, pluginCommands) => this.logger = logger;
+    public QQBotCommandBotService(
+        PortableDataPaths paths,
+        ILogger<QQBotCommandBotService> logger,
+        CommandBotConfiguration configuration,
+        DesktopScreenshotService? screenshots = null,
+        ISystemResourceMonitor? systemMonitor = null,
+        ProgramTagService? tags = null,
+        IProgramManager? programs = null,
+        TaskService? tasks = null,
+        PluginCommandRegistry? pluginCommands = null)
+        : base(
+            paths,
+            configuration,
+            logger,
+            "QQBot",
+            screenshots,
+            systemMonitor,
+            tags,
+            programs,
+            tasks,
+            pluginCommands) =>
+        this.logger = logger;
 
-    internal QQBotCommandBotService(PortableDataPaths paths, ILogger<QQBotCommandBotService> logger,
-        CommandBotConfiguration configuration, QQBotConnectAsync connect, QQBotBindAsync? bind = null)
+    internal QQBotCommandBotService(
+        PortableDataPaths paths,
+        ILogger<QQBotCommandBotService> logger,
+        CommandBotConfiguration configuration,
+        QQBotConnectAsync connect,
+        QQBotBindAsync? bind = null)
         : this(paths, logger, configuration)
     {
         this.connect = connect;
@@ -36,24 +58,40 @@ public sealed class QQBotCommandBotService : CommandBotService
     }
 
     protected override bool IsEnabled(CommandBotSettings settings) => settings.QQBotEnabled;
+
     protected override string GetPrefix(CommandBotSettings settings) => settings.QQBotPrefix;
-    protected override CommandBotSettings WithPrefix(CommandBotSettings settings, string prefix) => settings with { QQBotPrefix = prefix };
-    protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) => settings with { QQBotEnabled = enabled };
+
+    protected override CommandBotSettings WithPrefix(CommandBotSettings settings, string prefix) =>
+        settings with { QQBotPrefix = prefix };
+
+    protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) =>
+        settings with { QQBotEnabled = enabled };
+
     protected override bool SameConnection(NotificationSettings a, NotificationSettings b) =>
-        a.QQBotAppId == b.QQBotAppId && a.QQBotClientSecret == b.QQBotClientSecret &&
-        a.QQBotOpenId == b.QQBotOpenId && a.QQBotGroupOpenId == b.QQBotGroupOpenId &&
-        a.QQBotMessageFormat == b.QQBotMessageFormat;
+        a.QQBotAppId == b.QQBotAppId
+        && a.QQBotClientSecret == b.QQBotClientSecret
+        && a.QQBotOpenId == b.QQBotOpenId
+        && a.QQBotGroupOpenId == b.QQBotGroupOpenId
+        && a.QQBotMessageFormat == b.QQBotMessageFormat;
+
     protected override void ValidateSettings(NotificationSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.QQBotAppId) || string.IsNullOrWhiteSpace(settings.QQBotClientSecret))
+        if (string.IsNullOrWhiteSpace(settings.QQBotAppId)
+            || string.IsNullOrWhiteSpace(settings.QQBotClientSecret))
+        {
             throw new InvalidOperationException("请先填写并保存 QQBot AppID、AppSecret");
+        }
     }
 
     private protected override CommandBotReceiver CreateReceiver() =>
         new QQBotCommandBotReceiver(logger, RunConnectionAsync, OnPayload, () => Status, PublishStatus, Receive);
 
-    private async Task RunConnectionAsync(NotificationSettings settings, QQBotGatewaySession session, Action connected,
-        Action<JsonElement> receive, CancellationToken token)
+    private async Task RunConnectionAsync(
+        NotificationSettings settings,
+        QQBotGatewaySession session,
+        Action connected,
+        Action<JsonElement> receive,
+        CancellationToken token)
     {
         Task? cancellation;
         string[] diagnosticSecrets;
@@ -64,21 +102,33 @@ public sealed class QQBotCommandBotService : CommandBotService
         }
         if (cancellation is not null)
         {
-            try { await cancellation; }
-            catch (AggregateException exception) { logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "停止 QQBot 临时连接时发生异常，正在等待连接释放"); }
+            try
+            {
+                await cancellation;
+            }
+            catch (AggregateException exception)
+            {
+                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets), "停止 QQBot 临时连接时发生异常，正在等待连接释放");
+            }
         }
         await gateway.WaitAsync(token);
         try
         {
             await (connect ?? QQBotCommandBotTransport.RunAsync)(settings, session, () =>
             {
-                lock (bindingGate) connectionActive = true;
+                lock (bindingGate)
+                {
+                    connectionActive = true;
+                }
                 connected();
             }, receive, token);
         }
         finally
         {
-            lock (bindingGate) connectionActive = false;
+            lock (bindingGate)
+            {
+                connectionActive = false;
+            }
             FailBindings();
             gateway.Release();
         }
@@ -87,46 +137,73 @@ public sealed class QQBotCommandBotService : CommandBotService
     private void PublishStatus(CommandBotStatus status)
     {
         SetStatus(status);
-        if (status.State == "connected") return;
+        if (status.State == "connected")
+        {
+            return;
+        }
         FailBindings();
     }
 
     private void FailBindings()
     {
         lock (bindingGate)
+        {
             binding?.Result.TrySetException(new HttpRequestException("QQBot 连接已停止，请恢复连接后重新获取"));
+        }
     }
 
     private void OnPayload(JsonElement payload)
     {
         lock (bindingGate)
+        {
             if (binding is { } waiter)
             {
                 var id = QQBotBindingService.FindBoundId(payload, waiter.Group, waiter.Code);
-                if (!string.IsNullOrWhiteSpace(id)) waiter.Result.TrySetResult(id);
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    waiter.Result.TrySetResult(id);
+                }
             }
+        }
     }
 
-    public async Task<string> BindAsync(NotificationSettings settings, bool group,
-        Func<string, CancellationToken, Task> reportCode, CancellationToken token)
+    /// <summary>
+    /// 命令机器人启用时复用现有连接获取 OpenID，否则独占网关使用临时绑定连接。
+    /// </summary>
+    public async Task<string> BindAsync(
+        NotificationSettings settings,
+        bool group,
+        Func<string, CancellationToken, Task> reportCode,
+        CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         lock (bindingGate)
         {
-            if (bindingInProgress) throw new QQBotBindingValidationException("QQBot 正在获取 OpenID，请稍后重试");
+            if (bindingInProgress)
+            {
+                throw new QQBotBindingValidationException("QQBot 正在获取 OpenID，请稍后重试");
+            }
             bindingInProgress = true;
         }
         try
         {
-            if (Status.Enabled) return await BindConnectedAsync(group, reportCode, token);
+            if (Status.Enabled)
+            {
+                return await BindConnectedAsync(group, reportCode, token);
+            }
             if (!await gateway.WaitAsync(0, token))
+            {
                 throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
+            }
             try
             {
                 using var temporary = CancellationTokenSource.CreateLinkedTokenSource(token);
                 lock (bindingGate)
                 {
-                    if (Status.Enabled) throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
+                    if (Status.Enabled)
+                    {
+                        throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
+                    }
                     temporaryBinding = temporary;
                     temporaryBindingSecrets = NotificationFailureDiagnostics.Secrets(settings);
                 }
@@ -149,20 +226,42 @@ public sealed class QQBotCommandBotService : CommandBotService
                     }
                 }
             }
-            finally { gateway.Release(); }
+            finally
+            {
+                gateway.Release();
+            }
         }
-        finally { lock (bindingGate) bindingInProgress = false; }
+        finally
+        {
+            lock (bindingGate)
+            {
+                bindingInProgress = false;
+            }
+        }
     }
 
-    private Task<string> BindConnectedAsync(bool group, Func<string, CancellationToken, Task> reportCode, CancellationToken token)
-        => QQBotBindingService.WithTimeoutAsync(bindingToken => WaitForBindingAsync(group, reportCode, bindingToken), token, TimeSpan.FromSeconds(60));
+    private Task<string> BindConnectedAsync(
+        bool group,
+        Func<string, CancellationToken, Task> reportCode,
+        CancellationToken token)
+        =>
+        QQBotBindingService.WithTimeoutAsync(
+            bindingToken => WaitForBindingAsync(group, reportCode, bindingToken),
+            token,
+            TimeSpan.FromSeconds(60));
 
-    private async Task<string> WaitForBindingAsync(bool group, Func<string, CancellationToken, Task> reportCode, CancellationToken token)
+    private async Task<string> WaitForBindingAsync(
+        bool group,
+        Func<string, CancellationToken, Task> reportCode,
+        CancellationToken token)
     {
         var waiter = new BindingWaiter(group, Random.Shared.Next(1000, 10000).ToString());
         lock (bindingGate)
         {
-            if (!connectionActive || Status.State != "connected") throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
+            if (!connectionActive || Status.State != "connected")
+            {
+                throw new QQBotBindingValidationException("请等待 QQBot 连接成功后再获取 OpenID");
+            }
             binding = waiter;
         }
         try
@@ -170,7 +269,13 @@ public sealed class QQBotCommandBotService : CommandBotService
             await reportCode(waiter.Code, token);
             return await waiter.Result.Task.WaitAsync(token);
         }
-        finally { lock (bindingGate) binding = null; }
+        finally
+        {
+            lock (bindingGate)
+            {
+                binding = null;
+            }
+        }
     }
 
     private sealed record BindingWaiter(bool Group, string Code)
@@ -179,5 +284,8 @@ public sealed class QQBotCommandBotService : CommandBotService
     }
 }
 
-internal delegate Task<string> QQBotBindAsync(NotificationSettings settings, bool group,
-    Func<string, CancellationToken, Task> reportCode, CancellationToken token);
+internal delegate Task<string> QQBotBindAsync(
+    NotificationSettings settings,
+    bool group,
+    Func<string, CancellationToken, Task> reportCode,
+    CancellationToken token);

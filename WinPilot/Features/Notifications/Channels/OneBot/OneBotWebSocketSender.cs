@@ -5,6 +5,9 @@ using WinPilot.Features.Notifications.CommandBots;
 
 namespace WinPilot.Features.Notifications;
 
+/// <summary>
+/// 在已有 OneBot 连接上串行发送回复，通过 echo 关联回执，并在关闭时结束等待中的回复。
+/// </summary>
 internal sealed class OneBotWebSocketSender(WebSocket socket)
 {
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> pending = new();
@@ -13,14 +16,24 @@ internal sealed class OneBotWebSocketSender(WebSocket socket)
     private int activeSends;
     private int closed;
 
-    internal async Task SendAsync(CommandBotMessage message, string text, byte[]? image, CancellationToken token)
+    internal async Task SendAsync(
+        CommandBotMessage message,
+        string text,
+        byte[]? image,
+        CancellationToken token)
     {
-        if (message.ConversationType is not ("private" or "group")) throw new InvalidOperationException("OneBot 回复上下文不完整");
+        if (message.ConversationType is not ("private" or "group"))
+        {
+            throw new InvalidOperationException("OneBot 回复上下文不完整");
+        }
         var echo = Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (lifecycle)
         {
-            if (closed != 0) throw new IOException("OneBot 回复连接已关闭");
+            if (closed != 0)
+            {
+                throw new IOException("OneBot 回复连接已关闭");
+            }
             activeSends++;
         }
         pending[echo] = completion;
@@ -34,32 +47,64 @@ internal sealed class OneBotWebSocketSender(WebSocket socket)
                 [message.ConversationType == "private" ? "user_id" : "group_id"] = message.ChatId,
                 ["message"] = OneBotNotificationChannel.CreateSegments(text, image)
             };
-            var payload = JsonSerializer.SerializeToUtf8Bytes(new { action = "send_msg", @params = parameters, echo });
+            var payload = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                action = "send_msg",
+                @params = parameters,
+                echo
+            });
             await sending.WaitAsync(timeout.Token);
             try
             {
-                if (Volatile.Read(ref closed) != 0 || socket.State != WebSocketState.Open) throw new IOException("OneBot 回复连接已关闭");
+                if (Volatile.Read(ref closed) != 0 || socket.State != WebSocketState.Open)
+                {
+                    throw new IOException("OneBot 回复连接已关闭");
+                }
                 await socket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, true, timeout.Token);
             }
-            finally { sending.Release(); }
-            if (!await completion.Task.WaitAsync(timeout.Token)) throw new InvalidOperationException("OneBot 回复失败或连接已关闭");
+            finally
+            {
+                sending.Release();
+            }
+            // 写入 WebSocket 不代表发送成功，须等待匹配 echo 的成功回执。
+            if (!await completion.Task.WaitAsync(timeout.Token))
+            {
+                throw new InvalidOperationException("OneBot 回复失败或连接已关闭");
+            }
         }
         finally
         {
             pending.TryRemove(echo, out _);
             lock (lifecycle)
-                if (--activeSends == 0 && closed != 0) sending.Dispose();
+            {
+                if (--activeSends == 0 && closed != 0)
+                {
+                    sending.Dispose();
+                }
+            }
         }
     }
 
     internal bool HandleResponse(JsonElement payload)
     {
-        if (!payload.TryGetProperty("echo", out var echo) || echo.ValueKind != JsonValueKind.String ||
-            !pending.TryGetValue(echo.GetString()!, out var completion)) return false;
-        if (payload.TryGetProperty("status", out var status) && status.GetString() == "ok" &&
-            payload.TryGetProperty("retcode", out var code) && code.TryGetInt32(out var value) && value == 0)
+        if (!payload.TryGetProperty("echo", out var echo)
+            || echo.ValueKind != JsonValueKind.String
+            || !pending.TryGetValue(echo.GetString()!, out var completion))
+        {
+            return false;
+        }
+        if (payload.TryGetProperty("status", out var status)
+            && status.GetString() == "ok"
+            && payload.TryGetProperty("retcode", out var code)
+            && code.TryGetInt32(out var value)
+            && value == 0)
+        {
             completion.TrySetResult(true);
-        else completion.TrySetResult(false);
+        }
+        else
+        {
+            completion.TrySetResult(false);
+        }
         return true;
     }
 
@@ -67,10 +112,20 @@ internal sealed class OneBotWebSocketSender(WebSocket socket)
     {
         lock (lifecycle)
         {
-            if (closed != 0) return;
+            if (closed != 0)
+            {
+                return;
+            }
             Volatile.Write(ref closed, 1);
-            foreach (var completion in pending.Values) completion.TrySetResult(false);
-            if (activeSends == 0) sending.Dispose();
+            foreach (var completion in pending.Values)
+            {
+                completion.TrySetResult(false);
+            }
+            // 已进入的发送仍可能持有信号量，最后一个发送退出后再释放。
+            if (activeSends == 0)
+            {
+                sending.Dispose();
+            }
         }
     }
 }

@@ -9,7 +9,10 @@ internal sealed class WorkWeixinNotificationChannel(HttpClient httpClient)
     internal async Task SendAsync(NotificationSettings settings, NotificationMessage message, CancellationToken token)
     {
         var url = settings.WorkWeixinWebhookUrl;
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _)) throw new InvalidOperationException("企业微信 Webhook 地址无效");
+        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException("企业微信 Webhook 地址无效");
+        }
         var jpeg = await NotificationContent.ReadJpegBytesAsync(message.ImagePath, token);
         if (jpeg is not null)
         {

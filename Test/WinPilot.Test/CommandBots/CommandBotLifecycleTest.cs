@@ -22,7 +22,11 @@ public sealed class CommandBotLifecycleTest
         var replied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Bot.Emit(new("origin", "sender", "帮助")
         {
-            Reply = (_, _, _) => { replied.TrySetResult(); return Task.CompletedTask; }
+            Reply = (_, _, _) =>
+            {
+                replied.TrySetResult();
+                return Task.CompletedTask;
+            }
         });
         await replied.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.True(fixture.Logger.Count > 0);
@@ -56,11 +60,17 @@ public sealed class CommandBotLifecycleTest
         await using var fixture = new Fixture();
         await fixture.Bot.StartAsync(CancellationToken.None);
         for (var index = 0; index < 10; index++)
+        {
             await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
+        }
         var replies = 0;
         fixture.Bot.Emit(new("origin", "sender", "帮助")
         {
-            Reply = (_, _, _) => { Interlocked.Increment(ref replies); return Task.CompletedTask; }
+            Reply = (_, _, _) =>
+            {
+                Interlocked.Increment(ref replies);
+                return Task.CompletedTask;
+            }
         });
         Assert.Equal(0, fixture.Bot.Created);
         Assert.Equal(0, fixture.Logger.Count);
@@ -91,13 +101,21 @@ public sealed class CommandBotLifecycleTest
         var replies = 0;
         fixture.Bot.Emit(new("origin", "sender", "未注册的命令")
         {
-            Reply = (_, _, _) => { Interlocked.Increment(ref replies); return Task.CompletedTask; }
+            Reply = (_, _, _) =>
+            {
+                Interlocked.Increment(ref replies);
+                return Task.CompletedTask;
+            }
         });
         Assert.Equal(0, fixture.Logger.Count);
         var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Bot.Emit(new("origin", "sender", "帮助")
         {
-            Reply = (_, _, _) => { processed.TrySetResult(); return Task.CompletedTask; }
+            Reply = (_, _, _) =>
+            {
+                processed.TrySetResult();
+                return Task.CompletedTask;
+            }
         });
         await processed.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(0, replies);
@@ -116,7 +134,13 @@ public sealed class CommandBotLifecycleTest
         var replied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Bot.Emit(new("origin", "sender", "系统状态")
         {
-            Reply = (text, image, _) => { Assert.Equal("", text); Assert.NotNull(image); replied.TrySetResult(); return Task.CompletedTask; }
+            Reply = (text, image, _) =>
+            {
+                Assert.Equal("", text);
+                Assert.NotNull(image);
+                replied.TrySetResult();
+                return Task.CompletedTask;
+            }
         });
         await replied.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(1, monitor.Captures);
@@ -142,7 +166,11 @@ public sealed class CommandBotLifecycleTest
                 return Task.CompletedTask;
             }
         });
-        Assert.Equal(new byte[] { 1, 2, 3 }, await replied.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(new byte[] {
+            1,
+            2,
+            3
+}, await replied.Task.WaitAsync(TimeSpan.FromSeconds(3)));
         Assert.Equal(1, provider.Captures);
     }
 
@@ -162,8 +190,14 @@ public sealed class CommandBotLifecycleTest
                 Interlocked.Increment(ref calls);
                 Assert.NotNull(image);
                 sending.TrySetResult();
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-                finally { cancelled.TrySetResult(); }
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                finally
+                {
+                    cancelled.TrySetResult();
+                }
             }
         };
         fixture.Bot.Emit(help);
@@ -265,7 +299,10 @@ public sealed class CommandBotLifecycleTest
     private static async Task WaitUntil(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        while (!condition()) await Task.Delay(10, timeout.Token);
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -274,11 +311,13 @@ public sealed class CommandBotLifecycleTest
         public CommandBotConfiguration Configuration { get; } = new();
         public CommandBotTestObserver Logger { get; } = new();
         public TestBot Bot { get; }
+
         public Fixture(DesktopScreenshotService? screenshots = null, ISystemResourceMonitor? systemMonitor = null)
         {
             new WinPilotSettings { Port = 9123 }.Save(Paths.ConfigurationFile);
             Bot = new(Paths, Configuration, Logger, screenshots, systemMonitor);
         }
+
         public async ValueTask DisposeAsync()
         {
             Bot.AllowCleanup.TrySetResult();
@@ -288,25 +327,41 @@ public sealed class CommandBotLifecycleTest
         }
     }
 
-    private sealed class TestBot(PortableDataPaths paths, CommandBotConfiguration configuration, CommandBotTestObserver logger,
-        DesktopScreenshotService? screenshots = null, ISystemResourceMonitor? systemMonitor = null)
+    private sealed class TestBot(
+        PortableDataPaths paths,
+        CommandBotConfiguration configuration,
+        CommandBotTestObserver logger,
+        DesktopScreenshotService? screenshots = null,
+        ISystemResourceMonitor? systemMonitor = null)
         : CommandBotService(paths, configuration, logger, "Test", screenshots, systemMonitor)
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Cancelling { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource AllowCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool FailNextReceiver;
         public bool HoldCleanup;
         public Exception? CancellationFailure;
         public Exception? ReceiverFailure;
         public int Created;
         public int Cleaned;
+
         public void Emit(CommandBotMessage message) => Receive(message);
+
         public void PublishStatus(CommandBotStatus value) => SetStatus(value);
+
         protected override bool IsEnabled(CommandBotSettings settings) => settings.TelegramEnabled;
-        protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) => settings with { TelegramEnabled = enabled };
-        protected override void ValidateSettings(NotificationSettings settings) { }
-        protected override bool SameConnection(NotificationSettings a, NotificationSettings b) => a.TelegramBotToken == b.TelegramBotToken;
+
+        protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) =>
+            settings with { TelegramEnabled = enabled };
+
+        protected override void ValidateSettings(NotificationSettings settings)
+        {
+        }
+
+        protected override bool SameConnection(NotificationSettings a, NotificationSettings b) =>
+            a.TelegramBotToken == b.TelegramBotToken;
+
         private protected override CommandBotReceiver CreateReceiver()
         {
             Interlocked.Increment(ref Created);
@@ -317,6 +372,7 @@ public sealed class CommandBotLifecycleTest
     private sealed class CountingScreenshotProvider : IDesktopScreenshotProvider
     {
         public int Captures;
+
         public DesktopScreenshot Capture()
         {
             Interlocked.Increment(ref Captures);
@@ -327,6 +383,7 @@ public sealed class CommandBotLifecycleTest
     private sealed class CountingSystemMonitor : ISystemResourceMonitor
     {
         public int Captures;
+
         public SystemResourceStatus Capture(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
@@ -335,14 +392,20 @@ public sealed class CommandBotLifecycleTest
         }
     }
 
-    private sealed class TestReceiver(TestBot owner, Func<CommandBotStatus> status,
-        Action<CommandBotStatus> publish, Action<CommandBotMessage> receive) : CommandBotReceiver(status, publish, receive)
+    private sealed class TestReceiver(
+        TestBot owner,
+        Func<CommandBotStatus> status,
+        Action<CommandBotStatus> publish,
+        Action<CommandBotMessage> receive) : CommandBotReceiver(status, publish, receive)
     {
         public override async Task RunAsync(WinPilotSettings settings, CancellationToken token)
         {
             using var registration = token.Register(() =>
             {
-                if (owner.CancellationFailure is { } failure) throw failure;
+                if (owner.CancellationFailure is { } failure)
+                {
+                    throw failure;
+                }
             });
             SetStatus(Status with { State = "connected" });
             owner.Started.TrySetResult();
@@ -358,7 +421,10 @@ public sealed class CommandBotLifecycleTest
             finally
             {
                 owner.Cancelling.TrySetResult();
-                if (owner.HoldCleanup) await owner.AllowCleanup.Task;
+                if (owner.HoldCleanup)
+                {
+                    await owner.AllowCleanup.Task;
+                }
                 Interlocked.Increment(ref owner.Cleaned);
             }
         }

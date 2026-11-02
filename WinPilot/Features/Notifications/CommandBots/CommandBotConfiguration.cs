@@ -2,14 +2,23 @@ using WinPilot.Core;
 
 namespace WinPilot.Features.Notifications.CommandBots;
 
+/// <summary>
+/// 协调通知设置与命令机器人配置保存，共用串行入口，仅刷新连接配置发生变化的机器人。
+/// </summary>
 public sealed class CommandBotConfiguration : IDisposable
 {
     internal SemaphoreSlim Gate { get; } = new(1, 1);
+
     private readonly List<CommandBotService> bots = [];
+
     internal void Register(CommandBotService bot) => bots.Add(bot);
+
     internal void Unregister(CommandBotService bot) => bots.Remove(bot);
-    internal async Task<NotificationSettings> SaveNotificationsAsync(string configurationFile,
-        Func<NotificationSettings, NotificationSettings> update, CancellationToken token)
+
+    internal async Task<NotificationSettings> SaveNotificationsAsync(
+        string configurationFile,
+        Func<NotificationSettings, NotificationSettings> update,
+        CancellationToken token)
     {
         await Gate.WaitAsync(token);
         try
@@ -20,13 +29,23 @@ public sealed class CommandBotConfiguration : IDisposable
                 var previous = current.Notifications;
                 var next = update(previous);
                 changed = bots.Where(bot => bot.ConnectionChanged(previous, next, current.CommandBots)).ToArray();
-                foreach (var bot in changed) bot.ValidateConnection(next);
+                foreach (var bot in changed)
+                {
+                    bot.ValidateConnection(next);
+                }
                 return current with { Notifications = next };
             });
-            foreach (var bot in changed) await bot.RefreshAsync();
+            foreach (var bot in changed)
+            {
+                await bot.RefreshAsync();
+            }
             return saved.Notifications;
         }
-        finally { Gate.Release(); }
+        finally
+        {
+            Gate.Release();
+        }
     }
+
     public void Dispose() => Gate.Dispose();
 }

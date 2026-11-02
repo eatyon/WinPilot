@@ -22,7 +22,11 @@ public sealed class CommandListReplyTest
                 sequences.Add(sequence);
                 return Task.CompletedTask;
             }, NullLogger.Instance, "Test", CancellationToken.None);
-        Assert.Equal(new[] { 1, 2, 3 }, sequences);
+        Assert.Equal(new[] {
+            1,
+            2,
+            3
+}, sequences);
         Assert.Equal(heights[0], heights[1]);
         Assert.True(heights[2] < heights[1]);
     }

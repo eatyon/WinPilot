@@ -4,9 +4,16 @@ internal static class CommandListReply
 {
     internal const int PageSize = 20;
 
-    internal static async Task SendAsync(string title, IReadOnlyList<string> names, string usage,
-        Func<string, int, Task> replyText, Func<byte[], int, Task>? replyImage,
-        ILogger logger, string channel, CancellationToken token, IEnumerable<string>? diagnosticSecrets = null)
+    internal static async Task SendAsync(
+        string title,
+        IReadOnlyList<string> names,
+        string usage,
+        Func<string, int, Task> replyText,
+        Func<byte[], int, Task>? replyImage,
+        ILogger logger,
+        string channel,
+        CancellationToken token,
+        IEnumerable<string>? diagnosticSecrets = null)
     {
         var pageCount = (names.Count + PageSize - 1) / PageSize;
         var sequence = 0;
@@ -23,11 +30,16 @@ internal static class CommandListReply
                     await replyImage(image, ++sequence);
                     continue;
                 }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception exception) when (!token.IsCancellationRequested)
                 {
-                    logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
-                        "{Channel} 命令列表图片生成或发送失败，尝试文字回复", channel);
+                    logger.LogWarning(
+                        NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                        "{Channel} 命令列表图片生成或发送失败，尝试文字回复",
+                        channel);
                 }
             }
             var text = $"{heading}：\n" + string.Join("\n", items) +
@@ -40,17 +52,27 @@ internal static class CommandListReply
         }
     }
 
+    // 优先沿换行拆分长回复；必须截断时避开 UTF-16 代理对，防止拆坏字符。
     internal static IEnumerable<string> SplitText(string text)
     {
         const int limit = 1500;
         while (text.Length > limit)
         {
             var length = text.LastIndexOf('\n', limit - 1, limit);
-            if (length <= 0) length = limit;
-            if (char.IsHighSurrogate(text[length - 1])) length--;
+            if (length <= 0)
+            {
+                length = limit;
+            }
+            if (char.IsHighSurrogate(text[length - 1]))
+            {
+                length--;
+            }
             yield return text[..length];
             text = text[length..].TrimStart('\n');
         }
-        if (text.Length > 0) yield return text;
+        if (text.Length > 0)
+        {
+            yield return text;
+        }
     }
 }

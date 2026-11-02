@@ -88,7 +88,11 @@ public sealed class RunTaskCommandTest
         fixture.Create("Example");
         var replies = 0;
         using var processor = fixture.Processor();
-        await processor.ProcessAsync(Message("运行任务Example", _ => { replies++; throw new IOException(); }), "", CancellationToken.None);
+        await processor.ProcessAsync(Message("运行任务Example", _ =>
+        {
+            replies++;
+            throw new IOException();
+        }), "", CancellationToken.None);
         Assert.Equal(1, fixture.Programs.Launches);
         Assert.Equal(1, replies);
     }
@@ -100,9 +104,17 @@ public sealed class RunTaskCommandTest
     {
         await using var fixture = new TaskServiceFixture();
         fixture.Programs.FailFirst = true;
-        fixture.Tasks.Create(new("Example", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, ContinueOnFailure: continueOnFailure),
-             new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)]));
+        fixture.Tasks.Create(new(
+            "Example",
+            true,
+            new(TaskTriggerType.WinPilotStartup),
+            [
+                new(
+                    TaskActionType.StartProgram,
+                    ProgramPath: Environment.ProcessPath!,
+                    ContinueOnFailure: continueOnFailure),
+                new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!)
+]));
         var replies = new List<string>();
         using var processor = fixture.Processor();
         await processor.ProcessAsync(Message("运行任务Example", replies.Add), "", CancellationToken.None);
@@ -147,7 +159,10 @@ public sealed class RunTaskCommandTest
         fixture.Create("Example");
         using var processor = fixture.Processor();
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            processor.ProcessAsync(Message("运行任务Example", _ => throw new InvalidOperationException()), "", new CancellationToken(true)));
+            processor.ProcessAsync(
+                Message("运行任务Example", _ => throw new InvalidOperationException()),
+                "",
+                new CancellationToken(true)));
         Assert.Equal(0, fixture.Programs.Launches);
     }
 
@@ -171,14 +186,18 @@ public sealed class RunTaskCommandTest
         Assert.Equal(0, fixture.Programs.Launches);
     }
 
-    private static CommandBotMessage Message(string command, Action<string> receive, bool failImage = false) => new("origin", "sender", command)
-    {
-        Reply = (text, image, _) =>
+    private static CommandBotMessage Message(string command, Action<string> receive, bool failImage = false) =>
+        new("origin", "sender", command)
         {
-            if (failImage && image is not null) throw new IOException("模拟图片发送失败");
-            Assert.Null(image);
-            receive(text);
-            return Task.CompletedTask;
-        }
-    };
+            Reply = (text, image, _) =>
+            {
+                if (failImage && image is not null)
+                {
+                    throw new IOException("模拟图片发送失败");
+                }
+                Assert.Null(image);
+                receive(text);
+                return Task.CompletedTask;
+            }
+        };
 }

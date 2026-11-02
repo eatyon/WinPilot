@@ -14,7 +14,13 @@ public static class CommandBotEndpointRouteBuilderExtensions
         {
             context.Response.Headers.CacheControl = "no-store";
             var settings = WinPilot.Core.WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).CommandBots;
-            return Results.Ok(new { telegram = settings.TelegramEnabled, feishu = settings.FeishuEnabled, onebot = settings.OneBotEnabled, qqbot = settings.QQBotEnabled });
+            return Results.Ok(new
+            {
+                telegram = settings.TelegramEnabled,
+                feishu = settings.FeishuEnabled,
+                onebot = settings.OneBotEnabled,
+                qqbot = settings.QQBotEnabled
+            });
         });
         endpoints.MapGet("/api/notifications/command-bots/commands", (HttpContext context,
             [Microsoft.AspNetCore.Mvc.FromServices] PluginCommandRegistry registry) =>
@@ -22,11 +28,17 @@ public static class CommandBotEndpointRouteBuilderExtensions
             context.Response.Headers.CacheControl = "no-store";
             var groups = new List<CommandGroup>
             {
-                new("WinPilot", CommandProcessor.Definitions.Select(command => new CommandItem(command.Usage, command.Description)).ToArray())
+                new(
+                    "WinPilot",
+                    CommandProcessor.Definitions.Select(command => new CommandItem(command.Usage, command.Description)).ToArray())
             };
-            groups.AddRange(registry.GetAll().GroupBy(command => command.PluginId).Select(group =>
-                new CommandGroup(group.First().PluginDisplayName,
-                    group.Select(command => new CommandItem(command.Definition.Usage, command.Definition.Description)).ToArray())));
+            groups.AddRange(registry
+                .GetAll()
+                .GroupBy(command => command.PluginId)
+                .Select(group =>
+                    new CommandGroup(
+                        group.First().PluginDisplayName,
+                        group.Select(command => new CommandItem(command.Definition.Usage, command.Definition.Description)).ToArray())));
             return Results.Ok(groups);
         });
         MapBotEndpoints<TelegramCommandBotService>(endpoints, "telegram");
@@ -39,9 +51,14 @@ public static class CommandBotEndpointRouteBuilderExtensions
             var settings = bot.GetOptions();
             return Results.Ok(settings);
         });
-        endpoints.MapPut("/api/settings/notifications/command-bots/onebot", (OneBotCommandBotOptions options, HttpContext context,
-            [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot, SafeModeService safeMode) =>
-            ExecuteAsync(() => bot.SaveAsync(options, context.RequestAborted), bot, safeMode, context, "onebot", "保存设置"));
+        endpoints.MapPut(
+            "/api/settings/notifications/command-bots/onebot",
+            (
+                OneBotCommandBotOptions options,
+                HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] OneBotCommandBotService bot,
+                SafeModeService safeMode) =>
+                ExecuteAsync(() => bot.SaveAsync(options, context.RequestAborted), bot, safeMode, context, "onebot", "保存设置"));
         return endpoints;
     }
 
@@ -58,12 +75,28 @@ public static class CommandBotEndpointRouteBuilderExtensions
                 var settings = bot.GetSettings();
                 return Results.Ok(settings);
             });
-            endpoints.MapPut(configurationRoute, (EnabledRequest request, HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
-                ExecuteAsync(() => request.Prefix is null ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)
-                    : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted), bot, safeMode, context, channel, "保存设置"));
+            endpoints.MapPut(
+                configurationRoute,
+                (
+                    EnabledRequest request,
+                    HttpContext context,
+                    [Microsoft.AspNetCore.Mvc.FromServices] T bot,
+                    SafeModeService safeMode) =>
+                    ExecuteAsync(
+                        () =>
+                            request.Prefix is null
+                                ? bot.SetEnabledAsync(request.Enabled, context.RequestAborted)
+                                : bot.SaveSettingsAsync(new(request.Enabled, request.Prefix), context.RequestAborted),
+                        bot,
+                        safeMode,
+                        context,
+                        channel,
+                        "保存设置"));
         }
-        endpoints.MapPost(route + "/reconnect", (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
-            ExecuteAsync(() => bot.ReconnectAsync(context.RequestAborted), bot, safeMode, context, channel, "重新连接"));
+        endpoints.MapPost(
+            route + "/reconnect",
+            (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot, SafeModeService safeMode) =>
+                ExecuteAsync(() => bot.ReconnectAsync(context.RequestAborted), bot, safeMode, context, channel, "重新连接"));
         endpoints.MapGet(route + "/events", async (HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] T bot) =>
         {
             context.Response.ContentType = "text/event-stream";
@@ -76,28 +109,51 @@ public static class CommandBotEndpointRouteBuilderExtensions
                     await context.Response.Body.FlushAsync(context.RequestAborted);
                 }
             }
-            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+            }
         });
     }
 
-    internal static async Task<IResult> ExecuteAsync(Func<Task> action, CommandBotService bot, SafeModeService safeMode,
-        HttpContext context, string channel, string operation)
+    internal static async Task<IResult> ExecuteAsync(
+        Func<Task> action,
+        CommandBotService bot,
+        SafeModeService safeMode,
+        HttpContext context,
+        string channel,
+        string operation)
     {
-        if (safeMode.Enabled) return Results.Json(new { message = "安全模式下不可修改命令机器人设置" }, statusCode: 403);
-        try { await action(); return Results.Ok(bot.Status); }
-        catch (InvalidOperationException exception) { return Results.BadRequest(new { message = exception.Message }); }
+        if (safeMode.Enabled)
+        {
+            return Results.Json(new { message = "安全模式下不可修改命令机器人设置" }, statusCode: 403);
+        }
+        try
+        {
+            await action();
+            return Results.Ok(bot.Status);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Results.BadRequest(new { message = exception.Message });
+        }
         catch (Exception exception) when (IsSaveFailure(exception))
         {
-            context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(CommandBotEndpointRouteBuilderExtensions).FullName!)
+            context.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(CommandBotEndpointRouteBuilderExtensions).FullName!)
                 .LogError(exception, "命令机器人配置操作失败，渠道：{Channel}，操作：{Operation}", channel, operation);
             return Results.Problem(statusCode: 500, title: "命令机器人设置保存失败", detail: "无法保存配置，请检查数据目录权限");
         }
     }
 
-    internal static bool IsSaveFailure(Exception exception) => exception is IOException or UnauthorizedAccessException ||
-        exception is AggregateException { InnerExceptions.Count: 2 } aggregate && aggregate.InnerExceptions.All(IsSaveFailure);
+    internal static bool IsSaveFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException
+        || exception is AggregateException { InnerExceptions.Count: 2 } aggregate
+        && aggregate.InnerExceptions.All(IsSaveFailure);
 
     private sealed record EnabledRequest(bool Enabled, string? Prefix = null);
+
     private sealed record CommandItem(string Usage, string Description);
+
     private sealed record CommandGroup(string Name, CommandItem[] Commands);
 }

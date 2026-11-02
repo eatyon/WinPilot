@@ -95,7 +95,8 @@ public sealed class OneBotCommandBotTest
     {
         var message = OneBotCommandBotTransport.ParseMessage(Message("group", "id", new object[]
         {
-            new { type = "at", data = new { qq = "bot" } }, new { type = "text", data = new { text = " / 状态" } }
+            new { type = "at", data = new { qq = "bot" } },
+            new { type = "text", data = new { text = " / 状态" } }
         }))!.Value.Message;
         Assert.Equal("状态", CommandBotService.ExtractCommand(message.Content, "/"));
     }
@@ -114,7 +115,13 @@ public sealed class OneBotCommandBotTest
     [InlineData("user", "group", "group", "group", "other", false)]
     [InlineData("user", "group", "group", "other", "user", false)]
     [InlineData(" user ", " group ", "group", "group", "user", true)]
-    public void ReceptionScopeUsesSavedUserAndGroup(string user, string group, string type, string chat, string sender, bool allowed)
+    public void ReceptionScopeUsesSavedUserAndGroup(
+        string user,
+        string group,
+        string type,
+        string chat,
+        string sender,
+        bool allowed)
     {
         var settings = new NotificationSettings { OneBotUserId = user, OneBotGroupId = group };
         var message = new CommandBotMessage(chat, sender, "测试");
@@ -149,7 +156,11 @@ public sealed class OneBotCommandBotTest
             new { type = "at", data = new { qq = "123" } },
             new { type = "image", data = new { url = "https://secret.test/image" } },
             new { type = "record", data = new { file = "secret-file" } },
-            new { type = "video" }, new { type = "file" }, new { type = "face" }, new { type = "forward" }, new { type = "unknown" }
+            new { type = "video" },
+            new { type = "file" },
+            new { type = "face" },
+            new { type = "forward" },
+            new { type = "unknown" }
         });
         var text = OneBotCommandBotTransport.ParseMessage(payload)!.Value.Message.Content;
         Assert.Equal("hello @123", text);
@@ -159,7 +170,10 @@ public sealed class OneBotCommandBotTest
     [Fact]
     public void FormatsCqStringAndEscapedTextAndBoundsDisplayLength()
     {
-        var parsed = OneBotCommandBotTransport.ParseMessage(Message("private", "id", "&#91;字&#93;&amp;[CQ:at,qq=123][CQ:image,file=private-path][CQ:forward,id=secret]"))!.Value;
+        var parsed = OneBotCommandBotTransport.ParseMessage(Message(
+            "private",
+            "id",
+            "&#91;字&#93;&amp;[CQ:at,qq=123][CQ:image,file=private-path][CQ:forward,id=secret]"))!.Value;
         Assert.Equal("[字]&@123", parsed.Message.Content);
         var literal = OneBotCommandBotTransport.ParseMessage(Message("private", "id", new[] { new { type = "text", data = new { text = "[CQ:image]" } } }))!.Value;
         Assert.Equal("[CQ:image]", literal.Message.Content);
@@ -223,7 +237,8 @@ public sealed class OneBotCommandBotTest
         await fixture.Enable();
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with
         {
-            OneBotEndpoint = "http://another.test/", OneBotToken = "another-http-token"
+            OneBotEndpoint = "http://another.test/",
+            OneBotToken = "another-http-token"
         }, CancellationToken.None);
         Assert.Equal(1, fixture.Attempts);
         var test = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
@@ -244,7 +259,8 @@ public sealed class OneBotCommandBotTest
         await fixture.Enable();
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with
         {
-            OneBotUserId = "another-user", OneBotGroupId = "another-group"
+            OneBotUserId = "another-user",
+            OneBotGroupId = "another-group"
         }, CancellationToken.None);
         await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         Assert.Equal("ws-only", fixture.Options!.Token);
@@ -253,8 +269,13 @@ public sealed class OneBotCommandBotTest
         Assert.False(received.IsCompleted);
         fixture.Receive!(JsonSerializer.SerializeToElement(new
         {
-            post_type = "message", message_type = "group", self_id = "bot", message_id = "new-scope",
-            user_id = "another-user", group_id = "another-group", message = "/帮助"
+            post_type = "message",
+            message_type = "group",
+            self_id = "bot",
+            message_id = "new-scope",
+            user_id = "another-user",
+            group_id = "another-group",
+            message = "/帮助"
         }));
         Assert.True((await received.WaitAsync(TimeSpan.FromSeconds(2))) > 0);
     }
@@ -268,11 +289,17 @@ public sealed class OneBotCommandBotTest
         fixture.Receive!(Heartbeat(false));
         fixture.Receive!(JsonSerializer.SerializeToElement(new
         {
-            post_type = "meta_event", meta_event_type = "heartbeat", self_id = 1, status = new { good = false }
+            post_type = "meta_event",
+            meta_event_type = "heartbeat",
+            self_id = 1,
+            status = new { good = false }
         }));
         fixture.Receive!(JsonSerializer.SerializeToElement(new
         {
-            post_type = "message", message_type = "private", self_id = 1, message = "invalid"
+            post_type = "message",
+            message_type = "private",
+            self_id = 1,
+            message = "invalid"
         }));
         Assert.Equal("connected", fixture.Bot.Status.State);
         Assert.Null(fixture.Bot.Status.Error);
@@ -305,7 +332,10 @@ public sealed class OneBotCommandBotTest
     {
         var segments = new List<object> { new { type = "text", data = new { text = new string('a', length) } } };
         segments.Add(new { type = "text", data = new { text = "" } });
-        if (extra) segments.Add(new { type = "text", data = new { text = "b" } });
+        if (extra)
+        {
+            segments.Add(new { type = "text", data = new { text = "b" } });
+        }
         var text = OneBotCommandBotTransport.ParseMessage(Message("group", "id", segments))!.Value.Message.Content;
         Assert.Equal(truncated, text.EndsWith('…'));
         Assert.Equal(truncated ? 8193 : length + (extra ? 1 : 0), text.Length);
@@ -388,7 +418,9 @@ public sealed class OneBotCommandBotTest
         Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
         Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, options)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/onebot/reconnect", null)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await client.PostAsync("/api/notifications/command-bots/onebot/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(false);
         using var restored = await client.GetAsync(route);
@@ -407,7 +439,11 @@ public sealed class OneBotCommandBotTest
         {
             header.TrySetResult(context.Request.Headers.Authorization.ToString());
             using var socket = await context.WebSockets.AcceptWebSocketAsync();
-            await socket.SendAsync(JsonSerializer.SerializeToUtf8Bytes(Heartbeat(true)), WebSocketMessageType.Text, true, context.RequestAborted);
+            await socket.SendAsync(
+                JsonSerializer.SerializeToUtf8Bytes(Heartbeat(true)),
+                WebSocketMessageType.Text,
+                true,
+                context.RequestAborted);
             await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "done", context.RequestAborted);
         });
         await app.StartAsync();
@@ -415,7 +451,13 @@ public sealed class OneBotCommandBotTest
         var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connected = false;
         await Assert.ThrowsAsync<IOException>(() => OneBotCommandBotTransport.RunAsync(new(true, address, "ws-only-token"), () => connected = true,
-            payload => { if (OneBotCommandBotTransport.IsReceptionEvent(payload)) received.TrySetResult(); }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+            payload =>
+            {
+                if (OneBotCommandBotTransport.IsReceptionEvent(payload))
+                {
+                    received.TrySetResult();
+                }
+            }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal("Bearer ws-only-token", await header.Task);
         Assert.True(received.Task.IsCompletedSuccessfully);
         Assert.True(connected);
@@ -445,29 +487,74 @@ public sealed class OneBotCommandBotTest
     public async Task SessionRejectsOversizedFrameAndNonMessageEventsAreIgnored()
     {
         using var socket = new TestSocket();
-        for (var count = 0; count <= 128; count++) socket.Incoming.Writer.TryWrite((new byte[8192], false));
-        await Assert.ThrowsAsync<InvalidDataException>(() => OneBotCommandBotTransport.RunSessionAsync(socket, _ => { }, CancellationToken.None));
+        for (var count = 0; count <= 128; count++)
+        {
+            socket.Incoming.Writer.TryWrite((new byte[8192], false));
+        }
+        await Assert.ThrowsAsync<InvalidDataException>(() => OneBotCommandBotTransport.RunSessionAsync(socket, _ =>
+        {
+        }, CancellationToken.None));
         Assert.True(socket.Aborted);
-        var notice = JsonSerializer.SerializeToElement(new { post_type = "notice", self_id = 1, notice_type = "group_recall" });
+        var notice = JsonSerializer.SerializeToElement(new
+        {
+            post_type = "notice",
+            self_id = 1,
+            notice_type = "group_recall"
+        });
         Assert.False(OneBotCommandBotTransport.IsReceptionEvent(notice));
         Assert.Null(OneBotCommandBotTransport.ParseMessage(notice));
     }
 
-    private static JsonElement Command(string type, string id, string content, string self = "bot") => Message(type, id, "/" + content, self);
+    private static JsonElement Command(
+        string type,
+        string id,
+        string content,
+        string self = "bot") =>
+        Message(type, id, "/" + content, self);
 
-    private static JsonElement Message(string type, string id, object content, string self = "bot") => JsonSerializer.SerializeToElement(new
-    {
-        post_type = "message", message_type = type, sub_type = "group", self_id = self, message_id = id, user_id = "user", group_id = "group", message = content
-    });
-    private static JsonElement Lifecycle() => JsonSerializer.SerializeToElement(new { post_type = "meta_event", meta_event_type = "lifecycle", sub_type = "connect", self_id = 1 });
-    private static JsonElement Heartbeat(bool online) => JsonSerializer.SerializeToElement(new
-    {
-        post_type = "meta_event", meta_event_type = "heartbeat", self_id = 1, interval = 15000, status = new { online, good = online }
-    });
+    private static JsonElement Message(
+        string type,
+        string id,
+        object content,
+        string self = "bot") =>
+        JsonSerializer.SerializeToElement(new
+        {
+            post_type = "message",
+            message_type = type,
+            sub_type = "group",
+            self_id = self,
+            message_id = id,
+            user_id = "user",
+            group_id = "group",
+            message = content
+        });
+
+    private static JsonElement Lifecycle() =>
+        JsonSerializer.SerializeToElement(new
+        {
+            post_type = "meta_event",
+            meta_event_type = "lifecycle",
+            sub_type = "connect",
+            self_id = 1
+        });
+
+    private static JsonElement Heartbeat(bool online) =>
+        JsonSerializer.SerializeToElement(new
+        {
+            post_type = "meta_event",
+            meta_event_type = "heartbeat",
+            self_id = 1,
+            interval = 15000,
+            status = new { online, good = online }
+        });
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition()) await Task.Delay(10, timeout.Token);
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -476,25 +563,46 @@ public sealed class OneBotCommandBotTest
         public PortableDataPaths Paths { get; } = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "winpilot-onebot-tests", Guid.NewGuid().ToString("N")));
         public CommandBotTestObserver<OneBotCommandBotService> Logger { get; } = new();
         public OneBotCommandBotService Bot { get; }
+
         public volatile int Attempts;
         public volatile int Cleanups;
         public bool EmitLifecycle = true;
         public bool HoldConnection;
+
         public TaskCompletionSource ReleaseConnection { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Exception? Failure;
         public OneBotCommandBotOptions? Options;
         public Action<JsonElement>? Receive;
         public TaskCompletionSource? Disconnect;
+
         public Fixture()
         {
-            new WinPilotSettings { Port = 9123, Notifications = new()
+            new WinPilotSettings
             {
-                OneBotEndpoint = "http://127.0.0.1:3000", OneBotToken = "http-only", OneBotUserId = "user", OneBotGroupId = "group"
-            }, CommandBots = new()
-            {
-                TelegramEnabled = true, FeishuEnabled = true, QQBotEnabled = true, OneBotWebSocketUrl = "ws://127.0.0.1:6700/", OneBotToken = "ws-only", OneBotPrefix = "/"
-            } }.Save(Paths.ConfigurationFile);
-            Bot = new(Paths, Logger, Configuration, async (options, connected, receive, token) =>
+                Port = 9123,
+                Notifications = new()
+                {
+                    OneBotEndpoint = "http://127.0.0.1:3000",
+                    OneBotToken = "http-only",
+                    OneBotUserId = "user",
+                    OneBotGroupId = "group"
+                },
+                CommandBots = new()
+                {
+                    TelegramEnabled = true,
+                    FeishuEnabled = true,
+                    QQBotEnabled = true,
+                    OneBotWebSocketUrl = "ws://127.0.0.1:6700/",
+                    OneBotToken = "ws-only",
+                    OneBotPrefix = "/"
+                }
+            }.Save(Paths.ConfigurationFile);
+            Bot = new(Paths, Logger, Configuration, async (
+                options,
+                connected,
+                receive,
+                token) =>
             {
                 Options = options;
                 Receive = receive;
@@ -502,20 +610,34 @@ public sealed class OneBotCommandBotTest
                 Interlocked.Increment(ref Attempts);
                 try
                 {
-                    if (Failure is not null) throw Failure;
-                    if (HoldConnection) await ReleaseConnection.Task.WaitAsync(token);
+                    if (Failure is not null)
+                    {
+                        throw Failure;
+                    }
+                    if (HoldConnection)
+                    {
+                        await ReleaseConnection.Task.WaitAsync(token);
+                    }
                     connected();
-                    if (EmitLifecycle) receive(Lifecycle());
+                    if (EmitLifecycle)
+                    {
+                        receive(Lifecycle());
+                    }
                     await Disconnect.Task.WaitAsync(token);
                 }
-                finally { Interlocked.Increment(ref Cleanups); }
+                finally
+                {
+                    Interlocked.Increment(ref Cleanups);
+                }
             });
         }
+
         public async Task Enable()
         {
             await Bot.SetEnabledAsync(true, CancellationToken.None);
             await WaitUntil(() => Bot.Status.State == "connected");
         }
+
         public async ValueTask DisposeAsync()
         {
             await Bot.DisposeAsync();
@@ -527,21 +649,40 @@ public sealed class OneBotCommandBotTest
     private sealed class TestSocket : WebSocket
     {
         public Channel<(byte[] Bytes, bool End)> Incoming { get; } = Channel.CreateUnbounded<(byte[], bool)>();
+
         public bool Aborted;
+
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
         public override WebSocketState State => Aborted ? WebSocketState.Aborted : WebSocketState.Open;
         public override string? SubProtocol => null;
+
         public override void Abort() => Aborted = true;
-        public override void Dispose() { }
-        public override Task CloseAsync(WebSocketCloseStatus status, string? description, CancellationToken token) => Task.CompletedTask;
-        public override Task CloseOutputAsync(WebSocketCloseStatus status, string? description, CancellationToken token) => Task.CompletedTask;
-        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken token)
+
+        public override void Dispose()
+        {
+        }
+
+        public override Task CloseAsync(WebSocketCloseStatus status, string? description, CancellationToken token) =>
+            Task.CompletedTask;
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus status, string? description, CancellationToken token) =>
+            Task.CompletedTask;
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken token)
         {
             var part = await Incoming.Reader.ReadAsync(token);
             part.Bytes.AsSpan().CopyTo(buffer.AsSpan());
             return new(part.Bytes.Length, WebSocketMessageType.Text, part.End);
         }
-        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType type, bool endOfMessage, CancellationToken token) => Task.CompletedTask;
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType type,
+            bool endOfMessage,
+            CancellationToken token) =>
+            Task.CompletedTask;
     }
 }

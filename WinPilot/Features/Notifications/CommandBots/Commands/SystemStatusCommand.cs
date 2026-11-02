@@ -18,13 +18,27 @@ internal sealed class SystemStatusCommand(ISystemResourceMonitor? monitor)
             new("CPU", Percent(status.CpuUsagePercent)),
             new("内存", Percent(status.MemoryUsagePercent))
         };
-        if (status.GpuUsages.Count == 0) rows.Add(new("GPU", "不可用"));
-        else rows.AddRange(status.GpuUsages.Select(item => new CommandImageRenderer.Row(item.Name, Percent(item.UsagePercent))));
-        if (status.DiskUsages.Count == 0) rows.Add(new("磁盘", "不可用"));
-        else rows.AddRange(status.DiskUsages.Select(item => new CommandImageRenderer.Row(item.Name, Percent(item.UsagePercent))));
+        if (status.GpuUsages.Count == 0)
+        {
+            rows.Add(new("GPU", "不可用"));
+        }
+        else
+        {
+            rows.AddRange(status.GpuUsages.Select(item => new CommandImageRenderer.Row(item.Name, Percent(item.UsagePercent))));
+        }
+        if (status.DiskUsages.Count == 0)
+        {
+            rows.Add(new("磁盘", "不可用"));
+        }
+        else
+        {
+            rows.AddRange(status.DiskUsages.Select(item => new CommandImageRenderer.Row(item.Name, Percent(item.UsagePercent))));
+        }
         return rows;
     }
 
-    private static string Percent(double? value) => value is { } number && double.IsFinite(number) && number is >= 0 and <= 100
-        ? number.ToString("0.0", CultureInfo.InvariantCulture) + "%" : "不可用";
+    private static string Percent(double? value) =>
+        value is { } number && double.IsFinite(number) && number is >= 0 and <= 100
+            ? number.ToString("0.0", CultureInfo.InvariantCulture) + "%"
+            : "不可用";
 }

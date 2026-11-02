@@ -1,23 +1,44 @@
 using WinPilot.Core;
-using WinPilot.Features.Desktop;
-using WinPilot.Core.SystemStatus;
 using WinPilot.Core.Programs;
+using WinPilot.Core.SystemStatus;
+using WinPilot.Features.Desktop;
+using WinPilot.Features.Plugins;
 using WinPilot.Features.Programs;
 using WinPilot.Features.Tasks;
-using WinPilot.Features.Plugins;
 
 namespace WinPilot.Features.Notifications.CommandBots.Commands;
 
-internal sealed class CommandProcessor(string channel, NotificationSettings settings, ILogger logger,
-    DesktopScreenshotService? screenshots = null, ISystemResourceMonitor? systemMonitor = null,
-    ProgramTagService? tags = null, IProgramManager? programs = null, TaskService? tasks = null,
-    PluginCommandRegistry? pluginCommands = null, CommandBotSettings? botSettings = null, TimeProvider? clock = null) : IDisposable
+internal sealed class CommandProcessor(
+    string channel,
+    NotificationSettings settings,
+    ILogger logger,
+    DesktopScreenshotService? screenshots = null,
+    ISystemResourceMonitor? systemMonitor = null,
+    ProgramTagService? tags = null,
+    IProgramManager? programs = null,
+    TaskService? tasks = null,
+    PluginCommandRegistry? pluginCommands = null,
+    CommandBotSettings? botSettings = null,
+    TimeProvider? clock = null) : IDisposable
 {
-    internal enum CommandKind { Help, SystemStatus, DesktopScreenshot, LaunchTag, RunTask }
-    internal sealed record CommandDefinition(string Name, string Description, CommandKind Kind, string? Parameters = null)
+    internal enum CommandKind
+    {
+        Help,
+        SystemStatus,
+        DesktopScreenshot,
+        LaunchTag,
+        RunTask
+    }
+
+    internal sealed record CommandDefinition(
+        string Name,
+        string Description,
+        CommandKind Kind,
+        string? Parameters = null)
     {
         internal string Usage => Parameters is null ? Name : $"{Name} {Parameters}";
     }
+
     internal static readonly IReadOnlyList<CommandDefinition> Definitions =
         Array.AsReadOnly(new[]
         {
@@ -34,33 +55,50 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
     private readonly string[] diagnosticSecrets = NotificationFailureDiagnostics.Secrets(settings, botSettings);
 
     internal static bool IsSupportedCommand(string command) => FindCommand(command) is not null;
+
     internal static string? GetCommandName(string command) => FindCommand(command)?.Name;
 
     internal static string FormatCommandForLog(string name, string content)
     {
-        if (name == "*") return string.Concat(content.Trim().Select(character => char.IsControl(character) ? ' ' : character));
+        if (name == "*")
+        {
+            return string.Concat(content.Trim().Select(character => char.IsControl(character) ? ' ' : character));
+        }
         var arguments = content.Trim()[name.Length..].Trim();
         var text = arguments.Length == 0 ? name : $"{name} {arguments}";
         return string.Concat(text.Select(character => char.IsControl(character) ? ' ' : character));
     }
 
     private static CommandDefinition? FindCommand(string command) =>
-        Definitions.FirstOrDefault(item => string.Equals(command.Trim(), item.Name, StringComparison.OrdinalIgnoreCase) ||
-            (item.Kind is CommandKind.LaunchTag or CommandKind.RunTask) && command.Trim().StartsWith(item.Name, StringComparison.OrdinalIgnoreCase));
+        Definitions.FirstOrDefault(item =>
+            string.Equals(command.Trim(), item.Name, StringComparison.OrdinalIgnoreCase)
+            || (item.Kind is CommandKind.LaunchTag or CommandKind.RunTask)
+            && command.Trim().StartsWith(item.Name, StringComparison.OrdinalIgnoreCase));
 
-    internal static string HelpText(string prefix, IReadOnlyList<RegisteredPluginCommand>? plugins = null,
-        IReadOnlyList<CommandDefinition>? commands = null, string title = "WinPilot 命令帮助") => title + "\n\n" +
+    internal static string HelpText(
+        string prefix,
+        IReadOnlyList<RegisteredPluginCommand>? plugins = null,
+        IReadOnlyList<CommandDefinition>? commands = null,
+        string title = "WinPilot 命令帮助") =>
+        title + "\n\n" +
         ((commands ?? Definitions).Count > 0 && plugins is { Count: > 0 } ? "WinPilot\n" : "") +
         string.Join("\n", (commands ?? Definitions).Select(item => $"{prefix}{item.Usage} — {item.Description}")) +
-        (plugins is null ? "" : string.Concat(plugins.GroupBy(item => item.PluginId).Select(group =>
-            "\n\n" + group.First().PluginDisplayName + "\n" +
+        (plugins is null
+            ? ""
+            : string.Concat(plugins
+                .GroupBy(item => item.PluginId)
+                .Select(group =>
+                    "\n\n" + group.First().PluginDisplayName + "\n" +
             string.Join("\n", group.Select(item => $"{prefix}{item.Definition.Usage} — {item.Definition.Description}")))));
 
     internal async Task ProcessAsync(CommandBotMessage message, string prefix, CancellationToken token)
     {
         var command = FindCommand(message.Content);
         var pluginCommandName = command is null ? pluginCommands?.GetCommandName(message.Content) : null;
-        if (command is null && pluginCommandName is null) return;
+        if (command is null && pluginCommandName is null)
+        {
+            return;
+        }
         var loggedCommand = FormatCommandForLog(command?.Name ?? pluginCommandName!, message.Content);
         token.ThrowIfCancellationRequested();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60), clock ?? TimeProvider.System);
@@ -69,7 +107,11 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
         {
             var sending = new SemaphoreSlim(1, 1);
             var sequence = 0;
-            async Task SendPluginReplyAsync(string content, byte[]? image, int _, CancellationToken sendToken)
+            async Task SendPluginReplyAsync(
+                string content,
+                byte[]? image,
+                int _,
+                CancellationToken sendToken)
             {
                 await sending.WaitAsync(sendToken);
                 try
@@ -77,20 +119,33 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
                     sendToken.ThrowIfCancellationRequested();
                     await SendAsync(message, content, image, ++sequence, sendToken);
                 }
-                finally { sending.Release(); }
+                finally
+                {
+                    sending.Release();
+                }
             }
             try
             {
-                var executing = pluginCommands!.ExecuteAsync(message.Content,
-                    replyToken => new PluginCommandReply(SendPluginReplyAsync, replyToken), timeout.Token,
+                var executing = pluginCommands!.ExecuteAsync(
+                    message.Content,
+                    replyToken => new PluginCommandReply(SendPluginReplyAsync, replyToken),
+                    timeout.Token,
                     diagnosticSecrets);
-                _ = executing.ContinueWith(completed => _ = completed.Exception, CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                _ = executing.ContinueWith(
+                    completed => _ = completed.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
                 var handled = await executing.WaitAsync(timeout.Token);
                 timeout.Token.ThrowIfCancellationRequested();
-                if (handled) logger.LogInformation("{Channel} 插件命令已处理：{Command}", channel, loggedCommand);
+                if (handled)
+                {
+                    logger.LogInformation("{Channel} 插件命令已处理：{Command}", channel, loggedCommand);
+                }
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
             catch (OperationCanceledException) when (timeout.IsCancellationRequested)
             {
                 logger.LogWarning("{Channel} 插件命令处理或发送回复超时", channel);
@@ -107,17 +162,25 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
         {
             if (command.Kind == CommandKind.Help)
             {
-                await CommandHelpReply.SendAsync(prefix, pluginCommands?.GetAll() ?? [],
+                await CommandHelpReply.SendAsync(
+                    prefix,
+                    pluginCommands?.GetAll() ?? [],
                     (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token),
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token),
-                    logger, channel, timeout.Token, diagnosticSecrets);
+                    logger,
+                    channel,
+                    timeout.Token,
+                    diagnosticSecrets);
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
                 return;
             }
             if (command.Kind == CommandKind.RunTask)
             {
-                await new RunTaskCommand(tasks, logger, channel, diagnosticSecrets).ExecuteAsync(message.Content.Trim()[command.Name.Length..], prefix,
-                    (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token), timeout.Token,
+                await new RunTaskCommand(tasks, logger, channel, diagnosticSecrets).ExecuteAsync(
+                    message.Content.Trim()[command.Name.Length..],
+                    prefix,
+                    (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token),
+                    timeout.Token,
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token));
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
                 return;
@@ -125,8 +188,11 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
             if (command.Kind == CommandKind.LaunchTag)
             {
                 var argument = message.Content.Trim()[command.Name.Length..];
-                await new LaunchTagCommand(tags, programs, logger, channel, diagnosticSecrets).ExecuteAsync(argument, prefix,
-                    (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token), timeout.Token,
+                await new LaunchTagCommand(tags, programs, logger, channel, diagnosticSecrets).ExecuteAsync(
+                    argument,
+                    prefix,
+                    (content, sequence) => SendAsync(message, content, null, sequence, timeout.Token),
+                    timeout.Token,
                     (image, sequence) => SendAsync(message, "", image, sequence, timeout.Token));
                 logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
                 return;
@@ -143,34 +209,48 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
                     stage = "图片生成";
                     image = CommandImageRenderer.RenderStatus(status);
                 }
-                else image = command.Kind switch
+                else
                 {
-                    CommandKind.DesktopScreenshot => new DesktopScreenshotCommand(screenshots).Capture(),
-                    _ => throw new InvalidOperationException("命令类型无效")
-                };
+                    image = command.Kind switch
+                    {
+                        CommandKind.DesktopScreenshot => new DesktopScreenshotCommand(screenshots).Capture(),
+                        _ => throw new InvalidOperationException("命令类型无效")
+                    };
+                }
                 timeout.Token.ThrowIfCancellationRequested();
                 stage = "图片发送";
                 if (command.Kind == CommandKind.DesktopScreenshot)
+                {
                     text = "桌面截图发送失败，请检查渠道权限和网络";
+                }
                 await SendAsync(message, "", image, 1, timeout.Token);
             }
             catch (Exception exception) when (!timeout.IsCancellationRequested)
             {
-                logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
-                    "{Channel}「{Command}」命令{Stage}失败，尝试改用文字回复", channel, command.Name, stage);
+                logger.LogWarning(
+                    NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                    "{Channel}「{Command}」命令{Stage}失败，尝试改用文字回复",
+                    channel,
+                    command.Name,
+                    stage);
                 await SendAsync(message, text, null, 2, timeout.Token);
             }
             logger.LogInformation("{Channel} 命令已处理：{Command}", channel, loggedCommand);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             logger.LogWarning("{Channel}「{Command}」命令处理或发送回复超时", channel, command.Name);
         }
         catch (Exception exception)
         {
-            logger.LogWarning(NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
-                "{Channel}「{Command}」命令处理或发送回复失败", channel, command.Name);
+            logger.LogWarning(
+                NotificationFailureDiagnostics.Redact(exception, diagnosticSecrets),
+                "{Channel}「{Command}」命令处理或发送回复失败",
+                channel,
+                command.Name);
         }
     }
 
@@ -178,19 +258,57 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
     private int activeSends;
     private bool disposed;
 
-    private async Task SendAsync(CommandBotMessage message, string text, byte[]? image, int sequence, CancellationToken token)
+    private async Task SendAsync(
+        CommandBotMessage message,
+        string text,
+        byte[]? image,
+        int sequence,
+        CancellationToken token)
     {
-        lock (resourcesGate) { ObjectDisposedException.ThrowIf(disposed, this); activeSends++; }
-        try { await SendCoreAsync(message, text, image, sequence, token).ConfigureAwait(false); }
-        finally { lock (resourcesGate) { activeSends--; if (disposed && activeSends == 0) ReleaseResources(); } }
+        lock (resourcesGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            activeSends++;
+        }
+        try
+        {
+            await SendCoreAsync(message, text, image, sequence, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (resourcesGate)
+            {
+                activeSends--;
+                if (disposed && activeSends == 0)
+                {
+                    ReleaseResources();
+                }
+            }
+        }
     }
 
-    private Task SendCoreAsync(CommandBotMessage message, string text, byte[]? image, int sequence, CancellationToken token)
+    private Task SendCoreAsync(
+        CommandBotMessage message,
+        string text,
+        byte[]? image,
+        int sequence,
+        CancellationToken token)
     {
-        if (message.Reply is { } reply) return reply(text, image, token);
+        if (message.Reply is { } reply)
+        {
+            return reply(text, image, token);
+        }
         if (channel == "Telegram")
-            return TelegramNotificationChannel.SendToAsync(telegramClient ??= TelegramTransport.CreateClient(settings, TimeSpan.FromSeconds(30)),
-                settings, message.ChatId, text, image, message.ThreadId, token);
+        {
+            return TelegramNotificationChannel.SendToAsync(
+                telegramClient ??= TelegramTransport.CreateClient(settings, TimeSpan.FromSeconds(30)),
+                settings,
+                message.ChatId,
+                text,
+                image,
+                message.ThreadId,
+                token);
+        }
         client ??= new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         return channel switch
         {
@@ -204,9 +322,15 @@ internal sealed class CommandProcessor(string channel, NotificationSettings sett
     {
         lock (resourcesGate)
         {
-            if (disposed) return;
+            if (disposed)
+            {
+                return;
+            }
             disposed = true;
-            if (activeSends == 0) ReleaseResources();
+            if (activeSends == 0)
+            {
+                ReleaseResources();
+            }
         }
     }
 

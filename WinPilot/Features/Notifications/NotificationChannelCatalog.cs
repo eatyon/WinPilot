@@ -25,9 +25,11 @@ public static class NotificationChannelCatalog
     {
         var id = channel?.Trim();
         if (string.IsNullOrEmpty(id))
+        {
             throw new InvalidOperationException("请选择发送渠道");
+        }
         return Find(id)?.Id
-            ?? throw new InvalidOperationException("通知渠道无效");
+                    ?? throw new InvalidOperationException("通知渠道无效");
     }
 
     internal static NotificationChannelDefinition? Find(string id) =>

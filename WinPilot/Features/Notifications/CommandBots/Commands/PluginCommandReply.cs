@@ -2,6 +2,9 @@ using WinPilot.PluginContract;
 
 namespace WinPilot.Features.Notifications.CommandBots.Commands;
 
+/// <summary>
+/// 串行发送一次插件命令的回复并分配序号，释放时取消发送，待在途调用和取消回调结束后回收资源。
+/// </summary>
 internal sealed class PluginCommandReply : IPluginCommandReply, IDisposable
 {
     private readonly Func<string, byte[]?, int, CancellationToken, Task> send;
@@ -31,8 +34,12 @@ internal sealed class PluginCommandReply : IPluginCommandReply, IDisposable
     public Task ReplyImageAsync(PluginImageContent image)
     {
         ArgumentNullException.ThrowIfNull(image);
-        if (image.Content is null || image.Content.Length == 0 || image.ContentType is not ("image/png" or "image/jpeg"))
+        if (image.Content is null
+            || image.Content.Length == 0
+            || image.ContentType is not ("image/png" or "image/jpeg"))
+        {
             throw new ArgumentException("命令回复图片必须是非空 PNG 或 JPEG", nameof(image));
+        }
         return ReplyAsync("", image.Content);
     }
 
@@ -53,21 +60,44 @@ internal sealed class PluginCommandReply : IPluginCommandReply, IDisposable
         }
         finally
         {
-            if (acquired) sending.Release();
-            lock (gate) { activeSends--; ReleaseIfIdle(); }
+            if (acquired)
+            {
+                sending.Release();
+            }
+            lock (gate)
+            {
+                activeSends--;
+                ReleaseIfIdle();
+            }
         }
     }
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-        try { cancellation.Cancel(); }
-        finally { lock (gate) { cancellationCompleted = true; ReleaseIfIdle(); } }
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        {
+            return;
+        }
+        try
+        {
+            cancellation.Cancel();
+        }
+        finally
+        {
+            lock (gate)
+            {
+                cancellationCompleted = true;
+                ReleaseIfIdle();
+            }
+        }
     }
 
     private void ReleaseIfIdle()
     {
-        if (disposed == 0 || !cancellationCompleted || activeSends != 0 || released) return;
+        if (disposed == 0 || !cancellationCompleted || activeSends != 0 || released)
+        {
+            return;
+        }
         released = true;
         cancellation.Dispose();
         sending.Dispose();

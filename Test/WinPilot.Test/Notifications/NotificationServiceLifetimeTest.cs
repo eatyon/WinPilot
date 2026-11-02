@@ -56,11 +56,13 @@ public sealed class NotificationServiceLifetimeTest
         fixture.Service.Dispose();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetAsync("http://127.0.0.1/"));
         foreach (var name in new[] { "feishu", "qqbot" })
+        {
             if (Read(fixture.Service, name) is { } disposableChannel)
             {
                 var gate = Assert.IsType<SemaphoreSlim>(disposableChannel.GetType().GetField("tokenGate", PrivateInstance)!.GetValue(disposableChannel));
                 Assert.Throws<ObjectDisposedException>(() => gate.Wait(0));
             }
+        }
     }
 
     [Fact]
@@ -100,7 +102,11 @@ public sealed class NotificationServiceLifetimeTest
         var calls = Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(() =>
         {
             Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(15)));
-            return getChannel(ref channel, _ => { Interlocked.Increment(ref created); return new object(); });
+            return getChannel(ref channel, _ =>
+            {
+                Interlocked.Increment(ref created);
+                return new object();
+            });
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
         Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(15)));
         var results = await Task.WhenAll(calls).WaitAsync(TimeSpan.FromSeconds(15));
@@ -151,16 +157,24 @@ public sealed class NotificationServiceLifetimeTest
             Assert.NotNull(channel);
             await Assert.ThrowsAsync<ObjectDisposedException>(() => client!.GetAsync("http://127.0.0.1/"));
         }
-        finally { release.Set(); await Task.WhenAll(creation, disposal); }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(creation, disposal);
+        }
     }
 
     private delegate object ChannelAccessor(ref object? channel, Func<HttpClient, object> create);
 
-    private static ChannelAccessor GetChannelAccessor(NotificationService service) => typeof(NotificationService)
-        .GetMethod("GetChannel", PrivateInstance)!.MakeGenericMethod(typeof(object)).CreateDelegate<ChannelAccessor>(service);
+    private static ChannelAccessor GetChannelAccessor(NotificationService service) =>
+        typeof(NotificationService)
+        .GetMethod("GetChannel", PrivateInstance)!
+            .MakeGenericMethod(typeof(object))
+            .CreateDelegate<ChannelAccessor>(service);
 
     private static object? Read(NotificationService service, string field)
-        => typeof(NotificationService).GetField(field, PrivateInstance)!.GetValue(service);
+        =>
+        typeof(NotificationService).GetField(field, PrivateInstance)!.GetValue(service);
 
     private static void AssertUnused(NotificationService service)
     {
@@ -171,13 +185,20 @@ public sealed class NotificationServiceLifetimeTest
     private sealed class Fixture : IDisposable
     {
         private readonly string directory = Directory.CreateTempSubdirectory("WinPilot-notification-lifetime-").FullName;
+
         internal NotificationService Service { get; }
+
         internal Fixture()
         {
             var paths = PortableDataPaths.Create(directory);
             new WinPilotSettings().Save(paths.ConfigurationFile);
             Service = new(paths, NullLogger<NotificationService>.Instance);
         }
-        public void Dispose() { Service.Dispose(); Directory.Delete(directory, recursive: true); }
+
+        public void Dispose()
+        {
+            Service.Dispose();
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

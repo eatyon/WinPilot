@@ -63,7 +63,13 @@ public sealed class QQBotCommandBotTest
     [InlineData("user", "group", "GROUP_MESSAGE_CREATE", "group", "other", false)]
     [InlineData("user", "group", "GROUP_MESSAGE_CREATE", "other", "user", false)]
     [InlineData(" user ", " group ", "GROUP_MESSAGE_CREATE", "group", "user", true)]
-    public void ReceptionScopeUsesSavedUserAndGroup(string user, string group, string type, string chat, string sender, bool allowed)
+    public void ReceptionScopeUsesSavedUserAndGroup(
+        string user,
+        string group,
+        string type,
+        string chat,
+        string sender,
+        bool allowed)
     {
         var settings = new NotificationSettings { QQBotOpenId = user, QQBotGroupOpenId = group };
         var message = new CommandBotMessage(chat, sender, "测试");
@@ -94,15 +100,30 @@ public sealed class QQBotCommandBotTest
     {
         var payload = JsonSerializer.SerializeToElement(new
         {
-            op = 0, t = type, d = new
+            op = 0,
+            t = type,
+            d = new
             {
-                id = "id", content = "帮助", group_openid = "group",
-                author = new { user_openid = "user", member_openid = "user", bot = isBot }
+                id = "id",
+                content = "帮助",
+                group_openid = "group",
+                author = new
+                {
+                    user_openid = "user",
+                    member_openid = "user",
+                    bot = isBot
+                }
             }
         });
         var result = QQBotCommandBotTransport.ParseMessage(payload);
-        if (isBot) Assert.Null(result);
-        else Assert.Equal("帮助", result!.Content);
+        if (isBot)
+        {
+            Assert.Null(result);
+        }
+        else
+        {
+            Assert.Equal("帮助", result!.Content);
+        }
     }
 
     [Fact]
@@ -172,13 +193,19 @@ public sealed class QQBotCommandBotTest
         Assert.False(test.IsCompleted);
         fixture.Receive!(JsonSerializer.SerializeToElement(new
         {
-            op = 0, t = "GROUP_MESSAGE_CREATE", d = new
+            op = 0,
+            t = "GROUP_MESSAGE_CREATE",
+            d = new
             {
-                id = "new-range", content = "/帮助", group_openid = "another-group", author = new { member_openid = "another-user" }
+                id = "new-range",
+                content = "/帮助",
+                group_openid = "another-group",
+                author = new { member_openid = "another-user" }
             }
         }));
         Assert.True((await test.WaitAsync(TimeSpan.FromSeconds(2))) > 0);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotClientSecret = "" }, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotClientSecret = "" }, CancellationToken.None));
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotClientSecret = "new-secret" }, CancellationToken.None);
         await WaitUntil(() => fixture.Attempts == 3 && fixture.Bot.Status.State == "connected");
         Assert.Equal("new-secret", fixture.Settings!.QQBotClientSecret);
@@ -324,7 +351,10 @@ public sealed class QQBotCommandBotTest
             Assert.DoesNotContain("secret", diagnostic);
             Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
         }
-        finally { fixture.ReleaseTemporaryCleanup.TrySetResult(); }
+        finally
+        {
+            fixture.ReleaseTemporaryCleanup.TrySetResult();
+        }
         await Assert.ThrowsAsync<QQBotBindingValidationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(3)));
         await WaitUntil(() => fixture.Bot.Status.State == "connected");
         Assert.Equal(1, fixture.TemporaryCleanups);
@@ -356,9 +386,17 @@ public sealed class QQBotCommandBotTest
         using var cancellation = new CancellationTokenSource();
         var resume = new QQBotGatewaySession();
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 20 } });
-        socket.Enqueue(new { op = 0, s = 1, t = "READY", d = new { session_id = "session" } });
+        socket.Enqueue(new
+        {
+            op = 0,
+            s = 1,
+            t = "READY",
+            d = new { session_id = "session" }
+        });
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var running = QQBotCommandBotTransport.RunSessionAsync(socket, "access", resume, () => ready.TrySetResult(), _ => { }, cancellation.Token);
+        var running = QQBotCommandBotTransport.RunSessionAsync(socket, "access", resume, () => ready.TrySetResult(), _ =>
+        {
+        }, cancellation.Token);
         await ready.Task;
         var identify = await socket.Sent.Reader.ReadAsync();
         Assert.Equal(2, identify.GetProperty("op").GetInt32());
@@ -371,9 +409,17 @@ public sealed class QQBotCommandBotTest
         Assert.Equal("session", resume.Id);
         using var resumed = new TestSocket();
         resumed.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
-        resumed.Enqueue(new { op = 0, s = 2, t = "RESUMED", d = new { } });
+        resumed.Enqueue(new
+        {
+            op = 0,
+            s = 2,
+            t = "RESUMED",
+            d = new { }
+        });
         using var next = new CancellationTokenSource();
-        var nextRun = QQBotCommandBotTransport.RunSessionAsync(resumed, "fresh-access", resume, () => next.Cancel(), _ => { }, next.Token);
+        var nextRun = QQBotCommandBotTransport.RunSessionAsync(resumed, "fresh-access", resume, () => next.Cancel(), _ =>
+        {
+        }, next.Token);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => nextRun);
         var request = await resumed.Sent.Reader.ReadAsync();
         Assert.Equal(6, request.GetProperty("op").GetInt32());
@@ -418,14 +464,18 @@ public sealed class QQBotCommandBotTest
         await app.StartAsync();
         using var client = app.GetTestClient();
         const string route = "/api/settings/notifications/command-bots/qqbot";
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/qqbot/status")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await client.GetAsync("/api/notifications/command-bots/qqbot/status")).StatusCode);
         app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
         Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/qqbot/reconnect", null)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await client.PostAsync("/api/notifications/command-bots/qqbot/reconnect", null)).StatusCode);
         Assert.Equal("connected", fixture.Bot.Status.State);
     }
 
@@ -434,27 +484,53 @@ public sealed class QQBotCommandBotTest
     {
         using var socket = new TestSocket();
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 5 } });
-        socket.Enqueue(new { op = 0, s = 1, t = "READY", d = new { session_id = "s" } });
-        await Assert.ThrowsAnyAsync<Exception>(() => QQBotCommandBotTransport.RunSessionAsync(socket, "access", new(), () => { }, _ => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)));
+        socket.Enqueue(new
+        {
+            op = 0,
+            s = 1,
+            t = "READY",
+            d = new { session_id = "s" }
+        });
+        await Assert.ThrowsAnyAsync<Exception>(() => QQBotCommandBotTransport.RunSessionAsync(socket, "access", new(), () =>
+        {
+        }, _ =>
+        {
+        }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.True(socket.Aborted);
         using var invalid = new TestSocket();
         invalid.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
         invalid.Enqueue(new { op = 9, d = false });
         var resume = new QQBotGatewaySession { Id = "old", Sequence = 1 };
-        await Assert.ThrowsAsync<IOException>(() => QQBotCommandBotTransport.RunSessionAsync(invalid, "access", resume, () => { }, _ => { }, CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => QQBotCommandBotTransport.RunSessionAsync(invalid, "access", resume, () =>
+        {
+        }, _ =>
+        {
+        }, CancellationToken.None));
         Assert.Null(resume.Id);
         Assert.Null(resume.Sequence);
     }
 
-    private static JsonElement Message(string type, string id, string content = "测试") => JsonSerializer.SerializeToElement(new
-    {
-        op = 0, t = type, d = new { id, content, group_openid = "group", author = type == "C2C_MESSAGE_CREATE" ? (object)new { user_openid = "user" } : new { member_openid = "user" } }
-    });
+    private static JsonElement Message(string type, string id, string content = "测试") =>
+        JsonSerializer.SerializeToElement(new
+        {
+            op = 0,
+            t = type,
+            d = new
+            {
+                id,
+                content,
+                group_openid = "group",
+                author = type == "C2C_MESSAGE_CREATE" ? (object)new { user_openid = "user" } : new { member_openid = "user" }
+            }
+        });
 
     private static async Task WaitUntil(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition()) await Task.Delay(10, timeout.Token);
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -463,6 +539,7 @@ public sealed class QQBotCommandBotTest
         public PortableDataPaths Paths { get; } = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "winpilot-qqbot-tests", Guid.NewGuid().ToString("N")));
         public CommandBotTestObserver<QQBotCommandBotService> Logger { get; } = new();
         public QQBotCommandBotService Bot { get; }
+
         public volatile int Attempts;
         public volatile int Cleanups;
         public NotificationSettings? Settings;
@@ -473,15 +550,37 @@ public sealed class QQBotCommandBotTest
         public volatile int TemporaryCleanups;
         public bool HoldTemporaryCleanup;
         public Exception? TemporaryCancellationFailure;
+
         public TaskCompletionSource TemporaryStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource TemporaryStopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseTemporaryCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<string> TemporaryResult { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Fixture()
         {
-            new WinPilotSettings { Port = 9123, Notifications = new() { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group" },
-                CommandBots = new() { TelegramEnabled = true, FeishuEnabled = true, QQBotPrefix = "/" } }.Save(Paths.ConfigurationFile);
-            Bot = new(Paths, Logger, Configuration, async (settings, session, connected, receive, token) =>
+            new WinPilotSettings
+            {
+                Port = 9123,
+                Notifications = new()
+                {
+                    QQBotAppId = "app",
+                    QQBotClientSecret = "secret",
+                    QQBotOpenId = "user",
+                    QQBotGroupOpenId = "group"
+                },
+                CommandBots = new()
+                {
+                    TelegramEnabled = true,
+                    FeishuEnabled = true,
+                    QQBotPrefix = "/"
+                }
+            }.Save(Paths.ConfigurationFile);
+            Bot = new(Paths, Logger, Configuration, async (
+                settings,
+                session,
+                connected,
+                receive,
+                token) =>
             {
                 Settings = settings;
                 Receive = receive;
@@ -489,16 +588,29 @@ public sealed class QQBotCommandBotTest
                 Interlocked.Increment(ref Attempts);
                 try
                 {
-                    if (Failure is not null) throw Failure;
+                    if (Failure is not null)
+                    {
+                        throw Failure;
+                    }
                     connected();
                     await Disconnect.Task.WaitAsync(token);
                 }
-                finally { Interlocked.Increment(ref Cleanups); }
-            }, async (settings, group, reportCode, token) =>
+                finally
+                {
+                    Interlocked.Increment(ref Cleanups);
+                }
+            }, async (
+                settings,
+                group,
+                reportCode,
+                token) =>
             {
                 using var registration = token.Register(() =>
                 {
-                    if (TemporaryCancellationFailure is { } failure) throw failure;
+                    if (TemporaryCancellationFailure is { } failure)
+                    {
+                        throw failure;
+                    }
                 });
                 Interlocked.Increment(ref TemporaryAttempts);
                 try
@@ -510,16 +622,21 @@ public sealed class QQBotCommandBotTest
                 finally
                 {
                     TemporaryStopped.TrySetResult();
-                    if (HoldTemporaryCleanup) await ReleaseTemporaryCleanup.Task;
+                    if (HoldTemporaryCleanup)
+                    {
+                        await ReleaseTemporaryCleanup.Task;
+                    }
                     Interlocked.Increment(ref TemporaryCleanups);
                 }
             });
         }
+
         public async Task Enable()
         {
             await Bot.SetEnabledAsync(true, CancellationToken.None);
             await WaitUntil(() => Bot.Status.State == "connected");
         }
+
         public async ValueTask DisposeAsync()
         {
             ReleaseTemporaryCleanup.TrySetResult();
@@ -532,30 +649,53 @@ public sealed class QQBotCommandBotTest
     private sealed class TestSocket : WebSocket
     {
         private readonly Channel<byte[]> incoming = Channel.CreateUnbounded<byte[]>();
+
         public Channel<JsonElement> Sent { get; } = Channel.CreateUnbounded<JsonElement>();
+
         public bool AutoAck;
         public bool Aborted;
+
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
         public override WebSocketState State => Aborted ? WebSocketState.Aborted : WebSocketState.Open;
         public override string? SubProtocol => null;
+
         public void Enqueue(object value) => incoming.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(value));
+
         public override void Abort() => Aborted = true;
-        public override void Dispose() { }
-        public override Task CloseAsync(WebSocketCloseStatus status, string? description, CancellationToken token) => Task.CompletedTask;
-        public override Task CloseOutputAsync(WebSocketCloseStatus status, string? description, CancellationToken token) => Task.CompletedTask;
-        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken token)
+
+        public override void Dispose()
+        {
+        }
+
+        public override Task CloseAsync(WebSocketCloseStatus status, string? description, CancellationToken token) =>
+            Task.CompletedTask;
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus status, string? description, CancellationToken token) =>
+            Task.CompletedTask;
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken token)
         {
             var bytes = await incoming.Reader.ReadAsync(token);
             bytes.AsSpan().CopyTo(buffer.AsSpan());
             return new(bytes.Length, WebSocketMessageType.Text, true);
         }
-        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType type, bool endOfMessage, CancellationToken token)
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType type,
+            bool endOfMessage,
+            CancellationToken token)
         {
             using var document = JsonDocument.Parse(Encoding.UTF8.GetString(buffer.AsSpan()));
             var root = document.RootElement.Clone();
             Sent.Writer.TryWrite(root);
-            if (AutoAck && root.GetProperty("op").GetInt32() == 1) Enqueue(new { op = 11 });
+            if (AutoAck && root.GetProperty("op").GetInt32() == 1)
+            {
+                Enqueue(new { op = 11 });
+            }
             return Task.CompletedTask;
         }
     }

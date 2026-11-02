@@ -48,7 +48,10 @@ public sealed class WindowsNotificationTest
             Assert.Equal("hero", (string?)image.Attribute("placement"));
             Assert.Equal(new Uri(Path.GetFullPath(path)).AbsoluteUri, (string?)image.Attribute("src"));
         }
-        finally { File.Delete(path); }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -71,13 +74,16 @@ public sealed class WindowsNotificationTest
     [InlineData("WinPilot", "WinPilot")]
     [InlineData("C:\\Tools\\WinPilot.exe", "C:/Tools/WinPilot.exe")]
     public void IdentityUsesExistingToolkitNormalization(string original, string expected)
-        => Assert.Equal(expected, WindowsNotificationIdentity.NormalizeAppId(original));
+        =>
+        Assert.Equal(expected, WindowsNotificationIdentity.NormalizeAppId(original));
 
     [Fact]
     public void LongIdentityUsesExistingToolkitHash()
     {
         var original = new string('中', 130);
-        Assert.Equal(Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(original))), WindowsNotificationIdentity.NormalizeAppId(original));
+        Assert.Equal(
+            Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(original))),
+            WindowsNotificationIdentity.NormalizeAppId(original));
         Assert.Equal(new string('x', 129), WindowsNotificationIdentity.NormalizeAppId(new string('x', 129)));
     }
 
@@ -192,7 +198,10 @@ public sealed class WindowsNotificationTest
             using var refreshed = Image.FromFile(path);
             Assert.Equal(ImageFormat.Png.Guid, refreshed.RawFormat.Guid);
         }
-        finally { Directory.Delete(directory, recursive: true); }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -205,6 +214,9 @@ public sealed class WindowsNotificationTest
             Assert.Null(WindowsNotificationIdentity.CacheProgramIcon(Path.Combine(directory, "missing.exe"), Path.Combine(directory, "Icon.png")));
             Assert.Null(WindowsNotificationIdentity.CacheProgramIcon(Environment.ProcessPath, directory));
         }
-        finally { Directory.Delete(directory, recursive: true); }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

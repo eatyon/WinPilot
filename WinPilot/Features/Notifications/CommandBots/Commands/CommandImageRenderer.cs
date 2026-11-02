@@ -1,8 +1,8 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
-using WinPilot.Features.Plugins;
 using WinPilot.Core.SystemStatus;
+using WinPilot.Features.Plugins;
 
 namespace WinPilot.Features.Notifications.CommandBots.Commands;
 
@@ -10,18 +10,26 @@ internal static class CommandImageRenderer
 {
     internal sealed record Row(string Name, string Description, bool IsHeading = false);
 
-    internal static byte[] RenderHelp(IReadOnlyList<CommandProcessor.CommandDefinition> commands, string prefix,
-        IReadOnlyList<RegisteredPluginCommand>? plugins = null, string title = "WinPilot 命令帮助")
+    internal static byte[] RenderHelp(
+        IReadOnlyList<CommandProcessor.CommandDefinition> commands,
+        string prefix,
+        IReadOnlyList<RegisteredPluginCommand>? plugins = null,
+        string title = "WinPilot 命令帮助")
     {
         var rows = new List<Row>();
-        if (commands.Count > 0 && plugins is { Count: > 0 }) rows.Add(new("WinPilot", "", true));
+        if (commands.Count > 0 && plugins is { Count: > 0 })
+        {
+            rows.Add(new("WinPilot", "", true));
+        }
         rows.AddRange(commands.Select(command => new Row(prefix + command.Usage, command.Description)));
         if (plugins is not null)
+        {
             foreach (var group in plugins.GroupBy(command => command.PluginId))
             {
                 rows.Add(new(group.First().PluginDisplayName, "", true));
                 rows.AddRange(group.Select(command => new Row(prefix + command.Definition.Usage, command.Definition.Description)));
             }
+        }
         return Render(title, rows);
     }
 
@@ -37,7 +45,10 @@ internal static class CommandImageRenderer
         const int rowHeight = 46;
         var lowerHeight = 76 + Math.Max(gpuRows.Length, diskRows.Length) * rowHeight;
         var height = lowerTop + lowerHeight + 76;
-        if (height > 8000) throw new InvalidOperationException("图片内容过多");
+        if (height > 8000)
+        {
+            throw new InvalidOperationException("图片内容过多");
+        }
         using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
         bitmap.SetResolution(96, 96);
         using var graphics = Graphics.FromImage(bitmap);
@@ -65,7 +76,11 @@ internal static class CommandImageRenderer
         using var leftAligned = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
         using var rightAligned = new StringFormat(leftAligned) { Alignment = StringAlignment.Far };
 
-        void DrawPanel(int x, int y, int panelHeight, string name)
+        void DrawPanel(
+            int x,
+            int y,
+            int panelHeight,
+            string name)
         {
             using var shape = Rounded(new Rectangle(x, y, panelWidth, panelHeight), 6);
             graphics.FillPath(panel, shape);
@@ -87,7 +102,9 @@ internal static class CommandImageRenderer
                 var row = devices[index];
                 var y = lowerTop + 66 + index * rowHeight;
                 if (row.Name == name)
+                {
                     graphics.DrawString(row.Description, deviceFont, muted, new RectangleF(x + 20, y, panelWidth - 40, 34), leftAligned);
+                }
                 else
                 {
                     graphics.DrawString(row.Name, deviceFont, text, new RectangleF(x + 20, y, 160, 34), leftAligned);
@@ -119,7 +136,10 @@ internal static class CommandImageRenderer
             (int)Math.Ceiling(measure.MeasureString(name, nameFont, 610, format).Height) + 14)).ToArray();
         var usageHeight = Math.Max(30, (int)Math.Ceiling(measure.MeasureString(usage, footerFont, 610, format).Height));
         var height = 220 + rowHeights.Sum(rowHeight => rowHeight + 4) + usageHeight;
-        if (height > 8000) throw new InvalidOperationException("图片内容过多");
+        if (height > 8000)
+        {
+            throw new InvalidOperationException("图片内容过多");
+        }
         using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
         bitmap.SetResolution(96, 96);
         using var graphics = Graphics.FromImage(bitmap);
@@ -161,7 +181,10 @@ internal static class CommandImageRenderer
         const int width = 760;
         var contentBottom = rows.Count == 0 ? 114 : 137 + (rows.Count - 1) * 88 + 80;
         var height = contentBottom + 48;
-        if (height > 8000) throw new InvalidOperationException("图片内容过多");
+        if (height > 8000)
+        {
+            throw new InvalidOperationException("图片内容过多");
+        }
         using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
         bitmap.SetResolution(96, 96);
         using var graphics = Graphics.FromImage(bitmap);
@@ -189,8 +212,16 @@ internal static class CommandImageRenderer
         {
             graphics.FillRectangle(row.IsHeading ? header : alternate, 55, y, 650, 80);
             using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
-            graphics.DrawString(row.Name, commandFont, row.IsHeading ? accent : text, new RectangleF(70, y + (row.IsHeading ? 25 : 8), 620, 30), format);
-            if (!row.IsHeading) graphics.DrawString(row.Description, regular, muted, new RectangleF(70, y + 43, 620, 28), format);
+            graphics.DrawString(
+                row.Name,
+                commandFont,
+                row.IsHeading ? accent : text,
+                new RectangleF(70, y + (row.IsHeading ? 25 : 8), 620, 30),
+                format);
+            if (!row.IsHeading)
+            {
+                graphics.DrawString(row.Description, regular, muted, new RectangleF(70, y + 43, 620, 28), format);
+            }
             y += 88;
         }
         using var stream = new MemoryStream();

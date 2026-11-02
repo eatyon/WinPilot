@@ -34,10 +34,15 @@ public sealed class AvailableCommandsTest
         var groups = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(2, groups.GetArrayLength());
         Assert.Equal("WinPilot", groups[0].GetProperty("name").GetString());
-        Assert.Equal(CommandProcessor.Definitions.Select(command => command.Usage),
+        Assert.Equal(
+            CommandProcessor.Definitions.Select(command => command.Usage),
             groups[0].GetProperty("commands").EnumerateArray().Select(command => command.GetProperty("usage").GetString()));
         Assert.Equal("Test Plugin", groups[1].GetProperty("name").GetString());
-        Assert.Equal(new[] { "插件状态", "插件任务 [名称]", "*" },
+        Assert.Equal(new[] {
+            "插件状态",
+            "插件任务 [名称]",
+            "*"
+},
             groups[1].GetProperty("commands").EnumerateArray().Select(command => command.GetProperty("usage").GetString()));
         Assert.Equal("处理未匹配的命令", groups[1].GetProperty("commands")[2].GetProperty("description").GetString());
         plugin.Dispose();

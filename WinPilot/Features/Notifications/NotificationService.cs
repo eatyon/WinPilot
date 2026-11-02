@@ -3,6 +3,9 @@ using WinPilot.Core.Notifications;
 
 namespace WinPilot.Features.Notifications;
 
+/// <summary>
+/// 按指定渠道和最新设置发送通知，按需创建渠道资源，并统一处理发送结果与脱敏日志。
+/// </summary>
 public sealed class NotificationService : INotificationService, IDisposable
 {
     private readonly PortableDataPaths paths;
@@ -16,10 +19,14 @@ public sealed class NotificationService : INotificationService, IDisposable
     private QQBotNotificationChannel? qqbot;
     private bool disposed;
 
-    private WebhookNotificationChannel Webhook => GetChannel(ref webhook, static client => new WebhookNotificationChannel(client));
-    private WorkWeixinNotificationChannel WorkWeixin => GetChannel(ref workWeixin, static client => new WorkWeixinNotificationChannel(client));
-    private FeishuNotificationChannel Feishu => GetChannel(ref feishu, static client => new FeishuNotificationChannel(client));
-    private OneBotNotificationChannel OneBot => GetChannel(ref oneBot, static client => new OneBotNotificationChannel(client));
+    private WebhookNotificationChannel Webhook =>
+        GetChannel(ref webhook, static client => new WebhookNotificationChannel(client));
+    private WorkWeixinNotificationChannel WorkWeixin =>
+        GetChannel(ref workWeixin, static client => new WorkWeixinNotificationChannel(client));
+    private FeishuNotificationChannel Feishu =>
+        GetChannel(ref feishu, static client => new FeishuNotificationChannel(client));
+    private OneBotNotificationChannel OneBot =>
+        GetChannel(ref oneBot, static client => new OneBotNotificationChannel(client));
     private QQBotNotificationChannel QQBot => GetChannel(ref qqbot, static client => new QQBotNotificationChannel(client));
 
     public NotificationService(PortableDataPaths paths, ILogger<NotificationService> logger)
@@ -37,20 +44,26 @@ public sealed class NotificationService : INotificationService, IDisposable
         var id = NotificationChannelCatalog.RequireChannel(channel);
         var settings = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
         var secrets = NotificationFailureDiagnostics.Secrets(settings);
-        var result = await SendChannel(id, () => id switch
-        {
-            NotificationChannelCatalog.Windows => WindowsNotificationChannel.SendAsync(message, cancellationToken),
-            NotificationChannelCatalog.Webhook => Webhook.SendAsync(settings, message, cancellationToken),
-            NotificationChannelCatalog.Telegram => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken),
-            NotificationChannelCatalog.WorkWeixin => WorkWeixin.SendAsync(settings, message, cancellationToken),
-            NotificationChannelCatalog.Feishu => Feishu.SendAsync(settings, message, cancellationToken),
-            NotificationChannelCatalog.OneBot => OneBot.SendAsync(settings, message, cancellationToken),
-            NotificationChannelCatalog.QQBot => QQBot.SendAsync(settings, message, cancellationToken),
-            _ => throw new InvalidOperationException("通知渠道无效")
-        }, cancellationToken, secrets);
+        var result = await SendChannel(
+            id,
+            () =>
+                id switch
+                {
+                    NotificationChannelCatalog.Windows => WindowsNotificationChannel.SendAsync(message, cancellationToken),
+                    NotificationChannelCatalog.Webhook => Webhook.SendAsync(settings, message, cancellationToken),
+                    NotificationChannelCatalog.Telegram => TelegramNotificationChannel.SendAsync(settings, message, cancellationToken),
+                    NotificationChannelCatalog.WorkWeixin => WorkWeixin.SendAsync(settings, message, cancellationToken),
+                    NotificationChannelCatalog.Feishu => Feishu.SendAsync(settings, message, cancellationToken),
+                    NotificationChannelCatalog.OneBot => OneBot.SendAsync(settings, message, cancellationToken),
+                    NotificationChannelCatalog.QQBot => QQBot.SendAsync(settings, message, cancellationToken),
+                    _ => throw new InvalidOperationException("通知渠道无效")
+                },
+            cancellationToken,
+            secrets);
         return [result];
     }
 
+    // 只有实际使用渠道时才创建实例；需要 HTTP 的渠道复用同一个客户端。
     private T GetChannel<T>(ref T? channel, Func<HttpClient, T> create) where T : class
     {
         lock (resourcesGate)
@@ -60,7 +73,10 @@ public sealed class NotificationService : INotificationService, IDisposable
         }
     }
 
-    internal async Task<NotificationChannelResult> SendChannel(string id, Func<Task> send, CancellationToken cancellationToken,
+    internal async Task<NotificationChannelResult> SendChannel(
+        string id,
+        Func<Task> send,
+        CancellationToken cancellationToken,
         IEnumerable<string>? secrets = null)
     {
         var name = NotificationChannelCatalog.GetDisplayName(id);
@@ -69,7 +85,11 @@ public sealed class NotificationService : INotificationService, IDisposable
             await send();
             return new(name, true);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        // 主动取消交回调用方；渠道超时等其他异常转换成失败结果。
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             var reason = exception switch
@@ -82,7 +102,11 @@ public sealed class NotificationService : INotificationService, IDisposable
                 InvalidOperationException => "配置不完整或渠道接口返回失败",
                 _ => exception.GetType().Name
             };
-            logger.LogError(NotificationFailureDiagnostics.Redact(exception, secrets), "通知渠道 {Channel} 发送失败：{Reason}", name, reason);
+            logger.LogError(
+                NotificationFailureDiagnostics.Redact(exception, secrets),
+                "通知渠道 {Channel} 发送失败：{Reason}",
+                name,
+                reason);
             return new(name, false, "发送失败");
         }
     }
@@ -94,7 +118,10 @@ public sealed class NotificationService : INotificationService, IDisposable
         FeishuNotificationChannel? feishuChannel;
         lock (resourcesGate)
         {
-            if (disposed) return;
+            if (disposed)
+            {
+                return;
+            }
             disposed = true;
             client = httpClient;
             qqbotChannel = qqbot;

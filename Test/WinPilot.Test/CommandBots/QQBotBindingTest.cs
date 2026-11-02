@@ -51,11 +51,23 @@ public sealed class QQBotBindingTest
     [InlineData("GROUP_AT_MESSAGE_CREATE", false, "发送1234", null)]
     [InlineData("FRIEND_ADD", false, "", "friend")]
     [InlineData("GROUP_ADD_ROBOT", true, "", "group")]
-    public void MatchesExistingBindingEventsAndCode(string type, bool group, string content, string? expected)
+    public void MatchesExistingBindingEventsAndCode(
+        string type,
+        bool group,
+        string content,
+        string? expected)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
         {
-            op = 0, t = type, d = new { content, openid = "friend", group_openid = "group", author = new { user_openid = "user" } }
+            op = 0,
+            t = type,
+            d = new
+            {
+                content,
+                openid = "friend",
+                group_openid = "group",
+                author = new { user_openid = "user" }
+            }
         }));
         Assert.Equal(expected, QQBotBindingService.FindBoundId(document.RootElement, group, "1234"));
     }
@@ -67,7 +79,12 @@ public sealed class QQBotBindingTest
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
         var result = await QQBotBindingService.BindSessionAsync(socket, "access", false, (code, _) =>
         {
-            socket.Enqueue(new { op = 0, t = "C2C_MESSAGE_CREATE", d = new { content = code, author = new { user_openid = "bound-user" } } });
+            socket.Enqueue(new
+            {
+                op = 0,
+                t = "C2C_MESSAGE_CREATE",
+                d = new { content = code, author = new { user_openid = "bound-user" } }
+            });
             return Task.CompletedTask;
         }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("bound-user", result);
@@ -85,7 +102,10 @@ public sealed class QQBotBindingTest
         using var cancellation = new CancellationTokenSource();
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var binding = QQBotBindingService.BindSessionAsync(socket, "access", false, (_, _) =>
-        { ready.SetResult(); return Task.CompletedTask; }, cancellation.Token);
+        {
+            ready.SetResult();
+            return Task.CompletedTask;
+        }, cancellation.Token);
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => binding.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -98,8 +118,11 @@ public sealed class QQBotBindingTest
     {
         using var socket = new TestSocket { FailHeartbeat = true };
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 1 } });
-        await Assert.ThrowsAsync<WebSocketException>(() => QQBotBindingService.BindSessionAsync(socket, "access", false,
-            (_, _) => Task.CompletedTask, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<WebSocketException>(() =>
+            QQBotBindingService
+                .BindSessionAsync(socket, "access", false,
+            (_, _) => Task.CompletedTask, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.True(socket.CloseCalled);
         Assert.Equal(1, socket.HeartbeatCount);
     }
@@ -109,9 +132,18 @@ public sealed class QQBotBindingTest
     {
         using var socket = new TestSocket { BlockClose = true };
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
-        socket.Enqueue(new { op = 0, t = "GROUP_ADD_ROBOT", d = new { group_openid = "bound-group" } });
-        Assert.Equal("bound-group", await QQBotBindingService.BindSessionAsync(socket, "access", true,
-            (_, _) => Task.CompletedTask, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        socket.Enqueue(new
+        {
+            op = 0,
+            t = "GROUP_ADD_ROBOT",
+            d = new { group_openid = "bound-group" }
+        });
+        Assert.Equal(
+            "bound-group",
+            await QQBotBindingService
+                .BindSessionAsync(socket, "access", true,
+            (_, _) => Task.CompletedTask, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.True(socket.Aborted);
     }
 
@@ -120,7 +152,8 @@ public sealed class QQBotBindingTest
     {
         using var socket = new TestSocket();
         socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
-        await Assert.ThrowsAsync<IOException>(() => QQBotBindingService.BindSessionAsync(socket, "access", false,
+        await Assert.ThrowsAsync<IOException>(() =>
+            QQBotBindingService.BindSessionAsync(socket, "access", false,
             (_, _) => throw new IOException("模拟网页断开"), CancellationToken.None));
         Assert.True(socket.CloseCalled);
         Assert.Empty(socket.Sent.Where(text => JsonDocument.Parse(text).RootElement.GetProperty("op").GetInt32() == 1));
@@ -132,6 +165,7 @@ public sealed class QQBotBindingTest
         private byte[]? pending;
         private int pendingOffset;
         private WebSocketState state = WebSocketState.Open;
+
         public ConcurrentQueue<string> Sent { get; } = new();
         public bool FailHeartbeat { get; init; }
         public bool BlockClose { get; init; }
@@ -144,18 +178,43 @@ public sealed class QQBotBindingTest
         public override string? SubProtocol => null;
 
         public void Enqueue(object value) => incoming.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(value));
+
         public void EnqueueRaw(byte[] value) => incoming.Writer.TryWrite(value);
-        public override void Abort() { Aborted = true; state = WebSocketState.Aborted; }
-        public override void Dispose() { state = WebSocketState.Closed; incoming.Writer.TryComplete(); }
-        public override async Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+
+        public override void Abort()
+        {
+            Aborted = true;
+            state = WebSocketState.Aborted;
+        }
+
+        public override void Dispose()
+        {
+            state = WebSocketState.Closed;
+            incoming.Writer.TryComplete();
+        }
+
+        public override async Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
         {
             CloseCalled = true;
-            if (BlockClose) await Task.Delay(Timeout.Infinite, cancellationToken);
+            if (BlockClose)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
             state = WebSocketState.Closed;
         }
-        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) =>
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken) =>
             CloseAsync(closeStatus, statusDescription, cancellationToken);
-        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             pending ??= await incoming.Reader.ReadAsync(cancellationToken);
@@ -163,17 +222,29 @@ public sealed class QQBotBindingTest
             pending.AsSpan(pendingOffset, count).CopyTo(buffer.AsSpan());
             pendingOffset += count;
             var complete = pendingOffset == pending.Length;
-            if (complete) { pending = null; pendingOffset = 0; }
+            if (complete)
+            {
+                pending = null;
+                pendingOffset = 0;
+            }
             return new(count, WebSocketMessageType.Text, complete);
         }
-        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
         {
             var text = Encoding.UTF8.GetString(buffer.AsSpan());
             using var payload = JsonDocument.Parse(text);
             if (payload.RootElement.GetProperty("op").GetInt32() == 1)
             {
                 HeartbeatCount++;
-                if (FailHeartbeat) throw new WebSocketException("模拟心跳失败");
+                if (FailHeartbeat)
+                {
+                    throw new WebSocketException("模拟心跳失败");
+                }
             }
             Sent.Enqueue(text);
             return Task.CompletedTask;

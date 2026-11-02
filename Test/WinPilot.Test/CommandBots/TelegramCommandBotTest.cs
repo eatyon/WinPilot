@@ -11,8 +11,8 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
-using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Features.Notifications;
+using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Features.Security;
 using WinPilot.Features.Terminal;
 using WinPilot.Web;
@@ -71,18 +71,31 @@ public sealed class TelegramCommandBotTest
         await app.StartAsync();
         var safeMode = app.Services.GetRequiredService<SafeModeService>();
         using var removedRouteClient = app.GetTestClient();
-        foreach (var channel in new[] { "telegram", "feishu", "qqbot", "onebot" })
-            Assert.Equal(HttpStatusCode.NotFound, (await removedRouteClient.PostAsync($"/api/settings/notifications/command-bots/{channel}/test-receive", null)).StatusCode);
+        foreach (var channel in new[] {
+            "telegram",
+            "feishu",
+            "qqbot",
+            "onebot"
+})
+        {
+            Assert.Equal(
+                HttpStatusCode.NotFound,
+                (await removedRouteClient.PostAsync($"/api/settings/notifications/command-bots/{channel}/test-receive", null)).StatusCode);
+        }
         safeMode.SetEnabled(true);
         using var client = app.GetTestClient();
         const string route = "/api/settings/notifications/command-bots/telegram";
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/notifications/command-bots/telegram/status")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await client.GetAsync("/api/notifications/command-bots/telegram/status")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync(route, new { enabled = false })).StatusCode);
         using var safeConfiguration = await client.GetAsync(route);
         using var safeJson = JsonDocument.Parse(await safeConfiguration.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.Forbidden, safeConfiguration.StatusCode);
         Assert.Equal("safe_mode_restricted", safeJson.RootElement.GetProperty("code").GetString());
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/notifications/command-bots/telegram/reconnect", null)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await client.PostAsync("/api/notifications/command-bots/telegram/reconnect", null)).StatusCode);
         var reception = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         await fixture.Updates.Writer.WriteAsync(new[] { Update(10, 123, "/帮助") });
         Assert.True((await reception.WaitAsync(TimeSpan.FromSeconds(5))) > 0);
@@ -99,7 +112,9 @@ public sealed class TelegramCommandBotTest
         await fixture.Updates.Writer.WriteAsync(new[] { Update(10, 999, "忽略其他会话"), Update(11, 123, "/帮助") });
         var received = await test.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(received > 0);
-        Assert.Equal("123", WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications!.TelegramChatId);
+        Assert.Equal(
+            "123",
+            WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications!.TelegramChatId);
         Assert.True(fixture.Bot.Status.Enabled);
         var duplicate = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         await fixture.Updates.Writer.WriteAsync(new[] { Update(11, 123, "重复消息"), Update(12, 123, "/帮助") });
@@ -134,11 +149,12 @@ public sealed class TelegramCommandBotTest
     public async Task InvalidStartupConfigurationLogsOneWarningWithoutStartingReceiver()
     {
         await using var fixture = await Fixture.CreateAsync();
-        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current => current with
-        {
-            Notifications = current.Notifications with { TelegramBotToken = "" },
-            CommandBots = current.CommandBots with { TelegramEnabled = true }
-        });
+        WinPilotSettings.Update(fixture.Paths.ConfigurationFile, current =>
+            current with
+            {
+                Notifications = current.Notifications with { TelegramBotToken = "" },
+                CommandBots = current.CommandBots with { TelegramEnabled = true }
+            });
         await fixture.Bot.StartAsync(CancellationToken.None);
         Assert.Equal("failed", fixture.Bot.Status.State);
         Assert.True(fixture.Bot.Status.Enabled);
@@ -159,7 +175,8 @@ public sealed class TelegramCommandBotTest
         Assert.DoesNotContain("123:mock", fixture.Bot.Status.Error!);
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with { TelegramBotToken = "456:new" }, CancellationToken.None);
         await fixture.WaitForState("failed");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile,
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile,
             settings => settings with { TelegramBotToken = "" }, CancellationToken.None));
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with { TelegramBotToken = "" }, CancellationToken.None);
@@ -239,7 +256,10 @@ public sealed class TelegramCommandBotTest
             await WaitUntil(() => restarted.Status.State == "connected");
             Assert.True(restarted.Status.Enabled);
         }
-        finally { await restarted.StopAsync(CancellationToken.None); }
+        finally
+        {
+            await restarted.StopAsync(CancellationToken.None);
+        }
     }
 
     [Theory]
@@ -247,10 +267,20 @@ public sealed class TelegramCommandBotTest
     [InlineData("123:mock", "", "", false)]
     [InlineData("123:mock", "not-id", "", false)]
     [InlineData("123:mock", "123", "invalid", true)]
-    public void MissingSharedConfigurationFailsValidation(string token, string chat, string proxy, bool proxyEnabled)
+    public void MissingSharedConfigurationFailsValidation(
+        string token,
+        string chat,
+        string proxy,
+        bool proxyEnabled)
     {
-        Assert.Throws<InvalidOperationException>(() => TelegramCommandBotService.Validate(new NotificationSettings
-        { TelegramBotToken = token, TelegramChatId = chat, TelegramProxyUrl = proxy, TelegramProxyEnabled = proxyEnabled }));
+        Assert.Throws<InvalidOperationException>(() =>
+            TelegramCommandBotService.Validate(new NotificationSettings
+            {
+                TelegramBotToken = token,
+                TelegramChatId = chat,
+                TelegramProxyUrl = proxy,
+                TelegramProxyEnabled = proxyEnabled
+            }));
     }
 
     [Theory]
@@ -262,35 +292,50 @@ public sealed class TelegramCommandBotTest
         Assert.Equal(expected, TelegramTransport.GetBotUrl(new NotificationSettings { TelegramBotToken = "123:mock", TelegramApiBaseUrl = api }));
     }
 
-    private static object Update(long id, long chat, string text, bool? isBot = null) => new
-    {
-        update_id = id, message = new
+    private static object Update(
+        long id,
+        long chat,
+        string text,
+        bool? isBot = null) =>
+        new
         {
-            chat = new { id = chat },
-            from = isBot is { } bot ? (object)new { first_name = "测试用户", is_bot = bot } : new { first_name = "测试用户" },
-            text
-        }
-    };
+            update_id = id,
+            message = new
+            {
+                chat = new { id = chat },
+                from = isBot is { } bot ? (object)new { first_name = "测试用户", is_bot = bot } : new { first_name = "测试用户" },
+                text
+            }
+        };
 
     private static async Task WaitUntil(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition()) await Task.Delay(20, timeout.Token);
+        while (!condition())
+        {
+            await Task.Delay(20, timeout.Token);
+        }
     }
 
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly WebApplication app;
         private readonly CommandBotConfiguration configuration = new();
+
         public CommandBotConfiguration Configuration => configuration;
+
         public int ActivePolls;
+
         public PortableDataPaths Paths { get; }
         public CommandBotTestObserver<TelegramCommandBotService> Logger { get; } = new();
         public TelegramCommandBotService Bot { get; }
         public Channel<object[]> Updates { get; } = Channel.CreateUnbounded<object[]>();
         public System.Collections.Concurrent.ConcurrentBag<string> Methods { get; } = [];
+
         public volatile int ErrorCode;
+
         public TaskCompletionSource SecondError { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private int errorRequests;
 
         private Fixture(WebApplication app, string directory)
@@ -311,26 +356,49 @@ public sealed class TelegramCommandBotTest
                 fixture.Methods.Add(method);
                 if (fixture.ErrorCode != 0)
                 {
-                    if (Interlocked.Increment(ref fixture.errorRequests) == 2) fixture.SecondError.TrySetResult();
+                    if (Interlocked.Increment(ref fixture.errorRequests) == 2)
+                    {
+                        fixture.SecondError.TrySetResult();
+                    }
                     return Results.StatusCode(fixture.ErrorCode);
                 }
-                if (method == "getMe") return Results.Json(new { ok = true, result = new { id = 1, username = "test_bot" } });
-                if (method == "getWebhookInfo") return Results.Json(new { ok = true, result = new { url = "" } });
+                if (method == "getMe")
+                {
+                    return Results.Json(new { ok = true, result = new { id = 1, username = "test_bot" } });
+                }
+                if (method == "getWebhookInfo")
+                {
+                    return Results.Json(new { ok = true, result = new { url = "" } });
+                }
                 using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
                 if (document.RootElement.GetProperty("offset").GetInt64() == -1)
+                {
                     return Results.Json(new { ok = true, result = new[] { Update(9, 123, "积压消息") } });
+                }
                 Interlocked.Increment(ref fixture.ActivePolls);
                 try
                 {
                     var batch = await fixture.Updates.Reader.ReadAsync(context.RequestAborted);
                     return Results.Json(new { ok = true, result = batch });
                 }
-                finally { Interlocked.Decrement(ref fixture.ActivePolls); }
+                finally
+                {
+                    Interlocked.Decrement(ref fixture.ActivePolls);
+                }
             });
             await app.StartAsync();
             var url = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-            new WinPilotSettings { Port = 9123, Notifications = new NotificationSettings
-            { TelegramBotToken = "123:mock", TelegramChatId = "123", TelegramApiBaseUrl = url }, CommandBots = new() { TelegramPrefix = "/" } }.Save(fixture.Paths.ConfigurationFile);
+            new WinPilotSettings
+            {
+                Port = 9123,
+                Notifications = new NotificationSettings
+                {
+                    TelegramBotToken = "123:mock",
+                    TelegramChatId = "123",
+                    TelegramApiBaseUrl = url
+                },
+                CommandBots = new() { TelegramPrefix = "/" }
+            }.Save(fixture.Paths.ConfigurationFile);
             return fixture;
         }
 

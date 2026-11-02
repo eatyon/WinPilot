@@ -38,8 +38,10 @@ public sealed class CommandHelpReplyTest
     public async Task FailedImageFallsBackToOnlyCurrentPageWithGroupAndOrderPreserved()
     {
         var plugins = Plugins(36);
-        var expectedCommands = CommandProcessor.Definitions.Select(command => "/" + command.Usage)
-            .Concat(plugins.Select(command => "/" + command.Definition.Usage)).ToArray();
+        var expectedCommands = CommandProcessor.Definitions
+            .Select(command => "/" + command.Usage)
+            .Concat(plugins.Select(command => "/" + command.Definition.Usage))
+            .ToArray();
         var expectedPages = (expectedCommands.Length + CommandListReply.PageSize - 1) / CommandListReply.PageSize;
         var texts = new List<string>();
         var sequences = new List<int>();
@@ -55,7 +57,9 @@ public sealed class CommandHelpReplyTest
         {
             Assert.Contains($"（{index + 1}/{expectedPages}）", texts[index]);
             if (texts[index].Split('\n').Any(line => line.StartsWith("/插件", StringComparison.Ordinal)))
+            {
                 Assert.Contains("插件甲\n", texts[index]);
+            }
             Assert.InRange(texts[index].Split('\n').Count(line => line.StartsWith('/')), 1, CommandListReply.PageSize);
         }
         Assert.Contains("WinPilot\n", texts[0]);
@@ -64,7 +68,9 @@ public sealed class CommandHelpReplyTest
             .Select(line => line.Split(" — ", 2)[0]);
         Assert.Equal(expectedCommands, actualCommands);
         foreach (var command in plugins)
+        {
             Assert.Equal(1, all.Split('\n').Count(line => line.StartsWith($"/{command.Definition.Name} — ")));
+        }
         Assert.True(all.IndexOf("/插件15 — ", StringComparison.Ordinal) < all.IndexOf("/插件16 — ", StringComparison.Ordinal));
     }
 
@@ -88,7 +94,10 @@ public sealed class CommandHelpReplyTest
     {
         var registry = new PluginCommandRegistry(CommandProcessor.IsSupportedCommand);
         using var scope = registry.CreateScope("plugin", "插件甲");
-        foreach (var command in Plugins(36)) scope.Register(command.Definition, (_, _) => Task.CompletedTask);
+        foreach (var command in Plugins(36))
+        {
+            scope.Register(command.Definition, (_, _) => Task.CompletedTask);
+        }
         using var processor = new CommandProcessor("Test", new(), NullLogger.Instance, pluginCommands: registry);
         var replies = 0;
         await processor.ProcessAsync(new("origin", "sender", "帮助")
@@ -101,10 +110,15 @@ public sealed class CommandHelpReplyTest
                 return Task.CompletedTask;
             }
         }, "", CancellationToken.None);
-        Assert.Equal((CommandProcessor.Definitions.Count + 36 + CommandListReply.PageSize - 1)
-            / CommandListReply.PageSize, replies);
+        Assert.Equal(
+            (CommandProcessor.Definitions.Count + 36 + CommandListReply.PageSize - 1)
+            / CommandListReply.PageSize,
+            replies);
     }
 
-    private static RegisteredPluginCommand[] Plugins(int count) => Enumerable.Range(1, count)
-        .Select(index => new RegisteredPluginCommand("plugin", "插件甲", new PluginCommandDefinition($"插件{index}", "说明"))).ToArray();
+    private static RegisteredPluginCommand[] Plugins(int count) =>
+        Enumerable
+            .Range(1, count)
+            .Select(index => new RegisteredPluginCommand("plugin", "插件甲", new PluginCommandDefinition($"插件{index}", "说明")))
+            .ToArray();
 }

@@ -11,14 +11,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WinPilot.Core;
 using WinPilot.Core.Notifications;
+using WinPilot.Features.Logs;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
 using WinPilot.Features.Notifications.CommandBots.Commands;
-using WinPilot.Features.Logs;
-using WinPilot.Infrastructure;
 using WinPilot.Features.Plugins;
 using WinPilot.Features.Security;
 using WinPilot.Features.Terminal;
+using WinPilot.Infrastructure;
 using WinPilot.Web;
 
 namespace WinPilot.Test;
@@ -36,15 +36,27 @@ public sealed class NotificationDiagnosticsTest
         Assert.Contains("HTTP: 403", text);
         Assert.Contains("NativeErrorCode: 5", text);
         Assert.Contains("HResult:", text);
-        foreach (var value in new[] { "https://", "wss://", "plain-secret", "secret/value", "secret%2Fvalue", "header-value", "field-value" })
+        foreach (var value in new[] {
+            "https://",
+            "wss://",
+            "plain-secret",
+            "secret/value",
+            "secret%2Fvalue",
+            "header-value",
+            "field-value"
+})
+        {
             Assert.DoesNotContain(value, text);
+        }
         Assert.Contains("[URL]", text);
         Assert.Contains("[REDACTED]", text);
     }
 
-    private static void ThrowDiagnosticFailure() => throw new HttpRequestException(
-        "https://user:password@example.test/bot/token?q=private plain-secret secret%2Fvalue Authorization=header-value",
-        new Win32Exception(5, "wss://private.test/?token=private Bearer header-value client_secret=field-value"), HttpStatusCode.Forbidden);
+    private static void ThrowDiagnosticFailure() =>
+        throw new HttpRequestException(
+            "https://user:password@example.test/bot/token?q=private plain-secret secret%2Fvalue Authorization=header-value",
+            new Win32Exception(5, "wss://private.test/?token=private Bearer header-value client_secret=field-value"),
+            HttpStatusCode.Forbidden);
 
     [Fact]
     public void AggregateDiagnosticsIncludeEveryInnerFailure()
@@ -69,8 +81,11 @@ public sealed class NotificationDiagnosticsTest
     [Fact]
     public void ConfiguredUrlCredentialsAreMaskedEvenOutsideTheUrl()
     {
-        var settings = new NotificationSettings { WorkWeixinWebhookUrl = "https://example.test/?key=query-secret",
-            TelegramProxyUrl = "http://proxy-user:proxy-secret@localhost:7890" };
+        var settings = new NotificationSettings
+        {
+            WorkWeixinWebhookUrl = "https://example.test/?key=query-secret",
+            TelegramProxyUrl = "http://proxy-user:proxy-secret@localhost:7890"
+        };
         var text = NotificationFailureDiagnostics.Format(new IOException("query-secret proxy-secret"), NotificationFailureDiagnostics.Secrets(settings));
         Assert.DoesNotContain("query-secret", text);
         Assert.DoesNotContain("proxy-secret", text);
@@ -95,7 +110,11 @@ public sealed class NotificationDiagnosticsTest
         using var scope = registry.CreateScope("plugin", "插件");
         scope.Register(new("查询", "说明"), (_, _) => throw new IOException("command-token websocket-password"));
         using var processor = new CommandProcessor("OneBot", new() { OneBotToken = "notification-token" }, logger, pluginCommands: registry,
-            botSettings: new() { OneBotToken = "command-token", OneBotWebSocketUrl = "ws://user:websocket-password@localhost:6700" });
+            botSettings: new()
+            {
+                OneBotToken = "command-token",
+                OneBotWebSocketUrl = "ws://user:websocket-password@localhost:6700"
+            });
         await processor.ProcessAsync(new("origin", "sender", "查询"), "", CancellationToken.None);
         var entry = Assert.Single(logger.Entries.Where(entry => entry.Level == LogLevel.Warning));
         Assert.DoesNotContain("command-token", entry.Message);
@@ -110,8 +129,11 @@ public sealed class NotificationDiagnosticsTest
         try
         {
             using var service = new NotificationService(PortableDataPaths.Create(directory), logger);
-            var result = await service.SendChannel("qqbot", () => throw new IOException("plain-secret", new Win32Exception(5)),
-                CancellationToken.None, ["plain-secret"]);
+            var result = await service.SendChannel(
+                "qqbot",
+                () => throw new IOException("plain-secret", new Win32Exception(5)),
+                CancellationToken.None,
+                ["plain-secret"]);
             Assert.False(result.Succeeded);
             Assert.Equal("发送失败", result.Error);
             var entry = Assert.Single(logger.Entries);
@@ -126,7 +148,13 @@ public sealed class NotificationDiagnosticsTest
                 () => Task.FromCanceled(cancellation.Token), cancellation.Token));
             Assert.Single(logger.Entries);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -152,7 +180,13 @@ public sealed class NotificationDiagnosticsTest
             Assert.NotSame(cause, snapshot);
             Assert.Null(snapshot.InnerException);
         }
-        finally { if (Directory.Exists(paths.ApplicationDirectory)) Directory.Delete(paths.ApplicationDirectory, true); }
+        finally
+        {
+            if (Directory.Exists(paths.ApplicationDirectory))
+            {
+                Directory.Delete(paths.ApplicationDirectory, true);
+            }
+        }
     }
 
     [Theory]
@@ -164,7 +198,9 @@ public sealed class NotificationDiagnosticsTest
         var processorLogger = new CaptureLogger<CommandProcessor>();
         var registry = new PluginCommandRegistry(CommandProcessor.IsSupportedCommand, registryLogger);
         using var scope = registry.CreateScope("plugin", "插件");
-        scope.Register(new(name, "说明"), (_, _) => throw new IOException("plain-secret", new JsonException("inner failure")));
+        scope.Register(
+            new(name, "说明"),
+            (_, _) => throw new IOException("plain-secret", new JsonException("inner failure")));
         using var processor = new CommandProcessor("Test", new() { QQBotClientSecret = "plain-secret" }, processorLogger, pluginCommands: registry);
         await processor.ProcessAsync(new("origin", "sender", "查询"), "", CancellationToken.None);
         var entry = Assert.Single(registryLogger.Entries);
@@ -173,7 +209,9 @@ public sealed class NotificationDiagnosticsTest
         Assert.Null(entry.Exception.InnerException);
         Assert.Contains("System.Text.Json.JsonException: inner failure", entry.Message);
         Assert.DoesNotContain("plain-secret", entry.Message);
-        Assert.DoesNotContain(processorLogger.Entries, item => item.Message.Contains("System.IO.IOException", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            processorLogger.Entries,
+            item => item.Message.Contains("System.IO.IOException", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -189,19 +227,55 @@ public sealed class NotificationDiagnosticsTest
         var attempts = 0;
         Task Fail()
         {
-            if (++attempts == 2) attemptedAgain.TrySetResult();
+            if (++attempts == 2)
+            {
+                attemptedAgain.TrySetResult();
+            }
             throw new IOException("plain-secret https://private.test/", new WebSocketException("connection failure"));
         }
         CommandBotReceiver receiver = channel switch
         {
-            "qqbot" => new QQBotCommandBotReceiver(new LoggerAdapter<QQBotCommandBotService>(logger), (_, _, _, _, _) => Fail(), _ => { }, () => state, value => state = value, _ => { }),
-            "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (_, _, _, _) => Fail(), () => state, value => state = value, _ => { }),
-            _ => new FeishuCommandBotReceiver(new LoggerAdapter<FeishuCommandBotService>(logger), (_, _, _, _, _, _) => Fail(), () => state, value => state = value, _ => { })
+            "qqbot" => new QQBotCommandBotReceiver(new LoggerAdapter<QQBotCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _,
+                _) => Fail(), _ =>
+            {
+            }, () => state, value => state = value, _ =>
+            {
+            }),
+            "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _) => Fail(), () => state, value => state = value, _ =>
+            {
+            }),
+            _ => new FeishuCommandBotReceiver(new LoggerAdapter<FeishuCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _,
+                _,
+                _) => Fail(), () => state, value => state = value, _ =>
+            {
+            })
         };
-        var running = receiver.RunAsync(new() { Notifications = new() { QQBotClientSecret = "plain-secret", FeishuAppSecret = "plain-secret" },
-            CommandBots = new() { OneBotToken = "plain-secret" } }, cancellation.Token);
-        try { await attemptedAgain.Task.WaitAsync(TimeSpan.FromSeconds(8)); }
-        finally { cancellation.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(3)); }
+        var running = receiver.RunAsync(new()
+        {
+            Notifications = new() { QQBotClientSecret = "plain-secret", FeishuAppSecret = "plain-secret" },
+            CommandBots = new() { OneBotToken = "plain-secret" }
+        }, cancellation.Token);
+        try
+        {
+            await attemptedAgain.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await running.WaitAsync(TimeSpan.FromSeconds(3));
+        }
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Warning, entry.Level);
         Assert.NotNull(entry.Exception);
@@ -222,9 +296,32 @@ public sealed class NotificationDiagnosticsTest
         var state = new CommandBotStatus(true, "connecting");
         CommandBotReceiver receiver = channel switch
         {
-            "qqbot" => new QQBotCommandBotReceiver(new LoggerAdapter<QQBotCommandBotService>(logger), (_, _, _, _, _) => throw new QQBotConnectionException("永久失败", true), _ => { }, () => state, value => state = value, _ => { }),
-            "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (_, _, _, _) => throw new OneBotConnectionException("永久失败", true), () => state, value => state = value, _ => { }),
-            _ => new FeishuCommandBotReceiver(new LoggerAdapter<FeishuCommandBotService>(logger), (_, _, _, _, _, _) => throw new FeishuConnectionException("永久失败", true), () => state, value => state = value, _ => { })
+            "qqbot" => new QQBotCommandBotReceiver(new LoggerAdapter<QQBotCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _,
+                _) => throw new QQBotConnectionException("永久失败", true), _ =>
+            {
+            }, () => state, value => state = value, _ =>
+            {
+            }),
+            "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _) => throw new OneBotConnectionException("永久失败", true), () => state, value => state = value, _ =>
+            {
+            }),
+            _ => new FeishuCommandBotReceiver(new LoggerAdapter<FeishuCommandBotService>(logger), (
+                _,
+                _,
+                _,
+                _,
+                _,
+                _) => throw new FeishuConnectionException("永久失败", true), () => state, value => state = value, _ =>
+            {
+            })
         };
         await receiver.RunAsync(new(), CancellationToken.None);
         Assert.Equal("failed", state.State);
@@ -237,11 +334,19 @@ public sealed class NotificationDiagnosticsTest
     {
         var logger = new CaptureLogger<FeishuCommandBotService>();
         var state = new CommandBotStatus(true, "connecting");
-        var receiver = new FeishuCommandBotReceiver(logger, (_, _, _, _, configure, _) =>
+        var receiver = new FeishuCommandBotReceiver(logger, (
+            _,
+            _,
+            _,
+            _,
+            configure,
+            _) =>
         {
             configure(new() { ReconnectCount = 0 });
             throw new IOException("terminal cause");
-        }, () => state, value => state = value, _ => { });
+        }, () => state, value => state = value, _ =>
+        {
+        });
         await receiver.RunAsync(new(), CancellationToken.None);
         Assert.Equal("failed", state.State);
         var entry = Assert.Single(logger.Entries);
@@ -291,8 +396,14 @@ public sealed class NotificationDiagnosticsTest
         fixture.App.Use(async (context, next) =>
         {
             context.RequestAborted = new CancellationToken(true);
-            try { await next(context); }
-            catch (OperationCanceledException) { propagated = true; }
+            try
+            {
+                await next(context);
+            }
+            catch (OperationCanceledException)
+            {
+                propagated = true;
+            }
         });
         await fixture.App.StartAsync();
         using var client = fixture.App.GetTestClient();
@@ -312,21 +423,29 @@ public sealed class NotificationDiagnosticsTest
         using var client = fixture.App.GetTestClient();
         using var response = await client.PostAsync("/api/notifications/qqbot/bind-user", null);
         Assert.Empty(await response.Content.ReadAsStringAsync());
-        Assert.DoesNotContain(fixture.Logger.Entries, entry => entry.Message.Contains("QQBot 获取 OpenID 失败", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            fixture.Logger.Entries,
+            entry => entry.Message.Contains("QQBot 获取 OpenID 失败", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task BindingTimeoutOwnershipDoesNotMisclassifyCancellation()
     {
         var timedOut = await Assert.ThrowsAsync<QQBotBindingTimeoutException>(() => QQBotBindingService.WithTimeoutAsync(
-            async token => { await Task.Delay(Timeout.Infinite, token); return "never"; }, CancellationToken.None, TimeSpan.Zero));
+            async token =>
+            {
+                await Task.Delay(Timeout.Infinite, token);
+                return "never";
+            }, CancellationToken.None, TimeSpan.Zero));
         Assert.IsAssignableFrom<OperationCanceledException>(timedOut.InnerException);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => QQBotBindingService.WithTimeoutAsync(
             token => Task.FromCanceled<string>(token), cancellation.Token, TimeSpan.Zero));
         var unrelated = new OperationCanceledException("not a binding timeout");
-        Assert.Same(unrelated, await Assert.ThrowsAsync<OperationCanceledException>(() => QQBotBindingService.WithTimeoutAsync(
+        Assert.Same(
+            unrelated,
+            await Assert.ThrowsAsync<OperationCanceledException>(() => QQBotBindingService.WithTimeoutAsync(
             _ => throw unrelated, CancellationToken.None, Timeout.InfiniteTimeSpan)));
     }
 
@@ -401,16 +520,32 @@ public sealed class NotificationDiagnosticsTest
         internal PortableDataPaths Paths { get; } = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "WinPilot.Binding.Diagnostics.Test", Guid.NewGuid().ToString("N")));
         internal CaptureLogger<object> Logger { get; } = new();
         internal WebApplication App { get; }
+
         private readonly CommandBotConfiguration configuration = new();
         private readonly QQBotCommandBotService bot;
+
         internal QQBotCommandBotService Bot => bot;
+
         internal BindingFixture(string kind)
         {
             new WinPilotSettings { Notifications = new() { QQBotAppId = "app", QQBotClientSecret = "plain-secret" } }.Save(Paths.ConfigurationFile);
-            bot = new(Paths, new LoggerAdapter<QQBotCommandBotService>(Logger), configuration, (_, _, _, _, _) => Task.CompletedTask,
-                (_, _, _, token) => kind switch
+            bot = new(Paths, new LoggerAdapter<QQBotCommandBotService>(Logger), configuration, (
+                _,
+                _,
+                _,
+                _,
+                _) => Task.CompletedTask,
+                (
+                    _,
+                    _,
+                    _,
+                    token) => kind switch
                 {
-                    "timeout" => QQBotBindingService.WithTimeoutAsync(async timeout => { await Task.Delay(Timeout.Infinite, timeout); return "never"; }, token, TimeSpan.Zero),
+                    "timeout" => QQBotBindingService.WithTimeoutAsync(async timeout =>
+                    {
+                        await Task.Delay(Timeout.Infinite, timeout);
+                        return "never";
+                    }, token, TimeSpan.Zero),
                     "http-timeout" => throw new HttpRequestException("plain-secret", new TimeoutException("HTTP timeout")),
                     "network" => throw new HttpRequestException("https://private.test/ plain-secret"),
                     "gateway" => throw new WebSocketException("plain-secret"),
@@ -434,44 +569,79 @@ public sealed class NotificationDiagnosticsTest
             App = builder.Build();
             App.MapNotificationEndpoints(Paths.ConfigurationFile, new EmptyNotifications());
         }
+
         public async ValueTask DisposeAsync()
         {
             await App.DisposeAsync();
             bot.Dispose();
             configuration.Dispose();
             var directory = Paths.ApplicationDirectory;
-            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
         }
     }
 
     private sealed class EmptyNotifications : INotificationService
     {
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
+            =>
+            Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
     }
+
     private sealed class FailingHttpHandler(Exception exception) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromException<HttpResponseMessage>(exception);
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
+
     private sealed class CaptureLogger<T> : ILogger<T>
     {
         internal ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Enqueue((level, formatter(state, exception) + (exception is null ? "" : "\n" + exception), exception));
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            =>
+            Entries.Enqueue((level, formatter(state, exception) + (exception is null ? "" : "\n" + exception), exception));
     }
+
     private sealed class LoggerAdapter<T>(ILogger logger) : ILogger<T>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => logger.BeginScope(state);
+
         public bool IsEnabled(LogLevel level) => logger.IsEnabled(level);
-        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => logger.Log(level, eventId, state, exception, formatter);
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            =>
+            logger.Log(level, eventId, state, exception, formatter);
     }
+
     private sealed class LoggerProvider(ILogger logger) : ILoggerProvider
     {
         public ILogger CreateLogger(string categoryName) => logger;
-        public void Dispose() { }
+
+        public void Dispose()
+        {
+        }
     }
 }

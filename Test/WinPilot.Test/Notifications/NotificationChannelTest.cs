@@ -33,7 +33,11 @@ public sealed class NotificationChannelTest
     [InlineData("qqbot", "group", "text", "QQBot 未配置群聊发送对象")]
     [InlineData("onebot", "auto", "text", null)]
     [InlineData("qqbot", "auto", "markdown", null)]
-    public async Task SaveEndpointPreservesValueAndRecipientValidation(string channel, string target, string format, string? error)
+    public async Task SaveEndpointPreservesValueAndRecipientValidation(
+        string channel,
+        string target,
+        string format,
+        string? error)
     {
         var root = Path.Combine(Path.GetTempPath(), "WinPilot.Notification.Endpoint.Test", Guid.NewGuid().ToString("N"));
         try
@@ -52,7 +56,9 @@ public sealed class NotificationChannelTest
             {
                 Content = JsonContent.Create(new NotificationSettings
                 {
-                    OneBotSendTarget = target, QQBotSendTarget = target, QQBotMessageFormat = format
+                    OneBotSendTarget = target,
+                    QQBotSendTarget = target,
+                    QQBotMessageFormat = format
                 })
             };
             using var response = await client.SendAsync(request);
@@ -67,10 +73,19 @@ public sealed class NotificationChannelTest
             {
                 var saved = WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).Notifications;
                 Assert.Equal(target, channel == "onebot" ? saved.OneBotSendTarget : saved.QQBotSendTarget);
-                if (channel == "qqbot") Assert.Equal(format, saved.QQBotMessageFormat);
+                if (channel == "qqbot")
+                {
+                    Assert.Equal(format, saved.QQBotMessageFormat);
+                }
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [Theory]
@@ -98,7 +113,10 @@ public sealed class NotificationChannelTest
             Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
             Assert.Equal(error, json.RootElement.GetProperty("errors").GetProperty("channel")[0].GetString());
         }
-        else Assert.Equal(error, json.RootElement.GetProperty("message").GetString());
+        else
+        {
+            Assert.Equal(error, json.RootElement.GetProperty("message").GetString());
+        }
         Assert.Equal(0, notifications.Calls);
     }
 
@@ -192,8 +210,16 @@ public sealed class NotificationChannelTest
             {
                 var handling = next(context);
                 entered.TrySetResult();
-                try { await handling; completed.TrySetResult(null); }
-                catch (Exception exception) { completed.TrySetResult(exception); throw; }
+                try
+                {
+                    await handling;
+                    completed.TrySetResult(null);
+                }
+                catch (Exception exception)
+                {
+                    completed.TrySetResult(exception);
+                    throw;
+                }
             });
             app.MapNotificationEndpoints(paths.ConfigurationFile, new EndpointNotifications());
             await app.StartAsync();
@@ -215,9 +241,19 @@ public sealed class NotificationChannelTest
                 Assert.IsAssignableFrom<OperationCanceledException>(await completed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
                 Assert.Equal(original, File.ReadAllText(paths.ConfigurationFile));
             }
-            finally { cancellation.Cancel(); configuration.Gate.Release(); }
+            finally
+            {
+                cancellation.Cancel();
+                configuration.Gate.Release();
+            }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [Theory]
@@ -231,14 +267,24 @@ public sealed class NotificationChannelTest
         try
         {
             var paths = PortableDataPaths.Create(root);
-            WinPilotSettings.Update(paths.ConfigurationFile, current => current with
-            {
-                Notifications = current.Notifications with { QQBotAppId = "app", QQBotClientSecret = "secret" }
-            });
+            WinPilotSettings.Update(paths.ConfigurationFile, current =>
+                current with
+                {
+                    Notifications = current.Notifications with { QQBotAppId = "app", QQBotClientSecret = "secret" }
+                });
             using var configuration = new CommandBotConfiguration();
             await using var bot = new QQBotCommandBotService(paths, NullLogger<QQBotCommandBotService>.Instance, configuration,
-                (_, _, _, _, _) => throw new InvalidOperationException("不应建立真实连接"),
-                async (_, receivedGroup, report, token) =>
+                (
+                    _,
+                    _,
+                    _,
+                    _,
+                    _) => throw new InvalidOperationException("不应建立真实连接"),
+                async (
+                    _,
+                    receivedGroup,
+                    report,
+                    token) =>
                 {
                     Assert.Equal(group, receivedGroup);
                     await report("test-code", token);
@@ -261,10 +307,19 @@ public sealed class NotificationChannelTest
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
             Assert.True(response.Headers.CacheControl?.NoCache);
-            Assert.Equal(new[] { "data: {\"type\":\"code\",\"code\":\"test-code\"}", "data: {\"type\":\"success\",\"openId\":\"test-openid\"}" },
+            Assert.Equal(new[] {
+                "data: {\"type\":\"code\",\"code\":\"test-code\"}",
+                "data: {\"type\":\"success\",\"openId\":\"test-openid\"}"
+},
                 (await response.Content.ReadAsStringAsync()).Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     private sealed class EndpointNotifications : INotificationService
@@ -273,7 +328,11 @@ public sealed class NotificationChannelTest
         public int Calls { get; private set; }
         public string? Channel { get; private set; }
         public NotificationMessage? Message { get; private set; }
-        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+
+        public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(
+            NotificationMessage message,
+            string? channel,
+            CancellationToken cancellationToken = default)
         {
             Calls++;
             Channel = channel;
@@ -298,7 +357,8 @@ public sealed class NotificationChannelTest
         response.EnsureSuccessStatusCode();
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var options = json.RootElement.EnumerateArray().ToArray();
-        Assert.Equal(NotificationChannelCatalog.All.Select(channel => (channel.Id, channel.DisplayName)),
+        Assert.Equal(
+            NotificationChannelCatalog.All.Select(channel => (channel.Id, channel.DisplayName)),
             options.Select(option => (option.GetProperty("value").GetString()!, option.GetProperty("label").GetString()!)));
         Assert.False(File.Exists(paths.ConfigurationFile));
     }
@@ -333,15 +393,27 @@ public sealed class NotificationChannelTest
     [InlineData("auto", "user", "group", "private,group")]
     [InlineData("private", "user", "group", "private")]
     [InlineData("group", "user", "group", "group")]
-    public void SendTargetsSelectOnlyConfiguredAndAllowedTargets(string mode, string user, string group, string expected)
+    public void SendTargetsSelectOnlyConfiguredAndAllowedTargets(
+        string mode,
+        string user,
+        string group,
+        string expected)
     {
         var settings = new NotificationSettings
         {
-            OneBotSendTarget = mode, OneBotUserId = user, OneBotGroupId = group,
-            QQBotSendTarget = mode, QQBotOpenId = user, QQBotGroupOpenId = group
+            OneBotSendTarget = mode,
+            OneBotUserId = user,
+            OneBotGroupId = group,
+            QQBotSendTarget = mode,
+            QQBotOpenId = user,
+            QQBotGroupOpenId = group
         };
-        Assert.Equal(expected, string.Join(",", OneBotNotificationChannel.SelectTargets(settings).Select(target => target.Type)));
-        Assert.Equal(expected, string.Join(",", QQBotNotificationChannel.SelectTargets(settings).Select(target => target.Type)));
+        Assert.Equal(
+            expected,
+            string.Join(",", OneBotNotificationChannel.SelectTargets(settings).Select(target => target.Type)));
+        Assert.Equal(
+            expected,
+            string.Join(",", QQBotNotificationChannel.SelectTargets(settings).Select(target => target.Type)));
     }
 
     [Theory]
@@ -353,8 +425,12 @@ public sealed class NotificationChannelTest
     {
         var settings = new NotificationSettings
         {
-            OneBotSendTarget = mode, OneBotUserId = user, OneBotGroupId = group,
-            QQBotSendTarget = mode, QQBotOpenId = user, QQBotGroupOpenId = group
+            OneBotSendTarget = mode,
+            OneBotUserId = user,
+            OneBotGroupId = group,
+            QQBotSendTarget = mode,
+            QQBotOpenId = user,
+            QQBotGroupOpenId = group
         };
         Assert.Throws<InvalidOperationException>(() => OneBotNotificationChannel.SelectTargets(settings));
         Assert.Throws<InvalidOperationException>(() => QQBotNotificationChannel.SelectTargets(settings));
@@ -365,17 +441,26 @@ public sealed class NotificationChannelTest
     [InlineData("group")]
     public async Task SelectedTargetIsUsedByBothChannels(string mode)
     {
-        using var handler = new RecordingHandler(request => request.Uri.Host == "bots.qq.com"
-            ? "{\"access_token\":\"token\",\"expires_in\":3600}" : "{\"status\":\"ok\"}");
+        using var handler = new RecordingHandler(request =>
+            request.Uri.Host == "bots.qq.com"
+                ? "{\"access_token\":\"token\",\"expires_in\":3600}"
+                : "{\"status\":\"ok\"}");
         using var client = new HttpClient(handler);
         await new OneBotNotificationChannel(client).SendAsync(new()
         {
-            OneBotEndpoint = "https://onebot.test", OneBotUserId = "user", OneBotGroupId = "group", OneBotSendTarget = mode
+            OneBotEndpoint = "https://onebot.test",
+            OneBotUserId = "user",
+            OneBotGroupId = "group",
+            OneBotSendTarget = mode
         }, new("标题\n正文"), CancellationToken.None);
         using var qqbot = new QQBotNotificationChannel(client);
         await qqbot.SendAsync(new()
         {
-            QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group", QQBotSendTarget = mode
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user",
+            QQBotGroupOpenId = "group",
+            QQBotSendTarget = mode
         }, new("标题\n正文"), CancellationToken.None);
         var requests = handler.Requests.ToArray();
         var onebot = Assert.Single(requests.Where(request => request.Uri.Host == "onebot.test"));
@@ -388,7 +473,13 @@ public sealed class NotificationChannelTest
     [Fact]
     public void QQBotJsonFieldsFollowApiAndStorageNaming()
     {
-        var settings = new NotificationSettings { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group" };
+        var settings = new NotificationSettings
+        {
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user",
+            QQBotGroupOpenId = "group"
+        };
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(settings, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         Assert.False(json.RootElement.TryGetProperty("qqBotEnabled", out _));
         Assert.Equal("app", json.RootElement.GetProperty("qqBotAppId").GetString());
@@ -423,7 +514,10 @@ public sealed class NotificationChannelTest
         using var channel = new QQBotNotificationChannel(client);
         var settings = new NotificationSettings
         {
-            QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotMessageFormat = format
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user",
+            QQBotMessageFormat = format
         };
         await channel.SendAsync(settings, new("标题\n**正文**"), CancellationToken.None);
         await channel.ReplyAsync(settings, new("group", "sender", "帮助") { ConversationType = "group", MessageId = "source" },
@@ -435,7 +529,8 @@ public sealed class NotificationChannelTest
             using var json = JsonDocument.Parse(messages[index].Body);
             var payload = json.RootElement;
             Assert.Equal(messageType, payload.GetProperty("msg_type").GetInt32());
-            var text = format == "markdown" ? payload.GetProperty("markdown").GetProperty("content").GetString()
+            var text = format == "markdown"
+                ? payload.GetProperty("markdown").GetProperty("content").GetString()
                 : payload.GetProperty("content").GetString();
             Assert.Contains(index == 0 ? "**正文**" : "**回复**", text);
             Assert.False(payload.TryGetProperty(format == "markdown" ? "content" : "markdown", out _));
@@ -459,31 +554,57 @@ public sealed class NotificationChannelTest
     {
         using var handler = new RecordingHandler(request =>
         {
-            if (request.Uri.Host != "bots.qq.com") return "{}";
+            if (request.Uri.Host != "bots.qq.com")
+            {
+                return "{}";
+            }
             using var credentials = JsonDocument.Parse(request.Body);
             var root = credentials.RootElement;
-            return JsonSerializer.Serialize(new { access_token = root.GetProperty("appId").GetString() + ":" + root.GetProperty("clientSecret").GetString(), expires_in = 3600 });
+            return JsonSerializer.Serialize(new
+            {
+                access_token = root.GetProperty("appId").GetString() + ":" + root.GetProperty("clientSecret").GetString(),
+                expires_in = 3600
+            });
         });
         using var client = new HttpClient(handler);
         using var channel = new QQBotNotificationChannel(client);
-        var settings = new NotificationSettings { QQBotAppId = "first", QQBotClientSecret = "secret", QQBotOpenId = "user" };
+        var settings = new NotificationSettings
+        {
+            QQBotAppId = "first",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user"
+        };
         await channel.SendAsync(settings, new("标题\n正文"), CancellationToken.None);
         await channel.SendAsync(settings with { QQBotAppId = "second" }, new("标题\n正文"), CancellationToken.None);
         await channel.SendAsync(settings with { QQBotAppId = "second", QQBotClientSecret = "new-secret" }, new("标题\n正文"), CancellationToken.None);
         await channel.SendAsync(settings with { QQBotAppId = "second", QQBotClientSecret = "new-secret" }, new("标题\n正文"), CancellationToken.None);
         Assert.Equal(3, handler.Requests.Count(request => request.Uri.Host == "bots.qq.com"));
-        Assert.Equal(new[] { "QQBot first:secret", "QQBot second:secret", "QQBot second:new-secret", "QQBot second:new-secret" },
+        Assert.Equal(new[] {
+            "QQBot first:secret",
+            "QQBot second:secret",
+            "QQBot second:new-secret",
+            "QQBot second:new-secret"
+},
             handler.Requests.Where(request => request.Uri.Host == "api.sgroup.qq.com").Select(request => request.Authorization));
     }
 
     [Fact]
     public async Task QQBotDoesNotFallBackToOldTokenWhenChangedCredentialsFail()
     {
-        using var handler = new RecordingHandler(request => request.Uri.Host != "bots.qq.com" ? "{}"
-            : request.Body.Contains("invalid") ? "{\"access_token\":null}" : "{\"access_token\":\"valid-token\",\"expires_in\":3600}");
+        using var handler = new RecordingHandler(request =>
+            request.Uri.Host != "bots.qq.com"
+                ? "{}"
+                : request.Body.Contains("invalid")
+                    ? "{\"access_token\":null}"
+                    : "{\"access_token\":\"valid-token\",\"expires_in\":3600}");
         using var client = new HttpClient(handler);
         using var channel = new QQBotNotificationChannel(client);
-        var settings = new NotificationSettings { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user" };
+        var settings = new NotificationSettings
+        {
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user"
+        };
         await channel.SendAsync(settings, new("标题\n正文"), CancellationToken.None);
         await Assert.ThrowsAsync<InvalidOperationException>(() => channel.SendAsync(settings with { QQBotClientSecret = "invalid" }, new("标题\n正文"), CancellationToken.None));
         Assert.Single(handler.Requests.Where(request => request.Uri.Host == "api.sgroup.qq.com"));
@@ -498,7 +619,12 @@ public sealed class NotificationChannelTest
             ? "{\"access_token\":\"expired-token\",\"expires_in\":0}" : "{}");
         using var client = new HttpClient(handler);
         using var channel = new QQBotNotificationChannel(client);
-        var settings = new NotificationSettings { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user" };
+        var settings = new NotificationSettings
+        {
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user"
+        };
         await channel.SendAsync(settings, new("标题\n正文"), CancellationToken.None);
         await channel.SendAsync(settings, new("标题\n正文"), CancellationToken.None);
         Assert.Equal(2, handler.Requests.Count(request => request.Uri.Host == "bots.qq.com"));
@@ -509,13 +635,19 @@ public sealed class NotificationChannelTest
     {
         await using var server = await LocalServer.CreateAsync();
         using var data = new TestData();
-        new WinPilotSettings { Notifications = new NotificationSettings
+        new WinPilotSettings
         {
-            WebhookUrl = server.Url + "/failure",
-            TelegramApiBaseUrl = server.Url, TelegramBotToken = "123:test", TelegramChatId = "42",
-            FeishuWebhookUrl = server.Url + "/feishu",
-            OneBotEndpoint = server.Url, OneBotUserId = "42"
-        } }.Save(data.Paths.ConfigurationFile);
+            Notifications = new NotificationSettings
+            {
+                WebhookUrl = server.Url + "/failure",
+                TelegramApiBaseUrl = server.Url,
+                TelegramBotToken = "123:test",
+                TelegramChatId = "42",
+                FeishuWebhookUrl = server.Url + "/feishu",
+                OneBotEndpoint = server.Url,
+                OneBotUserId = "42"
+            }
+        }.Save(data.Paths.ConfigurationFile);
         using var service = new NotificationService(data.Paths, NullLogger<NotificationService>.Instance);
         var failed = Assert.Single(await service.SendAsync(new("标题\n正文"), channel: "Webhook"));
         Assert.Equal("Webhook", failed.Channel);
@@ -566,11 +698,20 @@ public sealed class NotificationChannelTest
         using var handler = new RecordingHandler(_ => "{\"status\":\"ok\"}");
         using var client = new HttpClient(handler);
         await new OneBotNotificationChannel(client).SendAsync(new()
-        { OneBotEndpoint = "https://example.test/send_msg/", OneBotUserId = "123", OneBotGroupId = "456", OneBotToken = "secret" },
+        {
+            OneBotEndpoint = "https://example.test/send_msg/",
+            OneBotUserId = "123",
+            OneBotGroupId = "456",
+            OneBotToken = "secret"
+        },
             new("标题\n正文", data.Image), CancellationToken.None);
         var requests = handler.Requests.ToArray();
         Assert.Equal(2, requests.Length);
-        Assert.All(requests, request => { Assert.Equal("/send_msg", request.Uri.AbsolutePath); Assert.Equal("Bearer secret", request.Authorization); });
+        Assert.All(requests, request =>
+        {
+            Assert.Equal("/send_msg", request.Uri.AbsolutePath);
+            Assert.Equal("Bearer secret", request.Authorization);
+        });
         using var user = JsonDocument.Parse(requests[0].Body);
         using var group = JsonDocument.Parse(requests[1].Body);
         Assert.Equal("private", user.RootElement.GetProperty("message_type").GetString());
@@ -580,7 +721,12 @@ public sealed class NotificationChannelTest
         var segments = user.RootElement.GetProperty("message");
         Assert.Equal("标题\n正文", segments[0].GetProperty("data").GetProperty("text").GetString());
         var image = Convert.FromBase64String(segments[1].GetProperty("data").GetProperty("file").GetString()![9..]);
-        Assert.Equal(new byte[] { 137, 80, 78, 71 }, image.Take(4));
+        Assert.Equal(new byte[] {
+            137,
+            80,
+            78,
+            71
+}, image.Take(4));
     }
 
     [Fact]
@@ -588,7 +734,8 @@ public sealed class NotificationChannelTest
     {
         using var handler = new RecordingHandler(_ => "{\"status\":\"failed\"}");
         using var client = new HttpClient(handler);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new OneBotNotificationChannel(client).SendAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new OneBotNotificationChannel(client).SendAsync(
             new() { OneBotEndpoint = "https://example.test", OneBotUserId = "123" }, new("标题\n正文"), CancellationToken.None));
     }
 
@@ -616,16 +763,21 @@ public sealed class NotificationChannelTest
     public async Task FeishuAuthenticatesUploadsImageAndSendsPost()
     {
         using var data = new TestData();
-        using var handler = new RecordingHandler(request => request.Uri.AbsolutePath switch
-        {
-            "/open-apis/auth/v3/tenant_access_token/internal" => "{\"tenant_access_token\":\"feishu-access\"}",
-            "/open-apis/im/v1/images" => "{\"data\":{\"image_key\":\"image-key\"}}",
-            _ => "{}"
-        });
+        using var handler = new RecordingHandler(request =>
+            request.Uri.AbsolutePath switch
+            {
+                "/open-apis/auth/v3/tenant_access_token/internal" => "{\"tenant_access_token\":\"feishu-access\"}",
+                "/open-apis/im/v1/images" => "{\"data\":{\"image_key\":\"image-key\"}}",
+                _ => "{}"
+            });
         using var client = new HttpClient(handler);
         using var sender = new FeishuNotificationChannel(client);
         await sender.SendAsync(new()
-        { FeishuWebhookUrl = "https://example.test/hook", FeishuAppId = "app", FeishuAppSecret = "secret" },
+        {
+            FeishuWebhookUrl = "https://example.test/hook",
+            FeishuAppId = "app",
+            FeishuAppSecret = "secret"
+        },
             new("标题\n正文", data.Image), CancellationToken.None);
         var requests = handler.Requests.ToArray();
         Assert.Equal(3, requests.Length);
@@ -645,10 +797,17 @@ public sealed class NotificationChannelTest
     public async Task QQBotCachesTokenAcrossConcurrentSendsAndKeepsBothTargets()
     {
         using var handler = new RecordingHandler(request => request.Uri.Host == "bots.qq.com"
-            ? "{\"access_token\":\"qq-access\",\"expires_in\":\"3600\"}" : "{}");
+            ? "{\"access_token\":\"qq-access\",\"expires_in\":\"3600\"}"
+            : "{}");
         using var client = new HttpClient(handler);
         using var channel = new QQBotNotificationChannel(client);
-        var settings = new NotificationSettings { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotGroupOpenId = "group" };
+        var settings = new NotificationSettings
+        {
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user",
+            QQBotGroupOpenId = "group"
+        };
         await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => channel.SendAsync(settings, new("标题\n正文"), CancellationToken.None)));
         Assert.Single(handler.Requests.Where(request => request.Uri.Host == "bots.qq.com"));
         var messages = handler.Requests.Where(request => request.Uri.Host == "api.sgroup.qq.com").ToArray();
@@ -668,21 +827,37 @@ public sealed class NotificationChannelTest
     public async Task QQBotPreservesPreparePartFinishMergeAndImageMessage(string format, string content)
     {
         using var data = new TestData();
-        using var handler = new RecordingHandler(request => request.Uri.AbsolutePath switch
-        {
-            "/app/getAppAccessToken" => "{\"access_token\":\"qq-access\",\"expires_in\":3600}",
-            "/v2/users/user/upload_prepare" => "{\"upload_id\":\"upload\",\"block_size\":\"100000\",\"parts\":[{\"index\":1,\"presigned_url\":\"https://upload.test/part\"}]}",
-            "/v2/users/user/files" => "{\"file_info\":\"file-info\"}",
-            _ => "{}"
-        });
+        using var handler = new RecordingHandler(request =>
+            request.Uri.AbsolutePath switch
+            {
+                "/app/getAppAccessToken" => "{\"access_token\":\"qq-access\",\"expires_in\":3600}",
+                "/v2/users/user/upload_prepare" => "{\"upload_id\":\"upload\",\"block_size\":\"100000\",\"parts\":[{\"index\":1,\"presigned_url\":\"https://upload.test/part\"}]}",
+                "/v2/users/user/files" => "{\"file_info\":\"file-info\"}",
+                _ => "{}"
+            });
         using var client = new HttpClient(handler);
         using var channel = new QQBotNotificationChannel(client);
-        await channel.SendAsync(new() { QQBotAppId = "app", QQBotClientSecret = "secret", QQBotOpenId = "user", QQBotMessageFormat = format },
+        await channel.SendAsync(new()
+        {
+            QQBotAppId = "app",
+            QQBotClientSecret = "secret",
+            QQBotOpenId = "user",
+            QQBotMessageFormat = format
+        },
             new(content, data.Image), CancellationToken.None);
         var requests = handler.Requests.ToArray();
         var expected = new List<string> { "/app/getAppAccessToken" };
-        if (!string.IsNullOrWhiteSpace(content)) expected.Add("/v2/users/user/messages");
-        expected.AddRange(["/v2/users/user/upload_prepare", "/part", "/v2/users/user/upload_part_finish", "/v2/users/user/files", "/v2/users/user/messages"]);
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            expected.Add("/v2/users/user/messages");
+        }
+        expected.AddRange([
+            "/v2/users/user/upload_prepare",
+            "/part",
+            "/v2/users/user/upload_part_finish",
+            "/v2/users/user/files",
+            "/v2/users/user/messages"
+]);
         Assert.Equal(expected,
             requests.Select(request => request.Uri.AbsolutePath));
         if (!string.IsNullOrWhiteSpace(content))
@@ -690,8 +865,11 @@ public sealed class NotificationChannelTest
             using var message = JsonDocument.Parse(requests[1].Body);
             var payload = message.RootElement;
             Assert.Equal(format == "markdown" ? 2 : 0, payload.GetProperty("msg_type").GetInt32());
-            Assert.Equal(content, format == "markdown" ? payload.GetProperty("markdown").GetProperty("content").GetString()
-                : payload.GetProperty("content").GetString());
+            Assert.Equal(
+                content,
+                format == "markdown"
+                    ? payload.GetProperty("markdown").GetProperty("content").GetString()
+                    : payload.GetProperty("content").GetString());
         }
         var upload = Assert.Single(requests.Where(request => request.Uri.Host == "upload.test"));
         Assert.Equal(HttpMethod.Put, upload.Method);
@@ -708,7 +886,11 @@ public sealed class NotificationChannelTest
         await using var server = await LocalServer.CreateAsync();
         using var data = new TestData();
         await TelegramNotificationChannel.SendAsync(new()
-        { TelegramBotToken = "123:test", TelegramChatId = "42", TelegramApiBaseUrl = server.Url },
+        {
+            TelegramBotToken = "123:test",
+            TelegramChatId = "42",
+            TelegramApiBaseUrl = server.Url
+        },
             new(new string('x', 1024), data.Image), CancellationToken.None);
         var requests = server.Requests.ToArray();
         Assert.Equal(new[] { "/bot123:test/sendPhoto", "/bot123:test/sendMessage" }, requests.Select(request => request.Path));
@@ -720,14 +902,24 @@ public sealed class NotificationChannelTest
         Assert.True(text.RootElement.GetProperty("disable_web_page_preview").GetBoolean());
     }
 
-    private sealed record Request(Uri Uri, HttpMethod Method, string? Authorization, string Body);
+    private sealed record Request(
+        Uri Uri,
+        HttpMethod Method,
+        string? Authorization,
+        string Body);
 
     private sealed class RecordingHandler(Func<Request, string> reply) : HttpMessageHandler
     {
         public ConcurrentQueue<Request> Requests { get; } = new();
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
-            var captured = new Request(request.RequestUri!, request.Method, request.Headers.Authorization?.ToString(),
+            var captured = new Request(
+                request.RequestUri!,
+                request.Method,
+                request.Headers.Authorization?.ToString(),
                 request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
             Requests.Enqueue(captured);
             return new(HttpStatusCode.OK) { Content = new StringContent(reply(captured)) };
@@ -738,6 +930,7 @@ public sealed class NotificationChannelTest
     {
         public PortableDataPaths Paths { get; } = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "WinPilot.NotificationChannel.Test", Guid.NewGuid().ToString("N")));
         public string Image => Path.Combine(Paths.ApplicationDirectory, "source.png");
+
         public TestData()
         {
             Directory.CreateDirectory(Paths.ApplicationDirectory);
@@ -745,6 +938,7 @@ public sealed class NotificationChannelTest
             image.SetPixel(0, 0, Color.Blue);
             image.Save(Image, ImageFormat.Png);
         }
+
         public void Dispose() => Directory.Delete(Paths.ApplicationDirectory, true);
     }
 
@@ -752,6 +946,7 @@ public sealed class NotificationChannelTest
     {
         public string Url { get; } = url;
         public ConcurrentQueue<(string Path, string Body)> Requests { get; } = new();
+
         public static async Task<LocalServer> CreateAsync()
         {
             var builder = WebApplication.CreateBuilder();
@@ -764,7 +959,8 @@ public sealed class NotificationChannelTest
                 var body = await reader.ReadToEndAsync(context.RequestAborted);
                 var path = context.Request.Path.Value!;
                 server!.Requests.Enqueue((path, body));
-                return path == "/failure" ? Results.StatusCode(500)
+                return path == "/failure"
+                    ? Results.StatusCode(500)
                     : path == "/send_msg" ? Results.Json(new { status = "ok" }) : Results.Json(new { ok = true });
             });
             await app.StartAsync();
@@ -772,6 +968,11 @@ public sealed class NotificationChannelTest
             server = new(app, url);
             return server;
         }
-        public async ValueTask DisposeAsync() { await app.StopAsync(); await app.DisposeAsync(); }
+
+        public async ValueTask DisposeAsync()
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
     }
 }

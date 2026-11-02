@@ -13,8 +13,11 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
 
     internal async Task SendAsync(NotificationSettings settings, NotificationMessage message, CancellationToken token)
     {
-        if (string.IsNullOrWhiteSpace(settings.QQBotAppId) || string.IsNullOrWhiteSpace(settings.QQBotClientSecret))
+        if (string.IsNullOrWhiteSpace(settings.QQBotAppId)
+            || string.IsNullOrWhiteSpace(settings.QQBotClientSecret))
+        {
             throw new InvalidOperationException("QQBot 配置不完整");
+        }
         var targets = SelectTargets(settings);
         var text = message.Content;
         var access = await GetAccessTokenAsync(settings, token);
@@ -49,42 +52,76 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         await tokenGate.WaitAsync(token);
         try
         {
-            if (cachedToken is { } cached && cached.AppId == settings.QQBotAppId &&
-                cached.ClientSecret == settings.QQBotClientSecret && DateTime.UtcNow < cached.ExpiresAt)
+            if (cachedToken is { } cached
+                && cached.AppId == settings.QQBotAppId
+                && cached.ClientSecret == settings.QQBotClientSecret
+                && DateTime.UtcNow < cached.ExpiresAt)
+            {
                 return cached.AccessToken;
+            }
             cachedToken = null;
             using var response = await httpClient.PostAsJsonAsync("https://bots.qq.com/app/getAppAccessToken",
                 new { appId = settings.QQBotAppId, clientSecret = settings.QQBotClientSecret }, cancellationToken: token);
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
             var accessToken = document.RootElement.GetProperty("access_token").GetString();
-            if (string.IsNullOrWhiteSpace(accessToken)) throw new InvalidOperationException("QQBot 访问令牌无效");
+            if (string.IsNullOrWhiteSpace(accessToken))
+            {
+                throw new InvalidOperationException("QQBot 访问令牌无效");
+            }
             var expires = 3600;
             if (document.RootElement.TryGetProperty("expires_in", out var expiry))
-                expires = expiry.ValueKind == JsonValueKind.Number ? expiry.GetInt32()
+            {
+                expires = expiry.ValueKind == JsonValueKind.Number
+                    ? expiry.GetInt32()
                     : int.TryParse(expiry.GetString(), out var seconds) ? seconds : expires;
+            }
             var cacheSeconds = Math.Max(0, expires - Math.Min(60, expires / 2));
-            cachedToken = new(settings.QQBotAppId, settings.QQBotClientSecret, accessToken, DateTime.UtcNow.AddSeconds(cacheSeconds));
+            cachedToken = new(
+                settings.QQBotAppId,
+                settings.QQBotClientSecret,
+                accessToken,
+                DateTime.UtcNow.AddSeconds(cacheSeconds));
             return accessToken;
         }
-        finally { tokenGate.Release(); }
+        finally
+        {
+            tokenGate.Release();
+        }
     }
 
-    internal async Task ReplyAsync(NotificationSettings settings, CommandBots.CommandBotMessage message,
-        string text, byte[]? image, int sequence, CancellationToken token)
+    internal async Task ReplyAsync(
+        NotificationSettings settings,
+        CommandBots.CommandBotMessage message,
+        string text,
+        byte[]? image,
+        int sequence,
+        CancellationToken token)
     {
-        if (string.IsNullOrWhiteSpace(message.MessageId) || message.ConversationType is not ("private" or "group"))
+        if (string.IsNullOrWhiteSpace(message.MessageId)
+            || message.ConversationType is not ("private" or "group"))
+        {
             throw new InvalidOperationException("QQBot 回复上下文不完整");
+        }
         var access = await GetAccessTokenAsync(settings, token);
         var type = message.ConversationType == "private" ? "users" : "groups";
         var url = $"https://api.sgroup.qq.com/v2/{type}/{Uri.EscapeDataString(message.ChatId)}";
         object payload;
         if (image is null)
+        {
             payload = CreateTextPayload(settings, text, message.MessageId, sequence);
+        }
         else
         {
             var info = await UploadImageBytesAsync(url, NotificationContent.ToJpegBytes(image), access, token);
-            payload = new { msg_type = 7, content = "", media = new { file_info = info }, msg_id = message.MessageId, msg_seq = sequence };
+            payload = new
+            {
+                msg_type = 7,
+                content = "",
+                media = new { file_info = info },
+                msg_id = message.MessageId,
+                msg_seq = sequence
+            };
         }
         await SendRequestAsync(url + "/messages", payload, access, token);
     }
@@ -94,8 +131,11 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         NotificationConfigurationValidator.ValidateQQBotMessageFormat(settings.QQBotMessageFormat);
     }
 
-    private static Dictionary<string, object> CreateTextPayload(NotificationSettings settings, string text,
-        string? messageId = null, int sequence = 1)
+    private static Dictionary<string, object> CreateTextPayload(
+        NotificationSettings settings,
+        string text,
+        string? messageId = null,
+        int sequence = 1)
     {
         ValidateMessageFormat(settings);
         var markdown = settings.QQBotMessageFormat == "markdown";
@@ -112,7 +152,11 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         return payload;
     }
 
-    private async Task SendRequestAsync(string url, object payload, string access, CancellationToken token)
+    private async Task SendRequestAsync(
+        string url,
+        object payload,
+        string access,
+        CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(payload) };
         request.Headers.Authorization = new AuthenticationHeaderValue("QQBot", access);
@@ -120,13 +164,24 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task<string> UploadImageAsync(string baseUrl, string path, string access, CancellationToken token)
+    private async Task<string> UploadImageAsync(
+        string baseUrl,
+        string path,
+        string access,
+        CancellationToken token)
     {
         var bytes = await NotificationContent.ReadJpegBytesAsync(path, token) ?? throw new InvalidOperationException("QQBot 图片不存在");
         return await UploadImageBytesAsync(baseUrl, bytes, access, token);
     }
 
-    private async Task<string> UploadImageBytesAsync(string baseUrl, byte[] bytes, string access, CancellationToken token)
+    /// <summary>
+    /// 按 QQBot 协议准备上传、提交服务端要求的分块并合并，返回发图时使用的 file_info。
+    /// </summary>
+    private async Task<string> UploadImageBytesAsync(
+        string baseUrl,
+        byte[] bytes,
+        string access,
+        CancellationToken token)
     {
         var md5 = Convert.ToHexString(MD5.HashData(bytes)).ToLowerInvariant();
         var sha1 = Convert.ToHexString(SHA1.HashData(bytes)).ToLowerInvariant();
@@ -135,7 +190,12 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         {
             Content = JsonContent.Create(new
             {
-                file_type = 1, file_size = bytes.Length.ToString(), file_name = "screenshot.jpg", md5, sha1, md5_10m = md5Part
+                file_type = 1,
+                file_size = bytes.Length.ToString(),
+                file_name = "screenshot.jpg",
+                md5,
+                sha1,
+                md5_10m = md5Part
             })
         };
         prepare.Headers.Authorization = new AuthenticationHeaderValue("QQBot", access);
@@ -157,7 +217,9 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
             {
                 Content = JsonContent.Create(new
                 {
-                    upload_id = uploadId, part_index = index, block_size = chunk.Length.ToString(),
+                    upload_id = uploadId,
+                    part_index = index,
+                    block_size = chunk.Length.ToString(),
                     md5 = Convert.ToHexString(MD5.HashData(chunk)).ToLowerInvariant()
                 })
             };
@@ -178,7 +240,11 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
 
     public void Dispose() => tokenGate.Dispose();
 
-    private sealed record TokenCache(string AppId, string ClientSecret, string AccessToken, DateTime ExpiresAt);
+    private sealed record TokenCache(
+        string AppId,
+        string ClientSecret,
+        string AccessToken,
+        DateTime ExpiresAt);
 
     internal static (string Type, string Id)[] SelectTargets(NotificationSettings settings)
     {
@@ -193,12 +259,14 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         };
         var targets = candidates.Where(item => !string.IsNullOrWhiteSpace(item.Item2)).ToArray();
         if (targets.Length == 0)
+        {
             throw new InvalidOperationException(mode switch
             {
                 "private" => $"QQBot 未配置私聊发送对象",
                 "group" => $"QQBot 未配置群聊发送对象",
                 _ => $"QQBot 未配置发送对象"
             });
+        }
         return targets;
     }
 }

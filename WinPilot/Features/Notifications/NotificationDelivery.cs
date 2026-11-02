@@ -2,38 +2,65 @@ using WinPilot.Core.Notifications;
 
 namespace WinPilot.Features.Notifications;
 
+/// <summary>
+/// 处理通知图片的临时落盘、投递结果检查与清理，供任务和插件发送入口复用。
+/// </summary>
 internal static class NotificationDelivery
 {
     internal const int MaxImageSizeBytes = 10 * 1024 * 1024;
 
-    internal static async Task SendAsync(INotificationService notifications, NotificationMessage message,
-        string? channel, CancellationToken token,
-        byte[]? imageContent = null, string? imageContentType = null, ILogger? logger = null)
+    internal static async Task SendAsync(
+        INotificationService notifications,
+        NotificationMessage message,
+        string? channel,
+        CancellationToken token,
+        byte[]? imageContent = null,
+        string? imageContentType = null,
+        ILogger? logger = null)
     {
-        if (string.IsNullOrWhiteSpace(message.Content) && string.IsNullOrWhiteSpace(message.ImagePath) && imageContent is null)
+        if (string.IsNullOrWhiteSpace(message.Content)
+            && string.IsNullOrWhiteSpace(message.ImagePath)
+            && imageContent is null)
+        {
             throw new InvalidOperationException("请输入通知内容或通知图片");
-        var temporaryImagePath = imageContent is null ? null : await WriteTemporaryImageAsync(imageContent, imageContentType!, token, logger);
+        }
+        var temporaryImagePath = imageContent is null
+            ? null
+            : await WriteTemporaryImageAsync(imageContent, imageContentType!, token, logger);
         try
         {
             var deliveryMessage = temporaryImagePath is null ? message : message with { ImagePath = temporaryImagePath };
             ValidateResults(await notifications.SendAsync(deliveryMessage, channel, token));
+            // 渠道可能在调用返回后继续读取本地图片，给临时文件保留短暂读取窗口。
             if (temporaryImagePath is not null)
+            {
                 await Task.Delay(TimeSpan.FromSeconds(2), token);
+            }
         }
         finally
         {
             if (temporaryImagePath is not null)
+            {
                 DeleteTemporaryImage(temporaryImagePath, logger);
+            }
         }
     }
 
-    internal static async Task<string> WriteTemporaryImageAsync(byte[] content, string contentType, CancellationToken token, ILogger? logger = null,
+    internal static async Task<string> WriteTemporaryImageAsync(
+        byte[] content,
+        string contentType,
+        CancellationToken token,
+        ILogger? logger = null,
         Func<string, byte[], CancellationToken, Task>? write = null)
     {
         if (content.Length == 0)
+        {
             throw new InvalidOperationException("通知图片不能为空");
+        }
         if (content.Length > MaxImageSizeBytes)
+        {
             throw new InvalidOperationException("通知图片不能超过 10 MB");
+        }
         var extension = contentType.ToLowerInvariant() switch
         {
             "image/png" => ".png",
@@ -53,18 +80,31 @@ internal static class NotificationDelivery
         }
     }
 
+    /// <summary>
+    /// 将空结果或渠道失败转为调用方可感知的异常，避免任务把发送失败记为成功。
+    /// </summary>
     internal static void ValidateResults(IReadOnlyList<NotificationChannelResult> results)
     {
         if (results.Count == 0)
+        {
             throw new InvalidOperationException("没有可用的通知渠道");
+        }
         var failed = results.Where(result => !result.Succeeded).Select(result => result.Channel).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (failed.Length > 0)
+        {
             throw new InvalidOperationException($"通知发送失败：{string.Join('、', failed)}");
+        }
     }
 
     internal static void DeleteTemporaryImage(string path, ILogger? logger)
     {
-        try { File.Delete(path); }
-        catch (Exception exception) { logger?.LogWarning(exception, "临时通知图片清理失败，文件：{Path}", path); }
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(exception, "临时通知图片清理失败，文件：{Path}", path);
+        }
     }
 }

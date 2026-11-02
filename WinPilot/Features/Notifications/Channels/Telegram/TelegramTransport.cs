@@ -8,10 +8,17 @@ internal static class TelegramTransport
     internal static string GetBotUrl(NotificationSettings settings)
     {
         var url = string.IsNullOrWhiteSpace(settings.TelegramApiBaseUrl)
-            ? "https://api.telegram.org/bot" : settings.TelegramApiBaseUrl.Trim().TrimEnd('/');
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) url = "https://" + url;
-        if (!url.EndsWith("/bot", StringComparison.OrdinalIgnoreCase)) url += "/bot";
+            ? "https://api.telegram.org/bot"
+            : settings.TelegramApiBaseUrl.Trim().TrimEnd('/');
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = "https://" + url;
+        }
+        if (!url.EndsWith("/bot", StringComparison.OrdinalIgnoreCase))
+        {
+            url += "/bot";
+        }
         return url + settings.TelegramBotToken.Trim();
     }
 
