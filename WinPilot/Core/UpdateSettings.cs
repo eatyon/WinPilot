@@ -2,8 +2,17 @@ using System.Text.Json.Serialization;
 
 namespace WinPilot.Core;
 
-public enum UpdateSource { GitHub, Cnb }
-public enum UpdateChannel { Stable, Preview }
+public enum UpdateSource
+{
+    GitHub,
+    Cnb
+}
+
+public enum UpdateChannel
+{
+    Stable,
+    Preview
+}
 
 public sealed record UpdateSettings
 {

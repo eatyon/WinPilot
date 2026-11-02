@@ -46,7 +46,13 @@ public sealed class UpdateSettingsEndpointTest
             Assert.Equal("保存更新设置失败", entry.Message);
             Assert.Equal(original, File.ReadAllText(paths.ConfigurationFile));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -62,7 +68,11 @@ public sealed class UpdateSettingsEndpointTest
             builder.Services.AddSingleton(paths);
             builder.Services.AddSingleton<TerminalSessionManager>();
             builder.Services.AddSingleton<SafeModeService>();
-            builder.Services.AddSingleton(new UpdateService(NullLogger<UpdateService>.Instance, new HttpClient(new Handler()), paths.ConfigurationFile, "1.0.0"));
+            builder.Services.AddSingleton(new UpdateService(
+                NullLogger<UpdateService>.Instance,
+                new HttpClient(new Handler()),
+                paths.ConfigurationFile,
+                "1.0.0"));
             await using var app = builder.Build();
             app.UseMiddleware<SafeModeMiddleware>();
             app.MapHealthEndpoint();
@@ -72,7 +82,12 @@ public sealed class UpdateSettingsEndpointTest
             var initial = await client.GetFromJsonAsync<Dictionary<string, string>>("/api/settings/updates");
             Assert.Equal("GitHub", initial!["source"]);
             Assert.Equal("Stable", initial["channel"]);
-            using var rejectedInstall = await client.PostAsJsonAsync("/api/update/install", new { version = "2.0.0", source = "GitHub", channel = "Stable" });
+            using var rejectedInstall = await client.PostAsJsonAsync("/api/update/install", new
+            {
+                version = "2.0.0",
+                source = "GitHub",
+                channel = "Stable"
+            });
             Assert.Equal(HttpStatusCode.Conflict, rejectedInstall.StatusCode);
             var installError = await rejectedInstall.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
             Assert.Equal("更新信息已变化，请重新检查更新", installError.GetProperty("message").GetString());
@@ -90,21 +105,39 @@ public sealed class UpdateSettingsEndpointTest
             Assert.Equal("Cnb", payload.GetProperty("source").GetString());
             Assert.Equal("Preview", payload.GetProperty("channel").GetString());
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     private sealed class Handler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 
     private sealed class SaveLogger : ILogger<UpdateService>
     {
         public System.Collections.Concurrent.ConcurrentQueue<(LogLevel Level, string Message, Exception? Error)> Entries { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Enqueue((level, formatter(state, exception), exception));
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            =>
+            Entries.Enqueue((level, formatter(state, exception), exception));
     }
 }

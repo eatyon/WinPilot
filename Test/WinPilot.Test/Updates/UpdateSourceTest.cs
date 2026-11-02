@@ -46,17 +46,45 @@ public sealed class UpdateSourceTest
     [InlineData(UpdateSource.GitHub, null, "sha256", null)]
     [InlineData(UpdateSource.GitHub, "", "sha256", null)]
     [InlineData(UpdateSource.GitHub, "sha256:abc", "sha256", null)]
-    [InlineData(UpdateSource.GitHub, "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256", null)]
-    [InlineData(UpdateSource.GitHub, "sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "sha256", null)]
-    [InlineData(UpdateSource.GitHub, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ", "sha256", null)]
+    [InlineData(
+        UpdateSource.GitHub,
+        "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256",
+        null)]
+    [InlineData(
+        UpdateSource.GitHub,
+        "sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "sha256",
+        null)]
+    [InlineData(
+        UpdateSource.GitHub,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ",
+        "sha256",
+        null)]
     [InlineData(UpdateSource.Cnb, null, null, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData(UpdateSource.Cnb, null, "sha512", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData(
+        UpdateSource.Cnb,
+        null,
+        "sha512",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     [InlineData(UpdateSource.Cnb, null, "sha256", null)]
     [InlineData(UpdateSource.Cnb, null, "sha256", "")]
     [InlineData(UpdateSource.Cnb, null, "sha256", "abc")]
-    [InlineData(UpdateSource.Cnb, null, "sha256", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")]
-    [InlineData(UpdateSource.Cnb, null, "sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ")]
-    public async Task InvalidPackageDigestAllowsDisplayButNotInstallOrFallback(UpdateSource source, string? digest, string? algorithm, string? hash)
+    [InlineData(
+        UpdateSource.Cnb,
+        null,
+        "sha256",
+        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")]
+    [InlineData(
+        UpdateSource.Cnb,
+        null,
+        "sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ")]
+    public async Task InvalidPackageDigestAllowsDisplayButNotInstallOrFallback(
+        UpdateSource source,
+        string? digest,
+        string? algorithm,
+        string? hash)
     {
         var requests = 0;
         using var service = Create((request, _) =>
@@ -85,7 +113,10 @@ public sealed class UpdateSourceTest
             Assert.Equal(host, request.RequestUri!.Host);
             Assert.Equal(path, request.RequestUri.AbsolutePath);
             Assert.Null(request.Headers.Authorization);
-            Assert.Contains(request.Headers.Accept, value => value.MediaType == (source == UpdateSource.Cnb ? "application/vnd.cnb.api+json" : "application/vnd.github+json"));
+            Assert.Contains(
+                request.Headers.Accept,
+                value =>
+                    value.MediaType == (source == UpdateSource.Cnb ? "application/vnd.cnb.api+json" : "application/vnd.github+json"));
             return Task.FromResult(Json(Release("v2.0.0", source)));
         });
         await service.SaveSettingsAsync(new() { Source = source }, CancellationToken.None);
@@ -93,7 +124,11 @@ public sealed class UpdateSourceTest
         Assert.Equal(source, result.Source);
         Assert.Equal(UpdateChannel.Stable, result.Channel);
         Assert.True(result.CanInstall);
-        Assert.Contains(source == UpdateSource.Cnb ? "cnb.cool/asdbr/WinPilot/-/releases/tag/" : "github.com/eatyon/WinPilot/releases/tag/", result.ReleaseUrl);
+        Assert.Contains(
+            source == UpdateSource.Cnb
+                ? "cnb.cool/asdbr/WinPilot/-/releases/tag/"
+                : "github.com/eatyon/WinPilot/releases/tag/",
+            result.ReleaseUrl);
     }
 
     [Theory]
@@ -107,7 +142,10 @@ public sealed class UpdateSourceTest
             var page = Interlocked.Increment(ref requests);
             Assert.Equal(source == UpdateSource.Cnb ? "cnb.cool" : "api.github.com", request.RequestUri!.Host);
             Assert.Null(request.Headers.Authorization);
-            Assert.Contains(request.Headers.Accept, value => value.MediaType == (source == UpdateSource.Cnb ? "application/vnd.cnb.api+json" : "application/vnd.github+json"));
+            Assert.Contains(
+                request.Headers.Accept,
+                value =>
+                    value.MediaType == (source == UpdateSource.Cnb ? "application/vnd.cnb.api+json" : "application/vnd.github+json"));
             Assert.Contains(source == UpdateSource.GitHub ? "per_page=100" : "page_size=100", request.RequestUri!.Query);
             Assert.Contains($"page={page}", request.RequestUri.Query);
             if (page == 1)
@@ -157,7 +195,9 @@ public sealed class UpdateSourceTest
         using var service = Create((request, _) =>
         {
             hosts.Add(request.RequestUri!.Host);
-            return Task.FromResult(request.RequestUri.Host == "api.github.com" ? Json(Release("v2.0.0", UpdateSource.GitHub)) : new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            return Task.FromResult(request.RequestUri.Host == "api.github.com"
+                ? Json(Release("v2.0.0", UpdateSource.GitHub))
+                : new HttpResponseMessage(HttpStatusCode.Unauthorized));
         });
         Assert.True((await service.CheckAsync(CancellationToken.None)).CanInstall);
         await service.SaveSettingsAsync(new() { Source = UpdateSource.Cnb }, CancellationToken.None);
@@ -175,9 +215,10 @@ public sealed class UpdateSourceTest
     public async Task FailedLaterPageDoesNotReturnPartialHighestVersion()
     {
         var requests = 0;
-        using var service = Create((_, _) => Task.FromResult(++requests == 1
-            ? Json(Enumerable.Range(0, 100).Select(_ => Release("v2.0.0", UpdateSource.GitHub)).ToArray())
-            : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        using var service = Create((_, _) =>
+            Task.FromResult(++requests == 1
+                ? Json(Enumerable.Range(0, 100).Select(_ => Release("v2.0.0", UpdateSource.GitHub)).ToArray())
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
         await service.SaveSettingsAsync(new() { Channel = UpdateChannel.Preview }, CancellationToken.None);
         var result = await service.CheckAsync(CancellationToken.None);
         Assert.True(result.CheckFailed);
@@ -191,7 +232,11 @@ public sealed class UpdateSourceTest
         {
             tag_name = "v2.0.0",
             assets = new[] {
-                new { name = "WinPilot-v2.0.0-win-x64.zip", browser_download_url = "https://github.com/other/WinPilot/releases/download/v2.0.0/WinPilot-v2.0.0-win-x64.zip", digest = "sha256:" + new string('a', 64) }
+                new {
+                    name = "WinPilot-v2.0.0-win-x64.zip",
+                    browser_download_url = "https://github.com/other/WinPilot/releases/download/v2.0.0/WinPilot-v2.0.0-win-x64.zip",
+                    digest = "sha256:" + new string('a', 64)
+}
             }
         };
         using var service = Create((_, _) => Task.FromResult(Json(release)));
@@ -211,7 +256,8 @@ public sealed class UpdateSourceTest
     [InlineData(UpdateSource.Cnb, "https://cnb.cool/other/WinPilot/-/releases/download/v1/file")]
     [InlineData(UpdateSource.Cnb, "http://cnb.cool/asdbr/WinPilot/-/releases/download/v1/file")]
     public void DownloadsAreRestrictedToSelectedRepository(UpdateSource source, string url)
-        => Assert.Throws<InvalidOperationException>(() => UpdateReleaseCatalog.CreateDownloadUri(source, url));
+        =>
+        Assert.Throws<InvalidOperationException>(() => UpdateReleaseCatalog.CreateDownloadUri(source, url));
 
     [Theory]
     [InlineData("cnb.cool", "WinPilot-v2.0.0-win-x64.zip")]
@@ -243,7 +289,13 @@ public sealed class UpdateSourceTest
             Assert.True(stored.SafeModeEnabled);
             Assert.Equal("", stored.Notifications.QQBotClientSecret);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -262,7 +314,13 @@ public sealed class UpdateSourceTest
             Assert.Equal(original, File.ReadAllText(file));
             Assert.Equal(result, await service.CheckAsync(CancellationToken.None));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -274,7 +332,9 @@ public sealed class UpdateSourceTest
         using var service = Create(async (request, token) =>
         {
             if (request.RequestUri!.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+            {
                 return Json(Release($"v{++checks + 1}.0.0", UpdateSource.GitHub));
+            }
             Assert.Contains("/v2.0.0/", request.RequestUri.AbsolutePath);
             entered.TrySetResult();
             await release.Task.WaitAsync(token);
@@ -292,46 +352,81 @@ public sealed class UpdateSourceTest
         release.SetResult();
         await Assert.ThrowsAsync<InvalidOperationException>(() => save);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (service.GetInstallStatus().State != "Failed") await Task.Delay(10, timeout.Token);
+        while (service.GetInstallStatus().State != "Failed")
+        {
+            await Task.Delay(10, timeout.Token);
+        }
         await service.SaveSettingsAsync(new() { Source = UpdateSource.Cnb }, CancellationToken.None);
         Assert.Equal(UpdateSource.Cnb, service.GetSettings().Source);
     }
 
-    private static UpdateService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send, string? file = null, string currentVersion = "1.0.0")
-        => new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), file, currentVersion);
+    private static UpdateService Create(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send,
+        string? file = null,
+        string currentVersion = "1.0.0")
+        =>
+        new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), file, currentVersion);
 
-    private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(body)) };
+    private static HttpResponseMessage Json(object body) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(body)) };
 
-    private static object ReleaseWithDigest(UpdateSource source, string? digest, string? algorithm, string? hash)
+    private static object ReleaseWithDigest(
+        UpdateSource source,
+        string? digest,
+        string? algorithm,
+        string? hash)
     {
-        var prefix = source == UpdateSource.GitHub ? "https://github.com/eatyon/WinPilot/releases/download/" : "https://cnb.cool/asdbr/WinPilot/-/releases/download/";
-        return new {
+        var prefix = source == UpdateSource.GitHub
+            ? "https://github.com/eatyon/WinPilot/releases/download/"
+            : "https://cnb.cool/asdbr/WinPilot/-/releases/download/";
+        return new
+        {
             tag_name = "v2.0.0",
             assets = new[] {
-                new { name = "WinPilot-v2.0.0-win-x64.zip", browser_download_url = prefix + "v2.0.0/WinPilot-v2.0.0-win-x64.zip",
+                new {
+                    name = "WinPilot-v2.0.0-win-x64.zip",
+                    browser_download_url = prefix + "v2.0.0/WinPilot-v2.0.0-win-x64.zip",
                     digest = source == UpdateSource.GitHub ? digest : "sha256:" + new string('b', 64),
                     hash_algo = source == UpdateSource.Cnb ? algorithm : "sha256",
-                    hash_value = source == UpdateSource.Cnb ? hash : new string('b', 64) }
+                    hash_value = source == UpdateSource.Cnb ? hash : new string('b', 64)
+}
             }
         };
     }
 
-    private static object Release(string tag, UpdateSource source, bool draft = false, bool prerelease = false, string? notes = null)
+    private static object Release(
+        string tag,
+        UpdateSource source,
+        bool draft = false,
+        bool prerelease = false,
+        string? notes = null)
     {
-        var prefix = source == UpdateSource.GitHub ? "https://github.com/eatyon/WinPilot/releases/download/" : "https://cnb.cool/asdbr/WinPilot/-/releases/download/";
-        return new {
-            tag_name = tag, draft, prerelease, body = notes,
+        var prefix = source == UpdateSource.GitHub
+            ? "https://github.com/eatyon/WinPilot/releases/download/"
+            : "https://cnb.cool/asdbr/WinPilot/-/releases/download/";
+        return new
+        {
+            tag_name = tag,
+            draft,
+            prerelease,
+            body = notes,
             assets = new[] {
-                new { name = $"WinPilot-{tag}-win-x64.zip", browser_download_url = $"{prefix}{tag}/WinPilot-{tag}-win-x64.zip",
+                new {
+                    name = $"WinPilot-{tag}-win-x64.zip",
+                    browser_download_url = $"{prefix}{tag}/WinPilot-{tag}-win-x64.zip",
                     digest = source == UpdateSource.GitHub ? "sha256:" + new string('a', 64) : null,
                     hash_algo = source == UpdateSource.Cnb ? "sha256" : null,
-                    hash_value = source == UpdateSource.Cnb ? new string('a', 64) : null }
+                    hash_value = source == UpdateSource.Cnb ? new string('a', 64) : null
+}
             }
         };
     }
 
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            send(request, cancellationToken);
     }
 }

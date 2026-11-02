@@ -15,7 +15,10 @@ public sealed class FileOperationRecoveryTest
         var failure = new IOException("保存失败");
         var recoveryFailure = new UnauthorizedAccessException("收尾失败");
         var error = Assert.Throws<AggregateException>(() => Run(rollback, () => throw failure, () => throw recoveryFailure));
-        Assert.Collection(error.InnerExceptions, first => Assert.Same(failure, first), second => Assert.Same(recoveryFailure, second));
+        Assert.Collection(
+            error.InnerExceptions,
+            first => Assert.Same(failure, first),
+            second => Assert.Same(recoveryFailure, second));
     }
 
     [Theory]
@@ -25,7 +28,9 @@ public sealed class FileOperationRecoveryTest
     {
         var failure = new IOException("保存失败");
         var recovered = false;
-        Assert.Same(failure, Assert.Throws<IOException>(() => Run(rollback, () => throw failure, () => recovered = true)));
+        Assert.Same(
+            failure,
+            Assert.Throws<IOException>(() => Run(rollback, () => throw failure, () => recovered = true)));
         Assert.True(recovered);
     }
 
@@ -43,7 +48,9 @@ public sealed class FileOperationRecoveryTest
     public void CleanupOnlyFailureRemainsVisible()
     {
         var failure = new IOException("清理失败");
-        Assert.Same(failure, Assert.Throws<IOException>(() => FileOperationRecovery.WithCleanup(() => { }, () => throw failure)));
+        Assert.Same(failure, Assert.Throws<IOException>(() => FileOperationRecovery.WithCleanup(() =>
+        {
+        }, () => throw failure)));
     }
 
     [Fact]
@@ -68,7 +75,10 @@ public sealed class FileOperationRecoveryTest
             Assert.Equal("original", File.ReadAllText(file));
             Assert.Equal("replacement", File.ReadAllText(temporary));
         }
-        finally { Directory.Delete(directory, true); }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
     }
 
     [Theory]
@@ -88,12 +98,22 @@ public sealed class FileOperationRecoveryTest
             Exception? rollbackFailure = null;
             var error = Record.Exception(() => FileOperationRecovery.WithRollback(() =>
             {
-                if (blockRollback) File.WriteAllText(original, "external");
+                if (blockRollback)
+                {
+                    File.WriteAllText(original, "external");
+                }
                 throw failure;
             }, () =>
             {
-                try { File.Move(renamed, original); }
-                catch (Exception exception) { rollbackFailure = exception; throw; }
+                try
+                {
+                    File.Move(renamed, original);
+                }
+                catch (Exception exception)
+                {
+                    rollbackFailure = exception;
+                    throw;
+                }
             }));
             if (blockRollback)
             {
@@ -111,7 +131,10 @@ public sealed class FileOperationRecoveryTest
                 Assert.False(File.Exists(renamed));
             }
         }
-        finally { Directory.Delete(directory, true); }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
     }
 
     [Theory]
@@ -123,15 +146,23 @@ public sealed class FileOperationRecoveryTest
         var failure = new AggregateException(new InvalidOperationException("保存失败"), new IOException("回滚失败"));
         var method = endpointType.GetMethod("Execute", BindingFlags.NonPublic | BindingFlags.Static)!;
         Func<IResult> action = () => throw failure;
-        object?[] arguments = endpointType == typeof(ProgramEndpointRouteBuilderExtensions) || endpointType == typeof(TaskEndpointRouteBuilderExtensions)
-            ? [action, true] : [action];
+        object?[] arguments = endpointType == typeof(ProgramEndpointRouteBuilderExtensions)
+            || endpointType == typeof(TaskEndpointRouteBuilderExtensions)
+            ? [action, true]
+            : [action];
         var error = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, arguments));
         Assert.Same(failure, error.InnerException);
     }
 
     private static void Run(bool rollback, Action operation, Action recovery)
     {
-        if (rollback) FileOperationRecovery.WithRollback(operation, recovery);
-        else FileOperationRecovery.WithCleanup(operation, recovery);
+        if (rollback)
+        {
+            FileOperationRecovery.WithRollback(operation, recovery);
+        }
+        else
+        {
+            FileOperationRecovery.WithCleanup(operation, recovery);
+        }
     }
 }

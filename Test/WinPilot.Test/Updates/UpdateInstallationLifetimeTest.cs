@@ -4,12 +4,12 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using WinPilot.Features.Updates;
 using WinPilot.Core;
+using WinPilot.Features.Updates;
 
 namespace WinPilot.Test;
 
@@ -17,6 +17,7 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "WinPilot.UpdateLifetime.Test", Guid.NewGuid().ToString("N"));
     private readonly byte[] package = Encoding.UTF8.GetBytes("test update package");
+
     private string TemporaryDirectory => Path.Combine(root, "temp");
 
     [Theory]
@@ -36,11 +37,23 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         var callback = stopping.Token.Register(() =>
         {
             entered.Set();
-            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("停止回调握手未解除");
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("停止回调握手未解除");
+            }
             callbackAcquired = Monitor.TryEnter(gate);
-            if (!callbackAcquired) return;
-            try { typeof(UpdateService).GetMethod("RequestStop", flags)!.Invoke(service, null); }
-            finally { Monitor.Exit(gate); }
+            if (!callbackAcquired)
+            {
+                return;
+            }
+            try
+            {
+                typeof(UpdateService).GetMethod("RequestStop", flags)!.Invoke(service, null);
+            }
+            finally
+            {
+                Monitor.Exit(gate);
+            }
         });
         typeof(UpdateService).GetField("stoppingRegistration", flags)!.SetValue(service, callback);
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -52,17 +65,26 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
                 DisposeService(service, asynchronous);
                 completed.TrySetResult();
             }
-            catch (Exception exception) { completed.TrySetException(exception); }
-        }) { IsBackground = true };
+            catch (Exception exception)
+            {
+                completed.TrySetException(exception);
+            }
+        })
+        { IsBackground = true };
         var cancelled = Task.Run(stopping.Cancel);
         try
         {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             thread.Start();
             Assert.True(disposing.Wait(TimeSpan.FromSeconds(5)));
-            Assert.True(SpinWait.SpinUntil(() => thread.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin), TimeSpan.FromSeconds(5)));
+            Assert.True(SpinWait.SpinUntil(
+                () => thread.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin),
+                TimeSpan.FromSeconds(5)));
             var available = Monitor.TryEnter(gate);
-            if (available) Monitor.Exit(gate);
+            if (available)
+            {
+                Monitor.Exit(gate);
+            }
             Task? concurrent = null;
             if (available)
             {
@@ -82,7 +104,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         {
             release.Set();
             await cancelled.WaitAsync(TimeSpan.FromSeconds(5));
-            if (!thread.ThreadState.HasFlag(System.Threading.ThreadState.Unstarted)) await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!thread.ThreadState.HasFlag(System.Threading.ThreadState.Unstarted))
+            {
+                await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
             await service.DisposeAsync();
         }
     }
@@ -94,10 +119,16 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new DownloadStream(entered, cancelled, release);
-        var handler = new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com"
-            ? Release() : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(source) }));
+        var handler = new Handler((request, _) =>
+            Task.FromResult(request.RequestUri!.Host == "api.github.com"
+                ? Release()
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(source) }));
         var launches = 0;
-        var service = Create(handler, start: _ => { launches++; return Process.GetCurrentProcess(); });
+        var service = Create(handler, start: _ =>
+        {
+            launches++;
+            return Process.GetCurrentProcess();
+        });
         Task? disposal = null;
         try
         {
@@ -118,7 +149,11 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
             Assert.Equal("Idle", service.GetInstallStatus().State);
             await service.DisposeAsync();
         }
-        finally { release.TrySetResult(); await (disposal ?? service.DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            await (disposal ?? service.DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -126,10 +161,21 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
     {
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var logger = new InstallationLogger();
-        logger.OnMessage = message => { if (message.StartsWith("安装更新失败", StringComparison.Ordinal)) failed.TrySetResult(); };
+        logger.OnMessage = message =>
+        {
+            if (message.StartsWith("安装更新失败", StringComparison.Ordinal))
+            {
+                failed.TrySetResult();
+            }
+        };
         var launches = 0;
-        await using var service = Create(new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com"
-            ? Release(new string('a', 64)) : Package())), logger: logger, start: _ => { launches++; return Process.GetCurrentProcess(); });
+        await using var service = Create(new Handler((request, _) =>
+            Task.FromResult(request.RequestUri!.Host == "api.github.com"
+            ? Release(new string('a', 64)) : Package())), logger: logger, start: _ =>
+            {
+                launches++;
+                return Process.GetCurrentProcess();
+            });
         await Start(service);
         await failed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -146,13 +192,20 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         logger.OnMessage = message =>
         {
-            if (!message.StartsWith("更新包下载完成", StringComparison.Ordinal)) return;
+            if (!message.StartsWith("更新包下载完成", StringComparison.Ordinal))
+            {
+                return;
+            }
             lifetime.StopApplication();
             entered.TrySetResult();
         };
         var launches = 0;
         await using var service = Create(new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com" ? Release() : Package())),
-            lifetime, logger, _ => { launches++; return Process.GetCurrentProcess(); });
+            lifetime, logger, _ =>
+            {
+                launches++;
+                return Process.GetCurrentProcess();
+            });
         await Start(service);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -170,13 +223,20 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         logger.OnMessage = message =>
         {
-            if (!message.StartsWith("更新包 SHA-256 校验通过", StringComparison.Ordinal)) return;
+            if (!message.StartsWith("更新包 SHA-256 校验通过", StringComparison.Ordinal))
+            {
+                return;
+            }
             lifetime.StopApplication();
             entered.TrySetResult();
         };
         var launches = 0;
         await using var service = Create(new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com" ? Release() : Package())),
-            lifetime, logger, _ => { launches++; return Process.GetCurrentProcess(); });
+            lifetime, logger, _ =>
+            {
+                launches++;
+                return Process.GetCurrentProcess();
+            });
         await Start(service);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -221,7 +281,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
             await service.DisposeAsync();
             Assert.True(Directory.Exists(directory));
         }
-        finally { await service.DisposeAsync(); }
+        finally
+        {
+            await service.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -229,8 +292,12 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
     {
         using var lifetime = new Lifetime();
         var paths = PortableDataPaths.Create(root);
-        await using var services = new ServiceCollection().AddLogging().AddSingleton(paths)
-            .AddSingleton<IHostApplicationLifetime>(lifetime).AddSingleton<UpdateService>().BuildServiceProvider();
+        await using var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton(paths)
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .AddSingleton<UpdateService>()
+            .BuildServiceProvider();
         var service = services.GetRequiredService<UpdateService>();
         var token = ((CancellationTokenSource)typeof(UpdateService).GetField("stoppingCancellation", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!).Token;
         lifetime.StopApplication();
@@ -246,7 +313,12 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         string? directory = null;
         var logger = new InstallationLogger();
         await using var service = Create(new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com" ? Release() : Package())),
-            logger: logger, start: info => { directory = info.WorkingDirectory; created.TrySetResult(); return new Process(); });
+            logger: logger, start: info =>
+            {
+                directory = info.WorkingDirectory;
+                created.TrySetResult();
+                return new Process();
+            });
         await Start(service);
         await created.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -263,7 +335,15 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var service = Create(new Handler((request, _) => Task.FromResult(request.RequestUri!.Host == "api.github.com" ? Release() : Package())),
-            start: _ => { entered.TrySetResult(); if (errorCode != 0) throw new System.ComponentModel.Win32Exception(errorCode); return null; });
+            start: _ =>
+            {
+                entered.TrySetResult();
+                if (errorCode != 0)
+                {
+                    throw new System.ComponentModel.Win32Exception(errorCode);
+                }
+                return null;
+            });
         await Start(service);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -283,7 +363,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
             {
                 directory = info.WorkingDirectory;
                 entered.TrySetResult();
-                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("未解除启动握手");
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException("未解除启动握手");
+                }
                 return Process.GetCurrentProcess();
             });
         Task? stopping = null;
@@ -311,7 +394,14 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
             Assert.True(HasHandedOff(service));
             Assert.False(preparation.IsCancellationRequested);
         }
-        finally { release.Set(); if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.Set();
+            if (stopping is not null)
+            {
+                await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
     }
 
     [Theory]
@@ -330,7 +420,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
                 launches++;
                 entered.TrySetResult();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
-                if (errorCode != 0) throw new System.ComponentModel.Win32Exception(errorCode);
+                if (errorCode != 0)
+                {
+                    throw new System.ComponentModel.Win32Exception(errorCode);
+                }
                 return null;
             });
         var preparation = PreparationToken(service);
@@ -354,14 +447,20 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         finally
         {
             release.Set();
-            if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            if (stopping is not null)
+            {
+                await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         Assert.Equal(1, launches);
         Assert.Equal("Failed", service.GetInstallStatus().State);
         Assert.False(HasHandedOff(service));
         Assert.Empty(Directory.GetDirectories(TemporaryDirectory));
         var failure = Assert.Single(logger.Errors);
-        if (errorCode != 0) Assert.Equal(errorCode, Assert.IsType<System.ComponentModel.Win32Exception>(failure).NativeErrorCode);
+        if (errorCode != 0)
+        {
+            Assert.Equal(errorCode, Assert.IsType<System.ComponentModel.Win32Exception>(failure).NativeErrorCode);
+        }
     }
 
     private static CancellationToken PreparationToken(UpdateService service) =>
@@ -377,13 +476,31 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         var launches = 0;
         await using var service = Create(new Handler(async (request, token) =>
         {
-            if (request.RequestUri!.Host == "api.github.com") return Release();
-            if (Interlocked.Increment(ref downloads) == 1) return Package();
+            if (request.RequestUri!.Host == "api.github.com")
+            {
+                return Release();
+            }
+            if (Interlocked.Increment(ref downloads) == 1)
+            {
+                return Package();
+            }
             entered.TrySetResult();
-            try { await release.Task.WaitAsync(token); }
-            catch (OperationCanceledException) { cancelled.TrySetResult(); await release.Task; throw; }
+            try
+            {
+                await release.Task.WaitAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled.TrySetResult();
+                await release.Task;
+                throw;
+            }
             return Package();
-        }), start: _ => { launches++; return null; });
+        }), start: _ =>
+        {
+            launches++;
+            return null;
+        });
         Task? stopping = null;
         try
         {
@@ -412,7 +529,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var gate = typeof(UpdateService).GetField("installStatusGate", flags)!.GetValue(service)!;
-        lock (gate) return (bool)typeof(UpdateService).GetField("handedOff", flags)!.GetValue(service)!;
+        lock (gate)
+        {
+            return (bool)typeof(UpdateService).GetField("handedOff", flags)!.GetValue(service)!;
+        }
     }
 
     [Fact]
@@ -424,7 +544,10 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
         CancellationToken downloadToken = default;
         await using var service = Create(new Handler(async (request, token) =>
         {
-            if (request.RequestUri!.Host == "api.github.com") return Release();
+            if (request.RequestUri!.Host == "api.github.com")
+            {
+                return Release();
+            }
             downloadToken = token;
             entered.TrySetResult();
             await release.Task.WaitAsync(token);
@@ -441,24 +564,39 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
             await exited.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal("Restarting", service.GetInstallStatus().State);
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     private static void DisposeService(UpdateService service, bool asynchronous)
     {
-        if (asynchronous) service.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        else service.Dispose();
+        if (asynchronous)
+        {
+            service.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        else
+        {
+            service.Dispose();
+        }
     }
 
-    private UpdateService Create(Handler handler, IHostApplicationLifetime? lifetime = null, ILogger<UpdateService>? logger = null,
-        Func<ProcessStartInfo, Process?>? start = null, Action? exit = null)
+    private UpdateService Create(
+        Handler handler,
+        IHostApplicationLifetime? lifetime = null,
+        ILogger<UpdateService>? logger = null,
+        Func<ProcessStartInfo, Process?>? start = null,
+        Action? exit = null)
     {
         var application = Path.Combine(root, "app");
         Directory.CreateDirectory(application);
         Directory.CreateDirectory(TemporaryDirectory);
         File.WriteAllText(Path.Combine(application, "WinPilot.Updater.exe"), "test updater");
         return new(logger ?? NullLogger<UpdateService>.Instance, new HttpClient(handler), currentVersion: "1.0.0", lifetime: lifetime,
-            applicationDirectory: application, temporaryDirectory: TemporaryDirectory, startUpdater: start ?? (_ => Process.GetCurrentProcess()), requestExit: exit ?? (() => { }));
+            applicationDirectory: application, temporaryDirectory: TemporaryDirectory, startUpdater: start ?? (_ => Process.GetCurrentProcess()), requestExit: exit ?? (() =>
+            {
+            }));
     }
 
     private static async Task Start(UpdateService service, CancellationToken token = default)
@@ -469,58 +607,111 @@ public sealed class UpdateInstallationLifetimeTest : IDisposable
     }
 
     private HttpResponseMessage Package() => new(HttpStatusCode.OK) { Content = new ByteArrayContent(package) };
-    private HttpResponseMessage Release(string? hash = null) => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent(JsonSerializer.Serialize(new
-        {
-            tag_name = "v2.0.0", assets = new[] { new { name = "WinPilot-v2.0.0-win-x64.zip",
-                browser_download_url = "https://github.com/eatyon/WinPilot/releases/download/v2.0.0/WinPilot-v2.0.0-win-x64.zip",
-                digest = "sha256:" + (hash ?? Convert.ToHexString(SHA256.HashData(package))) } }
-        }))
-    };
 
-    public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    private HttpResponseMessage Release(string? hash = null) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                tag_name = "v2.0.0",
+                assets = new[] { new {
+                    name = "WinPilot-v2.0.0-win-x64.zip",
+                    browser_download_url = "https://github.com/eatyon/WinPilot/releases/download/v2.0.0/WinPilot-v2.0.0-win-x64.zip",
+                    digest = "sha256:" + (hash ?? Convert.ToHexString(SHA256.HashData(package)))
+} }
+            }))
+        };
+
+    public void Dispose()
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, true);
+        }
+    }
 
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
         internal int DisposeCount { get; private set; }
         internal bool Disposed { get; private set; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request, token);
-        protected override void Dispose(bool disposing) { DisposeCount++; Disposed = true; base.Dispose(disposing); }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
+            send(request, token);
+
+        protected override void Dispose(bool disposing)
+        {
+            DisposeCount++;
+            Disposed = true;
+            base.Dispose(disposing);
+        }
     }
-    private sealed class DownloadStream(TaskCompletionSource entered, TaskCompletionSource cancelled, TaskCompletionSource release) : MemoryStream
+
+    private sealed class DownloadStream(
+        TaskCompletionSource entered,
+        TaskCompletionSource cancelled,
+        TaskCompletionSource release) : MemoryStream
     {
         internal bool Disposed { get; private set; }
+
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
         {
             entered.TrySetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            catch (OperationCanceledException) { cancelled.TrySetResult(); await release.Task; throw; }
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled.TrySetResult();
+                await release.Task;
+                throw;
+            }
             return 0;
         }
-        protected override void Dispose(bool disposing) { Disposed = true; base.Dispose(disposing); }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
     }
+
     private sealed class Lifetime : IHostApplicationLifetime, IDisposable
     {
         private readonly CancellationTokenSource stopping = new();
+
         public CancellationToken ApplicationStarted => CancellationToken.None;
         public CancellationToken ApplicationStopping => stopping.Token;
         public CancellationToken ApplicationStopped => CancellationToken.None;
+
         public void StopApplication() => stopping.Cancel();
+
         public void Dispose() => stopping.Dispose();
     }
+
     private sealed class InstallationLogger : ILogger<UpdateService>
     {
         internal Action<string>? OnMessage { get; set; }
         internal System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
         internal System.Collections.Concurrent.ConcurrentQueue<Exception> Errors { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             var message = formatter(state, exception);
             Messages.Enqueue(message);
-            if (exception is not null) Errors.Enqueue(exception);
+            if (exception is not null)
+            {
+                Errors.Enqueue(exception);
+            }
             OnMessage?.Invoke(message);
         }
     }

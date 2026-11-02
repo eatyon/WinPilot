@@ -54,7 +54,12 @@ public sealed class UpdatePackageTest : IDisposable
     [InlineData("WinPilot/wwwroot/index.html")]
     public async Task MissingRequiredComponentRejectsPackage(string missing)
     {
-        var entries = new[] { "WinPilot/WinPilot.exe", "WinPilot/WinPilot.Updater.exe", "WinPilot/wwwroot/index.html", "WinPilot/wwwroot/assets/app.js" };
+        var entries = new[] {
+            "WinPilot/WinPilot.exe",
+            "WinPilot/WinPilot.Updater.exe",
+            "WinPilot/wwwroot/index.html",
+            "WinPilot/wwwroot/assets/app.js"
+};
         var (path, hash) = Package(entries.Where(entry => entry != missing));
         await Assert.ThrowsAsync<InvalidOperationException>(() => UpdatePackage.ExtractVerifiedAsync(path, hash, Path.Combine(root, "staging")));
     }
@@ -62,7 +67,12 @@ public sealed class UpdatePackageTest : IDisposable
     [Fact]
     public async Task VerifiedPackageReplacesExecutablesAndWebWhilePreservingUserFiles()
     {
-        var (path, hash) = Package(["WinPilot/WinPilot.exe", "WinPilot/WinPilot.Updater.exe", "WinPilot/wwwroot/index.html", "WinPilot/wwwroot/assets/app.js"]);
+        var (path, hash) = Package([
+            "WinPilot/WinPilot.exe",
+            "WinPilot/WinPilot.Updater.exe",
+            "WinPilot/wwwroot/index.html",
+            "WinPilot/wwwroot/assets/app.js"
+]);
         var packageRoot = await UpdatePackage.ExtractVerifiedAsync(path, hash.ToLowerInvariant(), Path.Combine(root, "staging"));
         var target = Path.Combine(root, "installed");
         Directory.CreateDirectory(Path.Combine(target, "wwwroot"));
@@ -75,7 +85,9 @@ public sealed class UpdatePackageTest : IDisposable
         UpdatePackage.ReplaceFiles(packageRoot, target);
         Assert.Equal("WinPilot/WinPilot.exe", File.ReadAllText(Path.Combine(target, "WinPilot.exe")));
         Assert.Equal("WinPilot/WinPilot.Updater.exe", File.ReadAllText(Path.Combine(target, "WinPilot.Updater.exe")));
-        Assert.Equal("WinPilot/wwwroot/assets/app.js", File.ReadAllText(Path.Combine(target, "wwwroot", "assets", "app.js")));
+        Assert.Equal(
+            "WinPilot/wwwroot/assets/app.js",
+            File.ReadAllText(Path.Combine(target, "wwwroot", "assets", "app.js")));
         Assert.False(File.Exists(Path.Combine(target, "wwwroot", "obsolete.js")));
         Assert.Equal("user-config", File.ReadAllText(Path.Combine(target, "User", "config.json")));
         Assert.Equal("plugin-config", File.ReadAllText(Path.Combine(target, "User", "Plugin", "sample", "config.json")));
@@ -94,7 +106,9 @@ public sealed class UpdatePackageTest : IDisposable
         File.WriteAllText(Path.Combine(target, "wwwroot", "index.html"), "old-web");
         File.WriteAllText(Path.Combine(target, "User", "config.json"), "user-config");
         using (var locked = new FileStream(Path.Combine(target, "WinPilot.Updater.exe"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
             Assert.Throws<IOException>(() => UpdatePackage.ReplaceFiles(packageRoot, target));
+        }
         Assert.Equal("old-main", File.ReadAllText(Path.Combine(target, "WinPilot.exe")));
         Assert.Equal("old-updater", File.ReadAllText(Path.Combine(target, "WinPilot.Updater.exe")));
         Assert.Equal("old-web", File.ReadAllText(Path.Combine(target, "wwwroot", "index.html")));
@@ -117,10 +131,12 @@ public sealed class UpdatePackageTest : IDisposable
     {
         var path = Path.Combine(root, "package.zip");
         using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
-        foreach (var name in names)
         {
-            using var writer = new StreamWriter(zip.CreateEntry(name).Open());
-            writer.Write(name);
+            foreach (var name in names)
+            {
+                using var writer = new StreamWriter(zip.CreateEntry(name).Open());
+                writer.Write(name);
+            }
         }
         return (path, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
     }

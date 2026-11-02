@@ -30,5 +30,6 @@ public sealed class SemanticVersionTest
     [InlineData("1.0.0+bad.")]
     [InlineData("1.0.0\n")]
     public void InvalidVersionsAreRejected(string value)
-        => Assert.False(SemanticVersion.TryParse(value, out _));
+        =>
+        Assert.False(SemanticVersion.TryParse(value, out _));
 }

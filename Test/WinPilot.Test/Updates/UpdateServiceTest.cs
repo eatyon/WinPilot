@@ -14,7 +14,12 @@ public sealed class UpdateServiceTest
     [InlineData(1, true, true, true, true)]
     [InlineData(1, false, true, true, false)]
     [InlineData(1, true, false, true, false)]
-    public async Task ReleaseVersionAndPackageDigestDetermineAvailability(int offset, bool package, bool digest, bool available, bool installable)
+    public async Task ReleaseVersionAndPackageDigestDetermineAvailability(
+        int offset,
+        bool package,
+        bool digest,
+        bool available,
+        bool installable)
     {
         var version = new Version(1 + offset, 0, 0);
         using var service = Create((_, _) => Task.FromResult(Release("v" + version, package, digest)));
@@ -33,9 +38,10 @@ public sealed class UpdateServiceTest
     public async Task InvalidReleaseAndHttpFailureAllowImmediateRetry(string content, int status)
     {
         var requests = 0;
-        using var service = Create((_, _) => Task.FromResult(++requests == 1
-            ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(content) }
-            : Release("v2.0.0", true, true)));
+        using var service = Create((_, _) =>
+            Task.FromResult(++requests == 1
+                ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(content) }
+                : Release("v2.0.0", true, true)));
         var result = await service.CheckAsync(CancellationToken.None);
         Assert.True(result.CheckFailed);
         Assert.False(result.CanInstall);
@@ -89,7 +95,10 @@ public sealed class UpdateServiceTest
         Assert.False(result.CanInstall);
         Assert.True(await service.TryStartInstallAsync(new("2.0.0", UpdateSource.GitHub, UpdateChannel.Stable), 0, CancellationToken.None));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (service.GetInstallStatus().State != "Failed") await Task.Delay(10, timeout.Token);
+        while (service.GetInstallStatus().State != "Failed")
+        {
+            await Task.Delay(10, timeout.Token);
+        }
         Assert.Equal(1, requests);
     }
 
@@ -97,7 +106,10 @@ public sealed class UpdateServiceTest
     [InlineData("1.0.0", UpdateSource.GitHub, UpdateChannel.Stable)]
     [InlineData("2.0.0", UpdateSource.Cnb, UpdateChannel.Stable)]
     [InlineData("2.0.0", UpdateSource.GitHub, UpdateChannel.Preview)]
-    public async Task ChangedInstallTargetIsRejectedWithoutStartingUpdate(string version, UpdateSource source, UpdateChannel channel)
+    public async Task ChangedInstallTargetIsRejectedWithoutStartingUpdate(
+        string version,
+        UpdateSource source,
+        UpdateChannel channel)
     {
         using var service = Create((_, _) => Task.FromResult(Release("v2.0.0", true, true)));
         await service.CheckAsync(CancellationToken.None);
@@ -140,17 +152,37 @@ public sealed class UpdateServiceTest
     }
 
     private static UpdateService Create(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
-        => new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), currentVersion: "1.0.0");
+        =>
+        new(NullLogger<UpdateService>.Instance, new HttpClient(new Handler(send)), currentVersion: "1.0.0");
 
     private static HttpResponseMessage Release(string tag, bool package, bool digest)
     {
         var assets = new List<object>();
-        if (package) assets.Add(new { name = $"WinPilot-{tag}-win-x64.zip", browser_download_url = $"https://github.com/eatyon/WinPilot/releases/download/{tag}/WinPilot-{tag}-win-x64.zip", digest = digest ? "sha256:" + new string('a', 64) : null });
-        return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { tag_name = tag, html_url = "https://github.com/eatyon/WinPilot/releases/" + tag, assets })) };
+        if (package)
+        {
+            assets.Add(new
+            {
+                name = $"WinPilot-{tag}-win-x64.zip",
+                browser_download_url = $"https://github.com/eatyon/WinPilot/releases/download/{tag}/WinPilot-{tag}-win-x64.zip",
+                digest = digest ? "sha256:" + new string('a', 64) : null
+            });
+        }
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                tag_name = tag,
+                html_url = "https://github.com/eatyon/WinPilot/releases/" + tag,
+                assets
+            }))
+        };
     }
 
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            send(request, cancellationToken);
     }
 }
