@@ -66,7 +66,6 @@ public sealed class TaskActionPersistence
     public bool? Silent { get; init; }
     public string? TagName { get; init; }
     public string? ProcessName { get; init; }
-    public bool? Force { get; init; }
     public bool? CurrentUserOnly { get; init; }
     public int? DelaySeconds { get; init; }
     public IReadOnlyList<string>? Keys { get; init; }
@@ -95,7 +94,7 @@ public sealed class TaskActionPersistence
             ContinueOnFailure = TrueOrNull(action.ContinueOnFailure)
         },
         TaskActionType.StartTag => new() { Type = action.Type.ToString(), TagName = action.TagName ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
-        TaskActionType.CloseProcess => new() { Type = action.Type.ToString(), ProcessName = action.ProcessName ?? "", Force = action.Force, CurrentUserOnly = TrueOrNull(action.CurrentUserOnly), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
+        TaskActionType.EndProcess => new() { Type = action.Type.ToString(), ProcessName = action.ProcessName ?? "", CurrentUserOnly = TrueOrNull(action.CurrentUserOnly), ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Delay => new() { Type = action.Type.ToString(), DelaySeconds = action.DelaySeconds, ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Keyboard => new() { Type = action.Type.ToString(), Keys = action.Keys?.ToArray() ?? [], ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
         TaskActionType.Shell => new() { Type = action.Type.ToString(), Shell = action.Shell ?? "", Command = action.Command ?? "", ContinueOnFailure = TrueOrNull(action.ContinueOnFailure) },
@@ -114,7 +113,6 @@ public sealed class TaskActionPersistence
         Silent ?? false,
         TagName,
         ProcessName,
-        Force ?? false,
         DelaySeconds ?? 0,
         Keys,
         Shell,

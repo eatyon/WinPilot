@@ -50,7 +50,13 @@ public sealed class ProgramEndpointTest
             using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             Assert.Equal(error, problem.RootElement.GetProperty("detail").GetString());
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -86,7 +92,13 @@ public sealed class ProgramEndpointTest
                 Assert.Equal(0, programs.Launches);
             }
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -114,7 +126,13 @@ public sealed class ProgramEndpointTest
             Assert.Equal(0, programs.Launches);
             Assert.Equal(content, File.ReadAllText(file));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -140,11 +158,19 @@ public sealed class ProgramEndpointTest
             Assert.Equal(HttpStatusCode.OK, edited.StatusCode);
             Assert.Equal(updated, new ProgramTagService(paths).Get("Renamed"));
             Assert.Equal(0, programs.Launches);
-            using var launched = await client.PostAsJsonAsync("/api/programs/launch", new ProgramLaunchRequest(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, false));
+            using var launched = await client.PostAsJsonAsync(
+                "/api/programs/launch",
+                new ProgramLaunchRequest(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, false));
             Assert.Equal(HttpStatusCode.NoContent, launched.StatusCode);
             Assert.Equal(1, programs.Launches);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -167,7 +193,9 @@ public sealed class ProgramEndpointTest
             {
                 Name = "Unavailable",
                 ProgramPath = kind == "file" ? Path.Combine(directory, "missing.exe") : program,
-                WorkingDirectory = kind == "file-as-directory" ? program : kind == "directory" ? Path.Combine(directory, "missing") : ""
+                WorkingDirectory = kind == "file-as-directory"
+                    ? program
+                    : kind == "directory" ? Path.Combine(directory, "missing") : ""
             };
             var programs = new WindowsProgramManager(NullLogger<WindowsProgramManager>.Instance);
             await using var app = await CreateTagTestApp(paths, programs);
@@ -183,7 +211,9 @@ public sealed class ProgramEndpointTest
                 Assert.Equal(originalContent, File.ReadAllText(originalFile));
                 Assert.Single(Directory.GetFiles(paths.TagsDirectory));
             }
-            using var launch = await client.PostAsJsonAsync("/api/programs/launch", new ProgramLaunchRequest(invalid.ProgramPath, "", invalid.WorkingDirectory, false));
+            using var launch = await client.PostAsJsonAsync(
+                "/api/programs/launch",
+                new ProgramLaunchRequest(invalid.ProgramPath, "", invalid.WorkingDirectory, false));
             Assert.Equal(HttpStatusCode.BadRequest, launch.StatusCode);
             using var launchProblem = JsonDocument.Parse(await launch.Content.ReadAsStringAsync());
             Assert.Equal(error, launchProblem.RootElement.GetProperty("detail").GetString());
@@ -194,7 +224,13 @@ public sealed class ProgramEndpointTest
             using var tagProblem = JsonDocument.Parse(await tagLaunch.Content.ReadAsStringAsync());
             Assert.Equal(error, tagProblem.RootElement.GetProperty("detail").GetString());
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -215,7 +251,10 @@ public sealed class ProgramEndpointTest
             await using var app = await CreateTagTestApp(paths, programs);
             using var client = app.GetTestClient();
             using var request = new HttpRequestMessage(new HttpMethod(method), "/api/programs/tags/Missing" + suffix);
-            if (method == "PUT") request.Content = JsonContent.Create(existing with { Name = "Missing" });
+            if (method == "PUT")
+            {
+                request.Content = JsonContent.Create(existing with { Name = "Missing" });
+            }
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
             Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
@@ -227,7 +266,13 @@ public sealed class ProgramEndpointTest
             Assert.Equal(original, File.ReadAllText(Path.Combine(paths.TagsDirectory, "Existing.json")));
             Assert.Equal(0, programs.Launches);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -259,9 +304,18 @@ public sealed class ProgramEndpointTest
             Assert.Equal("同名标签已存在", problem.RootElement.GetProperty("detail").GetString());
             Assert.Equal(tags, service.GetAll());
             Assert.Equal(files.Count, Directory.GetFiles(paths.TagsDirectory).Length);
-            foreach (var file in files) Assert.Equal(file.Value, File.ReadAllText(file.Key));
+            foreach (var file in files)
+            {
+                Assert.Equal(file.Value, File.ReadAllText(file.Key));
+            }
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -269,7 +323,10 @@ public sealed class ProgramEndpointTest
     [InlineData("PUT", true, "标签名称不能为空")]
     [InlineData("POST", false, "请输入程序路径")]
     [InlineData("PUT", false, "请输入程序路径")]
-    public async Task TagValidationErrorsRemain400BeforeResourceConflictChecks(string method, bool invalidName, string message)
+    public async Task TagValidationErrorsRemain400BeforeResourceConflictChecks(
+        string method,
+        bool invalidName,
+        string message)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Program.Endpoint.Test", Guid.NewGuid().ToString("N"));
         try
@@ -282,7 +339,12 @@ public sealed class ProgramEndpointTest
             using var client = app.GetTestClient();
             using var request = new HttpRequestMessage(new HttpMethod(method), method == "POST" ? "/api/programs/tags" : "/api/programs/tags/Existing")
             {
-                Content = JsonContent.Create(new ProgramTag(invalidName ? "" : "Existing", invalidName ? CreateProgramFile(directory, "app.exe") : "", "", "", false))
+                Content = JsonContent.Create(new ProgramTag(
+                    invalidName ? "" : "Existing",
+                    invalidName ? CreateProgramFile(directory, "app.exe") : "",
+                    "",
+                    "",
+                    false))
             };
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -292,7 +354,13 @@ public sealed class ProgramEndpointTest
             Assert.Equal(original, File.ReadAllText(Path.Combine(paths.TagsDirectory, "Existing.json")));
             Assert.Single(service.GetAll());
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -320,7 +388,10 @@ public sealed class ProgramEndpointTest
             await using var app = await CreateTagTestApp(paths, programs);
             using var client = app.GetTestClient();
             using var request = new HttpRequestMessage(HttpMethod.Post, fromTag ? "/api/programs/tags/Existing/launch" : "/api/programs/launch");
-            if (!fromTag) request.Content = JsonContent.Create(new ProgramLaunchRequest(CreateProgramFile(directory, "app.exe"), "", "", false));
+            if (!fromTag)
+            {
+                request.Content = JsonContent.Create(new ProgramLaunchRequest(CreateProgramFile(directory, "app.exe"), "", "", false));
+            }
             using var response = await client.SendAsync(request);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -329,7 +400,13 @@ public sealed class ProgramEndpointTest
             Assert.Equal("Existing", Assert.Single(service.GetAll()).Name);
             Assert.Equal(0, programs.Launches);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -360,7 +437,13 @@ public sealed class ProgramEndpointTest
             Assert.Empty(await deleted.Content.ReadAsByteArrayAsync());
             Assert.Empty((await client.GetFromJsonAsync<ProgramTag[]>("/api/programs/tags"))!);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -374,34 +457,65 @@ public sealed class ProgramEndpointTest
         {
             var paths = PortableDataPaths.Create(directory);
             if (outcome != "missing")
+            {
                 new ProgramTagService(paths).Create(new("TestTag", CreateProgramFile(directory, "app.exe"), "--private-value", "", false));
+            }
             var programs = new ProgramManager { LaunchFailure = outcome == "failure" ? new InvalidOperationException("启动失败") : null };
             using var logs = new RollingFileLoggerProvider(paths.LogsDirectory);
             await using var app = await CreateTagTestApp(paths, programs, logs);
             using var client = app.GetTestClient();
             using var response = await client.PostAsync("/api/programs/tags/TestTag/launch", null);
-            Assert.Equal(outcome switch { "success" => HttpStatusCode.NoContent, "failure" => HttpStatusCode.BadRequest, _ => HttpStatusCode.NotFound }, response.StatusCode);
+            Assert.Equal(
+                outcome switch { "success" => HttpStatusCode.NoContent, "failure" => HttpStatusCode.BadRequest, _ => HttpStatusCode.NotFound },
+                response.StatusCode);
             logs.Dispose();
-            var text = string.Join(Environment.NewLine, Directory.EnumerateFiles(paths.LogsDirectory, "*.log").Select(File.ReadAllText));
+            var text = string.Join(
+                Environment.NewLine,
+                Directory.EnumerateFiles(paths.LogsDirectory, "*.log").Select(File.ReadAllText));
             Assert.Equal(outcome == "success" ? 1 : 0, text.Split("已请求启动标签：TestTag").Length - 1);
             Assert.DoesNotContain("--private-value", text);
             if (outcome == "success")
-                Assert.Contains($"[INF] {typeof(ProgramEndpointRouteBuilderExtensions).FullName}{Environment.NewLine}已请求启动标签：TestTag", text);
+            {
+                Assert.Contains(
+                    $"[INF] {typeof(ProgramEndpointRouteBuilderExtensions).FullName}{Environment.NewLine}已请求启动标签：TestTag",
+                    text);
+            }
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
-    private static async Task<WebApplication> CreateTagTestApp(PortableDataPaths paths, IProgramManager programs, ILoggerProvider? logs = null)
+    private static async Task<WebApplication> CreateTagTestApp(
+        PortableDataPaths paths,
+        IProgramManager programs,
+        ILoggerProvider? logs = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        if (logs is not null) builder.Logging.AddProvider(logs);
+        if (logs is not null)
+        {
+            builder.Logging.AddProvider(logs);
+        }
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<IProgramManager>(programs);
         builder.Services.AddSingleton<ProgramTagService>();
         var app = builder.Build();
-        try { app.MapProgramEndpoints(); await app.StartAsync(); return app; }
-        catch { await app.DisposeAsync(); throw; }
+        try
+        {
+            app.MapProgramEndpoints();
+            await app.StartAsync();
+            return app;
+        }
+        catch
+        {
+            await app.DisposeAsync();
+            throw;
+        }
     }
 
     [Fact]
@@ -438,28 +552,49 @@ public sealed class ProgramEndpointTest
 
             safeMode.SetEnabled(true);
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/programs/tags")).StatusCode);
-            Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/programs/tags/test/launch", null)).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.NoContent,
+                (await client.PostAsync("/api/programs/tags/test/launch", null)).StatusCode);
             Assert.Equal(1, manager.Launches);
             Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/programs/users")).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/programs/tags", tag)).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync("/api/programs/tags/test", tag)).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await client.DeleteAsync("/api/programs/tags/test")).StatusCode);
-            Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/programs/launch", new ProgramLaunchRequest(CreateProgramFile(directory, "test.exe"), "", "", false))).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Forbidden,
+                (await client.PostAsJsonAsync(
+                    "/api/programs/launch",
+                    new ProgramLaunchRequest(CreateProgramFile(directory, "test.exe"), "", "", false))).StatusCode);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     private sealed class ProgramManager : IProgramManager
     {
         public int Launches { get; private set; }
         public Exception? LaunchFailure { get; init; }
+
         public IReadOnlyList<InteractiveUser> GetInteractiveUsers() => [new("User", true)];
+
         public IReadOnlyList<RunningProgram> GetRunningPrograms(string userName) => [];
-        public ProgramUsage GetUsage(IReadOnlyList<int> processIds, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public void Close(IReadOnlyList<int> processIds, bool force) => throw new NotSupportedException();
+
+        public ProgramUsage GetUsage(IReadOnlyList<int> processIds, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public void Close(IReadOnlyList<int> processIds, bool isGroup) => throw new NotSupportedException();
+
         public void Launch(ProgramLaunchRequest request)
         {
-            if (LaunchFailure is not null) throw LaunchFailure;
+            if (LaunchFailure is not null)
+            {
+                throw LaunchFailure;
+            }
             Launches++;
         }
     }

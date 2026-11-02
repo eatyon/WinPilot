@@ -45,7 +45,7 @@ export type Action = {
   type:
     | 'StartProgram'
     | 'StartTag'
-    | 'CloseProcess'
+    | 'EndProcess'
     | 'Delay'
     | 'Keyboard'
     | 'Shell'
@@ -59,7 +59,6 @@ export type Action = {
   silent: boolean;
   tagName: string;
   processName: string;
-  force: boolean;
   currentUserOnly: boolean;
   delaySeconds: number | '';
   keys: string[];
@@ -86,9 +85,9 @@ export type ListedTask = Task & { cronAvailable?: boolean; keyboardAvailable?: b
 export type ActionOption = { value: string; label: string };
 
 export const actionOptions = [
-  ['StartProgram', '启动'],
+  ['StartProgram', '启动程序'],
   ['StartTag', '快捷标签'],
-  ['CloseProcess', '关闭进程'],
+  ['EndProcess', '结束进程'],
   ['Delay', '延迟'],
   ['Shell', 'Shell'],
   ['Keyboard', '按键模拟'],
@@ -122,7 +121,6 @@ export const createAction = (): Action => ({
   silent: false,
   tagName: '',
   processName: '',
-  force: false,
   currentUserOnly: false,
   delaySeconds: 5,
   keys: [],
@@ -150,7 +148,7 @@ export function parameterDefaults(parameters: ParameterDefinition[] = []) {
 const actionFields: Record<Action['type'], readonly (keyof Action)[]> = {
   StartProgram: ['programPath', 'arguments', 'workingDirectory', 'runElevated', 'silent'],
   StartTag: ['tagName'],
-  CloseProcess: ['processName', 'force', 'currentUserOnly'],
+  EndProcess: ['processName', 'currentUserOnly'],
   Delay: ['delaySeconds'],
   Keyboard: ['keys'],
   Shell: ['shell', 'command'],

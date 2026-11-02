@@ -2,10 +2,17 @@ using System.Management;
 
 namespace WinPilot.Windows;
 
-public enum WindowsProcessEventType { Started, Exited }
+public enum WindowsProcessEventType
+{
+    Started,
+    Exited
+}
 
 public sealed record WindowsProcessEvent(WindowsProcessEventType Type, int ProcessId, string ProcessName);
 
+/// <summary>
+/// 通过 WMI 监听进程启动与退出，统一发布不含扩展名的进程名称，停止时释放两类监听器。
+/// </summary>
 public sealed class WindowsProcessEventListener(ILogger<WindowsProcessEventListener> logger) : IDisposable
 {
     private readonly object gate = new();
@@ -18,7 +25,10 @@ public sealed class WindowsProcessEventListener(ILogger<WindowsProcessEventListe
     {
         lock (gate)
         {
-            if (startedWatcher is not null) return true;
+            if (startedWatcher is not null)
+            {
+                return true;
+            }
             try
             {
                 startedWatcher = CreateWatcher("Win32_ProcessStartTrace", WindowsProcessEventType.Started);
@@ -38,7 +48,10 @@ public sealed class WindowsProcessEventListener(ILogger<WindowsProcessEventListe
 
     public void Stop()
     {
-        lock (gate) StopCore();
+        lock (gate)
+        {
+            StopCore();
+        }
     }
 
     public void Dispose()
@@ -81,8 +94,17 @@ public sealed class WindowsProcessEventListener(ILogger<WindowsProcessEventListe
 
     private static void DisposeWatcher(ref ManagementEventWatcher? watcher)
     {
-        if (watcher is null) return;
-        try { watcher.Stop(); } catch { }
+        if (watcher is null)
+        {
+            return;
+        }
+        try
+        {
+            watcher.Stop();
+        }
+        catch
+        {
+        }
         watcher.Dispose();
         watcher = null;
     }

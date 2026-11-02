@@ -5,29 +5,57 @@ using WinPilot.Core.Programs;
 
 namespace WinPilot.Features.Programs;
 
+/// <summary>
+/// 按独立 JSON 文件管理快捷标签，新增和编辑时校验启动目标，重命名保存失败时恢复原文件名。
+/// </summary>
 public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTagService>? logger = null)
 {
     private readonly object gate = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9"
     };
 
     public IReadOnlyList<ProgramTag> GetAll()
     {
         lock (gate)
         {
-            if (!Directory.Exists(paths.TagsDirectory)) return [];
-
+            if (!Directory.Exists(paths.TagsDirectory))
+            {
+                return [];
+            }
             var tags = new Dictionary<string, ProgramTag>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in Directory.EnumerateFiles(paths.TagsDirectory, "*.json"))
             {
                 try
                 {
                     var tag = Read(file);
-                    if (!tags.TryAdd(tag.Name, tag)) throw new InvalidDataException("标签名称重复");
+                    if (!tags.TryAdd(tag.Name, tag))
+                    {
+                        throw new InvalidDataException("标签名称重复");
+                    }
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
                 {
@@ -43,7 +71,10 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
         lock (gate)
         {
             var file = GetTagFilePath(name);
-            if (!File.Exists(file)) throw new FileNotFoundException("标签不存在");
+            if (!File.Exists(file))
+            {
+                throw new FileNotFoundException("标签不存在");
+            }
             return Read(file);
         }
     }
@@ -55,8 +86,10 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
             ValidateName(tag.Name);
             ProgramLaunchValidator.Validate(tag.ProgramPath, tag.WorkingDirectory);
             var file = GetTagFilePath(tag.Name);
-            if (File.Exists(file)) throw new ResourceNameConflictException("同名标签已存在");
-
+            if (File.Exists(file))
+            {
+                throw new ResourceNameConflictException("同名标签已存在");
+            }
             Directory.CreateDirectory(paths.TagsDirectory);
             Write(file, tag, false);
         }
@@ -69,8 +102,10 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
             ValidateName(tag.Name);
             ProgramLaunchValidator.Validate(tag.ProgramPath, tag.WorkingDirectory);
             var originalFile = GetTagFilePath(originalName);
-            if (!File.Exists(originalFile)) throw new FileNotFoundException("标签不存在");
-
+            if (!File.Exists(originalFile))
+            {
+                throw new FileNotFoundException("标签不存在");
+            }
             var nextFile = GetTagFilePath(tag.Name);
             if (!string.Equals(originalFile, nextFile, StringComparison.OrdinalIgnoreCase) && File.Exists(nextFile))
             {
@@ -95,7 +130,10 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
         lock (gate)
         {
             var file = GetTagFilePath(name);
-            if (!File.Exists(file)) throw new FileNotFoundException("标签不存在");
+            if (!File.Exists(file))
+            {
+                throw new FileNotFoundException("标签不存在");
+            }
             File.Delete(file);
         }
     }
@@ -108,7 +146,9 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
                 ?? throw new InvalidDataException("标签文件内容无效");
             ValidateStoredTag(tag);
             if (!string.Equals(Path.GetFileNameWithoutExtension(file), tag.Name, StringComparison.OrdinalIgnoreCase))
+            {
                 throw new InvalidDataException("标签名称与文件名不一致");
+            }
             return tag;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)
@@ -124,7 +164,13 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
         {
             File.WriteAllText(temporaryFile, JsonSerializer.Serialize(tag, JsonOptions));
             File.Move(temporaryFile, file, overwrite);
-        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
+        }, () =>
+        {
+            if (File.Exists(temporaryFile))
+            {
+                File.Delete(temporaryFile);
+            }
+        });
     }
 
     private string GetTagFilePath(string name)
@@ -136,13 +182,22 @@ public sealed class ProgramTagService(PortableDataPaths paths, ILogger<ProgramTa
     private static void ValidateStoredTag(ProgramTag tag)
     {
         ValidateName(tag.Name);
-        if (string.IsNullOrWhiteSpace(tag.ProgramPath)) throw new InvalidOperationException("请输入程序路径");
+        if (string.IsNullOrWhiteSpace(tag.ProgramPath))
+        {
+            throw new InvalidOperationException("请输入程序路径");
+        }
     }
 
     private static void ValidateName(string? name)
     {
-        if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("标签名称不能为空");
-        if (name is "." or "..") throw new InvalidOperationException("标签名称不能使用 . 或 ..");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new InvalidOperationException("标签名称不能为空");
+        }
+        if (name is "." or "..")
+        {
+            throw new InvalidOperationException("标签名称不能使用 . 或 ..");
+        }
         if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
         {
             throw new InvalidOperationException("标签名称包含 Windows 文件名不支持的字符");

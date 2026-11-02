@@ -96,7 +96,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
         internal TaskCompletionSource Launched { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal IReadOnlyList<RunningProgram> RunningPrograms { get; set; } = [];
         internal string? QueriedUserName { get; private set; }
-        internal TaskCompletionSource<(IReadOnlyList<int> Ids, bool Force)> Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<(IReadOnlyList<int> Ids, bool IsGroup)> Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Launch(ProgramLaunchRequest request)
         {
             BeforeLaunch?.Invoke(request);
@@ -112,7 +112,7 @@ internal sealed class TaskServiceFixture : IAsyncDisposable
             return RunningPrograms.Where(program => string.Equals(program.UserName, userName, StringComparison.OrdinalIgnoreCase)).ToArray();
         }
         public ProgramUsage GetUsage(IReadOnlyList<int> ids, CancellationToken token) => throw new NotSupportedException();
-        public void Close(IReadOnlyList<int> ids, bool force) => Closed.TrySetResult((ids, force));
+        public void Close(IReadOnlyList<int> ids, bool isGroup) => Closed.TrySetResult((ids, isGroup));
     }
     private sealed class Keyboard : IKeyboardInputSimulator
     {

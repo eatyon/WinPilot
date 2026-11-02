@@ -82,7 +82,7 @@ test('program action exposes launch checkboxes with the existing process options
 test('each action payload excludes fields belonging to other action types', () => {
   const fields = {
     StartProgram: ['programPath', 'arguments', 'workingDirectory', 'runElevated', 'silent'],
-    StartTag: ['tagName'], CloseProcess: ['processName', 'force', 'currentUserOnly'],
+    StartTag: ['tagName'], EndProcess: ['processName', 'currentUserOnly'],
     Delay: ['delaySeconds'], Keyboard: ['keys'], Shell: ['shell', 'command'],
     SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
     TaskState: ['taskName', 'state'], Extension: ['pluginId', 'actionId', 'parameters'],

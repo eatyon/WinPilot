@@ -216,16 +216,12 @@ const actionDefinition = computed(() => actionDefinitions.value.find(item => ite
       <AppSelect v-model="action.state" :invalid="invalidField === 'state'" :options="taskStateOptions" />
     </label>
   </template>
-  <template v-else-if="action.type === 'CloseProcess'">
+  <template v-else-if="action.type === 'EndProcess'">
     <label class="field-control" data-task-field="processName">
       <span>进程名 *</span>
       <input v-model="action.processName" placeholder="请输入进程名" :aria-invalid="invalidField === 'processName' || undefined" />
     </label>
     <div class="task-process-options">
-      <label class="toggle-control">
-        <input v-model="action.force" type="checkbox" />
-        <span>强制关闭</span>
-      </label>
       <label class="toggle-control">
         <input v-model="action.currentUserOnly" type="checkbox" />
         <span>当前用户</span>

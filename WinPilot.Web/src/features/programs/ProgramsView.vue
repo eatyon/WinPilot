@@ -13,6 +13,12 @@ interface RunningProgram {
   name: string;
   userName: string;
   sessionId: number;
+  displayName: string;
+  groupId: string;
+  groupName: string;
+  groupProcessName: string;
+  windowTitles: string[];
+  canEnd: boolean;
 }
 interface InteractiveUser {
   userName: string;
@@ -34,13 +40,17 @@ interface ProgramTag {
   silent: boolean;
 }
 interface ProgramGroup {
+  id: string;
   name: string;
+  processName: string;
   processes: RunningProgram[];
 }
 interface ProcessTarget {
   name: string;
+  processName: string;
   processIds: number[];
   singleProcess?: RunningProgram;
+  canEnd: boolean;
 }
 
 const programs = ref<RunningProgram[]>([]);
@@ -90,20 +100,22 @@ let tagsController: AbortController | undefined;
 let usageController: AbortController | undefined;
 
 const groups = computed<ProgramGroup[]>(() => {
-  const grouped = new Map<string, RunningProgram[]>();
+  const grouped = new Map<string, ProgramGroup>();
   for (const process of programs.value) {
-    const group = grouped.get(process.name);
-    if (group) group.push(process);
-    else grouped.set(process.name, [process]);
+    const group = grouped.get(process.groupId);
+    if (group) group.processes.push(process);
+    else grouped.set(process.groupId, { id: process.groupId, name: process.groupName, processName: process.groupProcessName, processes: [process] });
   }
-  return [...grouped.entries()]
-    .map(([name, processes]) => ({ name, processes }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+  return [...grouped.values()]
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 });
 const filteredGroups = computed(() => {
   const keyword = programSearch.value.trim().toLocaleLowerCase();
   return keyword
-    ? groups.value.filter((group) => group.name.toLocaleLowerCase().includes(keyword))
+    ? groups.value.filter((group) => group.name.toLocaleLowerCase().includes(keyword)
+      || group.processes.some((process) => process.name.toLocaleLowerCase().includes(keyword)
+        || process.displayName.toLocaleLowerCase().includes(keyword)
+        || process.windowTitles.some((title) => title.toLocaleLowerCase().includes(keyword))))
     : groups.value;
 });
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredGroups.value.length / pageSize.value)));
@@ -112,7 +124,7 @@ const pagedGroups = computed(() =>
 );
 const resultSummary = computed(() =>
   programSearch.value.trim()
-    ? `查询：${programs.value.length} 个进程 · 结果：${filteredGroups.value.length} 个进程组`
+    ? `搜索：${filteredGroups.value.reduce((total, group) => total + group.processes.length, 0)} 个进程 · ${filteredGroups.value.length} 个进程组`
     : `查询：${programs.value.length} 个进程 · ${groups.value.length} 个进程组`,
 );
 const filteredTags = computed(() => {
@@ -122,6 +134,9 @@ const filteredTags = computed(() => {
 
 watch([programSearch, pageSize], () => {
   currentPage.value = 1;
+});
+watch([currentPage, pageSize], () => {
+  expandedGroups.value = [];
 });
 watch(pageCount, (count) => {
   if (currentPage.value > count) currentPage.value = count;
@@ -187,10 +202,26 @@ async function performAction(key: ProgramAction, url: string, init: RequestInit,
   }
 }
 function targetForGroup(group: ProgramGroup): ProcessTarget {
-  return { name: group.name, processIds: group.processes.map((process) => process.processId) };
+  return {
+    name: group.name,
+    processName: group.processName,
+    processIds: group.processes.map((process) => process.processId),
+    singleProcess: group.processes.length === 1 ? group.processes[0] : undefined,
+    canEnd: group.processes.every(process => process.canEnd),
+  };
+}
+function groupDetailCount(group: ProgramGroup) {
+  const processRows = group.processes.length > 1 ? group.processes.length : 0;
+  return processRows + group.processes.reduce((total, process) => total + process.windowTitles.length, 0);
 }
 function targetForProcess(process: RunningProgram): ProcessTarget {
-  return { name: process.name, processIds: [process.processId], singleProcess: process };
+  return {
+    name: process.displayName,
+    processName: process.name,
+    processIds: [process.processId],
+    singleProcess: process,
+    canEnd: process.canEnd,
+  };
 }
 
 async function loadTags() {
@@ -203,6 +234,7 @@ async function loadTags() {
     const nextTags = (await response.json()) as ProgramTag[];
     if (isPageActive && tagsController === controller) {
       tags.value = nextTags;
+      if (!nextTags.length) managingTags.value = false;
       tagsLoaded.value = true;
     }
   } catch (error) {
@@ -321,21 +353,22 @@ function closeUsage() {
   processUsage.value = undefined;
   isUsageLoading.value = false;
 }
-async function confirmClose(force: boolean) {
-  if (safeModeEnabled.value || !processCloseTarget.value || isClosing.value) return;
+async function confirmClose() {
+  if (safeModeEnabled.value || !processCloseTarget.value?.canEnd || isClosing.value) return;
   const target = processCloseTarget.value;
   pageError.value = '';
+  const isGroup = !target.singleProcess;
   await performAction('close', '/api/programs/close', {
-    method: 'POST', body: JSON.stringify({ processIds: target.processIds, force }),
+    method: 'POST', body: JSON.stringify({ processIds: target.processIds, isGroup }),
   }, async () => {
     if (processCloseTarget.value === target) processCloseTarget.value = undefined;
     closeUsage();
-    processMessage.value = force ? `已强制关闭 ${target.name}` : `已关闭 ${target.name}`;
+    processMessage.value = `已结束 ${target.name}`;
     showToast(processMessage.value, 'success');
     await queryPrograms();
   }, error => {
     setListError(error);
-    showToast(userErrorMessage(error, '关闭进程失败，请稍后重试'));
+    showToast(userErrorMessage(error, '结束进程失败，请稍后重试'));
   });
 }
 function launchPayload() {
@@ -427,7 +460,7 @@ async function confirmDeleteTag() {
     if (tagDeleteTarget.value === tag) tagDeleteTarget.value = undefined;
     if (editingTagName.value === tag.name) editingTagName.value = undefined;
     await loadTags();
-    if (isPageActive) showToast(`已删除标签 ${tag.name}`, 'success');
+    if (isPageActive) showToast('标签已删除', 'success');
   }, error => {
     setListError(error);
     showToast(userErrorMessage(error, '删除标签失败，请稍后重试'));
@@ -480,11 +513,12 @@ function formatMemory(bytes: number) {
           </label>
           <button
             class="button button-primary"
+            :class="{ 'is-pending': isQuerying }"
             type="button"
             :disabled="safeModeEnabled || isQuerying || !selectedUserName"
             @click="queryPrograms"
           >
-            {{ isQuerying ? '查询中…' : '查询' }}
+            {{ isQuerying ? '查询中' : '查询' }}
           </button>
           <button v-if="hasQueried" class="button button-secondary" type="button" @click="collapsePrograms">
             收起
@@ -499,20 +533,21 @@ function formatMemory(bytes: number) {
         </div>
         <p class="program-result-summary">{{ resultSummary }}</p>
         <div v-if="pagedGroups.length" class="program-list">
-          <article v-for="group in pagedGroups" :key="group.name" class="program-group">
-            <div class="program-row">
-              <span class="program-name">
-                {{ group.name }}
+          <article v-for="group in pagedGroups" :key="group.id" class="program-group">
+            <div class="program-row" :class="{ 'is-sticky': isExpanded(group.id) }">
+              <span class="program-name program-identity">
+                <span>{{ group.name }}</span>
+                <small v-if="group.processName !== group.name">{{ group.processName }}</small>
               </span>
               <button
-                v-if="group.processes.length > 1"
+                v-if="groupDetailCount(group) > 0"
                 type="button"
                 class="process-count"
-                :aria-expanded="isExpanded(group.name)"
-                :aria-label="`${group.name} 共 ${group.processes.length} 个进程`"
-                @click="toggleGroup(group.name)"
+                :aria-expanded="isExpanded(group.id)"
+                :aria-label="`${group.name} 共 ${groupDetailCount(group)} 项，${isExpanded(group.id) ? '收起详情' : '展开查看'}`"
+                @click="toggleGroup(group.id)"
               >
-                {{ group.processes.length }}
+                {{ groupDetailCount(group) }}
               </button>
               <button
                 class="button button-secondary"
@@ -522,18 +557,29 @@ function formatMemory(bytes: number) {
                 查看
               </button>
             </div>
-            <div v-if="isExpanded(group.name)" class="process-children">
-              <div v-for="process in group.processes" :key="process.processId" class="process-child">
-                <span class="process-detail">
-                  <span>PID {{ process.processId }}</span>
-                </span>
-                <button
-                  class="button button-secondary"
-                  type="button"
-                  @click="showUsage(targetForProcess(process))"
-                >
-                  查看
-                </button>
+            <div v-if="isExpanded(group.id)" class="process-children">
+              <div v-for="process in group.processes" :key="process.processId" class="process-entry">
+                <div v-if="group.processes.length > 1" class="process-child">
+                  <span class="process-detail program-identity">
+                    <span>{{ process.displayName }}</span>
+                    <small v-if="process.name !== process.displayName">{{ process.name }}</small>
+                  </span>
+                  <button
+                    class="button button-secondary"
+                    type="button"
+                    @click="showUsage(targetForProcess(process))"
+                  >
+                    查看
+                  </button>
+                </div>
+                <ul v-if="process.windowTitles.length" class="process-windows" :aria-label="`${process.displayName} 的窗口`">
+                  <li v-for="(title, index) in process.windowTitles" :key="index" class="process-child">
+                    <span class="process-detail program-identity">
+                      <span>{{ title }}</span>
+                      <small>窗口</small>
+                    </span>
+                  </li>
+                </ul>
               </div>
             </div>
           </article>
@@ -622,17 +668,17 @@ function formatMemory(bytes: number) {
         <p v-if="launchFormError" class="launch-error" role="alert">{{ launchFormError }}</p>
         <p v-else-if="launchFormMessage" class="launch-result success" role="status">{{ launchFormMessage }}</p>
         <div class="launch-actions">
-          <button v-if="editingTagName" class="button button-primary" type="submit" :disabled="safeModeEnabled || pendingActions.has('save-tag')">
-            {{ pendingActions.has('save-tag') ? '正在保存…' : '保存标签' }}
+          <button v-if="editingTagName" class="button button-primary" :class="{ 'is-pending': pendingActions.has('save-tag') }" type="submit" :disabled="safeModeEnabled || pendingActions.has('save-tag')">
+            {{ pendingActions.has('save-tag') ? '正在保存' : '保存标签' }}
           </button>
-          <button v-else class="button button-primary" type="submit" :disabled="safeModeEnabled || isLaunching">
-            {{ isLaunching ? '正在启动…' : '启动程序' }}
+          <button v-else class="button button-primary" :class="{ 'is-pending': isLaunching }" type="submit" :disabled="safeModeEnabled || isLaunching">
+            {{ isLaunching ? '正在启动' : '启动程序' }}
           </button>
           <button v-if="editingTagName" class="button button-secondary" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="cancelTagEdit">
             取消编辑
           </button>
-          <button v-else class="button button-secondary" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="saveTag">
-            创建标签
+          <button v-else class="button button-secondary" :class="{ 'is-pending': pendingActions.has('save-tag') }" type="button" :disabled="safeModeEnabled || pendingActions.has('save-tag')" @click="saveTag">
+            {{ pendingActions.has('save-tag') ? '正在创建' : '创建标签' }}
           </button>
         </div>
       </form>
@@ -643,15 +689,15 @@ function formatMemory(bytes: number) {
           <h2>快捷标签</h2>
           <p>快捷启动保存的标签</p>
         </div>
-        <div v-if="tags.length" class="tag-controls">
+        <div class="tag-controls">
           <label class="tag-search">
-            <input v-model="tagSearch" type="search" aria-label="搜索标签名" placeholder="搜索标签名" />
+            <input v-model="tagSearch" type="search" aria-label="搜索标签名" placeholder="搜索标签名" :disabled="!tags.length" />
           </label>
           <button
             class="button button-secondary"
             :class="{ 'safe-mode-button': safeModeEnabled }"
             type="button"
-            :disabled="safeModeEnabled"
+            :disabled="safeModeEnabled || !tags.length"
             :title="safeModeEnabled ? safeModeMessage : undefined"
             :aria-pressed="managingTags"
             @click="toggleTagManagement"
@@ -682,6 +728,7 @@ function formatMemory(bytes: number) {
     <AppModal v-if="processUsageTarget" title="进程占用情况" @close="closeUsage">
       <p class="modal-program-name">
         {{ processUsageTarget.name }}
+        <small v-if="processUsageTarget.processName !== processUsageTarget.name">{{ processUsageTarget.processName }}</small>
         <small v-if="processUsageTarget.singleProcess">PID {{ processUsageTarget.singleProcess.processId }}</small>
       </p>
       <dl class="usage-grid">
@@ -703,24 +750,26 @@ function formatMemory(bytes: number) {
       <template #actions>
         <button
           class="button button-primary"
+          :class="{ 'is-pending': isUsageLoading }"
           type="button"
           :disabled="isUsageLoading"
           @click="refreshUsage"
         >
-          {{ isUsageLoading ? '正在刷新…' : '刷新' }}
+          {{ isUsageLoading ? '正在刷新' : '刷新' }}
         </button>
-        <button class="button button-danger" type="button" @click="processCloseTarget = processUsageTarget">
-          关闭进程
+        <button class="button button-danger program-end-button" type="button" :disabled="!processUsageTarget.canEnd" @click="processCloseTarget = processUsageTarget">
+          {{ processUsageTarget.singleProcess ? '结束进程' : '结束任务' }}
         </button>
       </template>
     </AppModal>
-    <AppModal v-if="processCloseTarget" title="确认关闭进程" :dismissible="!isClosing" @close="processCloseTarget = undefined">
+    <AppModal v-if="processCloseTarget" :title="processCloseTarget.singleProcess ? '确认结束进程' : '确认结束任务'" :dismissible="!isClosing" @close="processCloseTarget = undefined">
       <p class="modal-program-name">
         {{ processCloseTarget.name }}
+        <small v-if="processCloseTarget.processName !== processCloseTarget.name">{{ processCloseTarget.processName }}</small>
         <small v-if="processCloseTarget.singleProcess">PID：{{ processCloseTarget.singleProcess.processId }}</small>
         <small v-else>共 {{ processCloseTarget.processIds.length }} 个进程</small>
       </p>
-      <p>“关闭进程”会请求进程正常退出，“强制关闭”会立即结束进程</p>
+      <p>{{ processCloseTarget.singleProcess ? '将直接结束该进程，未保存的数据可能丢失' : '将请求关闭窗口并结束组内全部进程，未保存的数据可能丢失' }}</p>
       <template #actions>
         <button
           class="button button-secondary"
@@ -731,15 +780,13 @@ function formatMemory(bytes: number) {
           取消
         </button>
         <button
-          class="button button-danger"
+          class="button button-danger program-end-button"
+          :class="{ 'is-pending': isClosing }"
           type="button"
-          :disabled="isClosing"
-          @click="confirmClose(false)"
+          :disabled="isClosing || !processCloseTarget.canEnd"
+          @click="confirmClose"
         >
-          {{ isClosing ? '正在关闭…' : '关闭进程' }}
-        </button>
-        <button class="button button-danger" type="button" :disabled="isClosing" @click="confirmClose(true)">
-          强制关闭
+          {{ isClosing ? '正在结束' : '确认结束' }}
         </button>
       </template>
     </AppModal>
@@ -747,7 +794,7 @@ function formatMemory(bytes: number) {
       <p>确认删除标签“{{ tagDeleteTarget.name }}”吗？</p>
       <template #actions>
         <button class="button button-secondary" type="button" :disabled="pendingActions.has('delete-tag')" @click="tagDeleteTarget = undefined">取消</button>
-        <button class="button button-danger" type="button" :disabled="pendingActions.has('delete-tag')" @click="confirmDeleteTag">删除</button>
+        <button class="button button-danger" :class="{ 'is-pending': pendingActions.has('delete-tag') }" type="button" :disabled="pendingActions.has('delete-tag')" @click="confirmDeleteTag">{{ pendingActions.has('delete-tag') ? '正在删除' : '删除' }}</button>
       </template>
     </AppModal>
     <AppModal v-if="tagLaunchTarget" title="确认启动标签" @close="tagLaunchTarget = undefined">
@@ -761,6 +808,11 @@ function formatMemory(bytes: number) {
 </template>
 
 <style scoped>
+.program-row.is-sticky { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.program-name.program-identity, .process-detail.program-identity { display: grid; gap: 4px; padding: 8px 0; }
+.program-identity small { color: var(--text-muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.process-windows { margin: 0; padding: 0; list-style: none; }
+.process-windows .process-detail { overflow-wrap: anywhere; }
 .programs-view {
   width: 100%;
   max-width: none;

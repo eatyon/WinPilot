@@ -848,11 +848,11 @@ public sealed class TaskService : BackgroundService
                 var tag = tags.Get(action.TagName ?? "");
                 programs.Launch(new(tag.ProgramPath, tag.Arguments, tag.WorkingDirectory, tag.RunElevated, tag.Silent));
                 break;
-            case TaskActionType.CloseProcess:
-                var ids = GetCloseProcessIds(action.ProcessName, action.CurrentUserOnly);
+            case TaskActionType.EndProcess:
+                var ids = GetEndProcessIds(action.ProcessName, action.CurrentUserOnly);
                 if (ids.Length == 0)
                     throw new InvalidOperationException("未找到目标进程");
-                programs.Close(ids, action.Force);
+                programs.Close(ids, isGroup: false);
                 break;
             case TaskActionType.Delay:
                 await Task.Delay(TimeSpan.FromSeconds(Math.Max(0, action.DelaySeconds)), token);
@@ -886,7 +886,7 @@ public sealed class TaskService : BackgroundService
     {
         TaskActionType.StartProgram => $"启动程序「{action.ProgramPath}」",
         TaskActionType.StartTag => $"启动快捷标签「{action.TagName}」",
-        TaskActionType.CloseProcess => $"{(action.Force ? "强制关闭" : "关闭")}进程「{action.ProcessName}」",
+        TaskActionType.EndProcess => $"结束进程「{action.ProcessName}」",
         TaskActionType.Delay => $"延迟 {action.DelaySeconds} 秒",
         TaskActionType.Keyboard => $"发送按键「{string.Join(" + ", action.Keys ?? [])}」",
         TaskActionType.Shell => $"Shell「{action.Shell}」执行命令",
@@ -898,7 +898,7 @@ public sealed class TaskService : BackgroundService
         _ => action.Type.ToString()
     };
 
-    private int[] GetCloseProcessIds(string? name, bool currentUserOnly)
+    private int[] GetEndProcessIds(string? name, bool currentUserOnly)
     {
         var processName = Path.GetFileNameWithoutExtension(name ?? "");
         if (currentUserOnly)
@@ -1329,7 +1329,7 @@ public sealed class TaskService : BackgroundService
                     throw new TaskValidationException($"actions[{index}].programPath", "请选择要启动的程序");
                 case TaskActionType.StartTag when string.IsNullOrWhiteSpace(action.TagName):
                     throw new TaskValidationException($"actions[{index}].tagName", "请选择快捷标签");
-                case TaskActionType.CloseProcess when string.IsNullOrWhiteSpace(action.ProcessName):
+                case TaskActionType.EndProcess when string.IsNullOrWhiteSpace(action.ProcessName):
                     throw new TaskValidationException($"actions[{index}].processName", "请输入进程名");
                 case TaskActionType.Delay when action.DelaySeconds <= 0:
                     throw new TaskValidationException($"actions[{index}].delaySeconds", "请输入有效的延迟秒数");

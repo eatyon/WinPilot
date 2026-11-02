@@ -72,7 +72,7 @@ export function validateTask(value: Task, registeredTriggers: readonly Registere
       result[`action-${index}`] = '请选择要启动的程序';
     if (action.type === 'StartTag' && !action.tagName.trim())
       result[`action-${index}`] = '请选择快捷标签';
-    if (action.type === 'CloseProcess' && !action.processName.trim())
+    if (action.type === 'EndProcess' && !action.processName.trim())
       result[`action-${index}`] = '请输入进程名';
     if (action.type === 'Delay' && (!Number.isInteger(action.delaySeconds) || Number(action.delaySeconds) <= 0))
       result[`action-${index}`] = '请输入有效的延迟秒数';

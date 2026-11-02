@@ -8,21 +8,22 @@ public sealed class TaskActionPersistenceTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void CurrentUserOnlyRoundTripsForCloseProcess(bool currentUserOnly)
+    public void CurrentUserOnlyRoundTripsForEndProcess(bool currentUserOnly)
     {
         var stored = TaskActionPersistence.From(new TaskAction(
-            TaskActionType.CloseProcess, ProcessName: "app.exe", Force: true, CurrentUserOnly: currentUserOnly));
+            TaskActionType.EndProcess, ProcessName: "app.exe", CurrentUserOnly: currentUserOnly));
 
         var restored = stored.ToAction();
+        Assert.Equal("EndProcess", stored.Type);
         Assert.Equal(currentUserOnly, restored.CurrentUserOnly);
-        Assert.True(restored.Force);
+        Assert.Equal("app.exe", restored.ProcessName);
         Assert.Equal(currentUserOnly ? true : (bool?)null, stored.CurrentUserOnly);
     }
 
     [Fact]
     public void MissingCurrentUserOnlyDefaultsToDisabled()
     {
-        Assert.False(new TaskActionPersistence { Type = "CloseProcess", ProcessName = "app.exe" }.ToAction().CurrentUserOnly);
+        Assert.False(new TaskActionPersistence { Type = "EndProcess", ProcessName = "app.exe" }.ToAction().CurrentUserOnly);
     }
 
     [Fact]

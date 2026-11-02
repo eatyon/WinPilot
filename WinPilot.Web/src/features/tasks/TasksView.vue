@@ -132,7 +132,7 @@ watch(() => editor.value?.actions.map(action => action.type), types => {
 }, { flush: 'sync' });
 const actionErrors = shallowReactive(new Map<Action, { message: string; snapshot: string; field?: string }>());
 const actionValidationFields: Partial<Record<Action['type'], string>> = {
-  StartProgram: 'programPath', StartTag: 'tagName', CloseProcess: 'processName', Delay: 'delaySeconds',
+  StartProgram: 'programPath', StartTag: 'tagName', EndProcess: 'processName', Delay: 'delaySeconds',
   Keyboard: 'keys', Shell: 'command',
 };
 const editorForm = ref<HTMLElement>();
@@ -378,8 +378,8 @@ const actionCoreLabel = (action: Action) =>
           ? `按键模拟 · ${orderKeys(action.keys).join(' + ') || '未设置'}`
           : action.type === 'StartTag'
             ? `启动快捷标签 · ${action.tagName || '未选择'}`
-            : action.type === 'CloseProcess'
-              ? `关闭进程 · ${action.processName || '未指定'}${action.currentUserOnly ? ' · 当前用户' : ''}`
+            : action.type === 'EndProcess'
+              ? `结束进程 · ${action.processName || '未指定'}${action.currentUserOnly ? ' · 当前用户' : ''}`
               : action.type === 'SendNotification'
                 ? `发送通知 · ${action.notificationContent || '未设置'}`
                 : action.type === 'TaskState'

@@ -64,9 +64,9 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 | 方法 | 路径 | 请求与说明 | 成功响应 | 错误 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/programs/users` | 交互用户及当前用户标记 | 200 用户数组 | — |
-| GET | `/api/programs` | 查询 `userName` 必填 | 200 进程数组 | 400 |
+| GET | `/api/programs` | 查询指定用户的进程及分组信息；`userName` 必填，`canEnd` 表示是否允许结束 | 200 进程数组 | 400 |
 | POST | `/api/programs/usage` | JSON `{ processIds }`；单次采集 | 200 进程占用 | 400 |
-| POST | `/api/programs/close` | JSON `{ processIds, force }` | 204 | 400 |
+| POST | `/api/programs/close` | 结束所选进程；JSON `{ processIds, isGroup }`，`isGroup` 表示是否按组结束 | 204 | 400 |
 | POST | `/api/programs/launch` | JSON 含 `programPath, arguments, workingDirectory, runElevated, silent`；起始目录留空时使用目标程序所在目录；成功不代表目标程序持续运行 | 204 | 400 |
 | GET | `/api/programs/tags` | 跳过损坏或身份不一致的标签，不返回占位记录 | 200 标签数组 | — |
 | POST | `/api/programs/tags` | JSON 为程序启动参数加 `name`；Location 指向标签路径，同名冲突 409 | 201 标签 | 400、409 |
@@ -76,7 +76,7 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 
 ## 自动化任务
 
-任务保存对象为 `{ name, enabled, trigger, actions }`，只提交所选类型需要的字段。保存响应是规范化后的保存快照，不是原请求回显。
+任务保存对象为 `{ name, enabled, trigger, actions }`，只提交所选类型需要的字段。保存响应是规范化后的保存快照，不是原请求回显。`EndProcess` 结束所有匹配 `processName` 的进程，`currentUserOnly` 限定当前用户。
 
 - 触发类型：`Cron`、`Process`、`WinPilotStartup`、`Keyboard`、`Extension`。程序事件使用 `event: "Started"/"Exited"` 和 `processPaths`；按键监听使用 `keys`（1～3 个按键）。
 - Cron 为六字段：秒、分、时、日、月、周。例如 `0 30 8 * * *` 表示每天 08:30；周日支持 0 或 7，周一至周六为 1～6。

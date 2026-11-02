@@ -1,9 +1,9 @@
-using WinPilot.Core;
-using WinPilot.Core.Programs;
-using WinPilot.Features.Programs;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WinPilot.Core;
+using WinPilot.Core.Programs;
+using WinPilot.Features.Programs;
 
 namespace WinPilot.Test;
 
@@ -43,7 +43,13 @@ public sealed class ProgramTagServiceTest
             Assert.Throws<InvalidDataException>(() => service.Get("broken"));
             Assert.Equal(2, Directory.GetFiles(paths.TagsDirectory).Length);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -70,7 +76,13 @@ public sealed class ProgramTagServiceTest
             Assert.Equal(2, service.GetAll().Count);
             Assert.Equal(original, File.ReadAllText(file));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Theory]
@@ -88,9 +100,15 @@ public sealed class ProgramTagServiceTest
             Directory.CreateDirectory(paths.TagsDirectory);
             var file = Path.Combine(paths.TagsDirectory, "alias.json");
             var alias = JsonSerializer.Serialize(new ProgramTag(aliasName, CreateProgramFile(directory, "alias.exe"), "", "", false));
-            if (writeAliasFirst) File.WriteAllText(file, alias);
+            if (writeAliasFirst)
+            {
+                File.WriteAllText(file, alias);
+            }
             service.Create(new("healthy", CreateProgramFile(directory, "app.exe"), "", "", false));
-            if (!writeAliasFirst) File.WriteAllText(file, alias);
+            if (!writeAliasFirst)
+            {
+                File.WriteAllText(file, alias);
+            }
             var healthy = Assert.Single(service.GetAll());
             Assert.Equal("healthy", healthy.Name);
             Assert.Equal(CreateProgramFile(directory, "app.exe"), healthy.ProgramPath);
@@ -98,7 +116,13 @@ public sealed class ProgramTagServiceTest
             Assert.Equal(alias, File.ReadAllText(file));
             Assert.Equal(2, Directory.GetFiles(paths.TagsDirectory).Length);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -114,17 +138,34 @@ public sealed class ProgramTagServiceTest
             Assert.Equal("NAME", service.Get("name").Name);
             Assert.Equal("NAME", Assert.Single(service.GetAll()).Name);
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     private sealed class TagLogger : ILogger<ProgramTagService>
     {
         internal List<(Exception Exception, string Message)> Errors { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel level) => true;
-        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
-            if (level == LogLevel.Error && exception is not null) Errors.Add((exception, formatter(state, exception)));
+            if (level == LogLevel.Error && exception is not null)
+            {
+                Errors.Add((exception, formatter(state, exception)));
+            }
         }
     }
 
@@ -141,7 +182,13 @@ public sealed class ProgramTagServiceTest
             Assert.Equal("valid", service.Get("valid").Name);
             Assert.Throws<FileNotFoundException>(() => service.Get("missing"));
         }
-        finally { if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true); }
+        finally
+        {
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
+        }
     }
 
     [Fact]
@@ -160,13 +207,21 @@ public sealed class ProgramTagServiceTest
                     service.Create(new("same", CreateProgramFile(applicationDirectory, $"{index}.exe"), "", "", false));
                     Interlocked.Increment(ref created);
                 }
-                catch (InvalidOperationException) { }
+                catch (InvalidOperationException)
+                {
+                }
             });
             Assert.Equal(1, created);
             Assert.Single(service.GetAll());
             Assert.Empty(Directory.EnumerateFiles(paths.TagsDirectory, "*.tmp"));
         }
-        finally { if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true); }
+        finally
+        {
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
+        }
     }
 
     [Fact]
@@ -180,11 +235,18 @@ public sealed class ProgramTagServiceTest
             var original = new ProgramTag("original", CreateProgramFile(applicationDirectory, "old.exe"), "", "", false);
             service.Create(original);
             Directory.CreateDirectory(Path.Combine(paths.TagsDirectory, "blocked.json"));
-            Assert.ThrowsAny<IOException>(() => service.Update("original", original with { Name = "blocked", ProgramPath = CreateProgramFile(applicationDirectory, "new.exe") }));
+            Assert.ThrowsAny<IOException>(() =>
+                service.Update("original", original with { Name = "blocked", ProgramPath = CreateProgramFile(applicationDirectory, "new.exe") }));
             Assert.Equal(original, service.Get("original"));
             Assert.Empty(Directory.EnumerateFiles(paths.TagsDirectory, "*.tmp"));
         }
-        finally { if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true); }
+        finally
+        {
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
+        }
     }
 
     [Fact]
@@ -205,7 +267,13 @@ public sealed class ProgramTagServiceTest
             Assert.Equal(original, service.Get("original"));
             Assert.Empty(Directory.EnumerateFiles(paths.TagsDirectory, "*.tmp"));
         }
-        finally { if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true); }
+        finally
+        {
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
+        }
     }
 
     [Fact]
@@ -231,7 +299,10 @@ public sealed class ProgramTagServiceTest
         }
         finally
         {
-            if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true);
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
         }
     }
 
@@ -251,7 +322,10 @@ public sealed class ProgramTagServiceTest
         }
         finally
         {
-            if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, true);
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, true);
+            }
         }
     }
 }

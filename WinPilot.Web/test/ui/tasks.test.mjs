@@ -280,7 +280,7 @@ test('every built-in action clears only its own error on edits and invalid value
   const cases = [
     ['StartProgram', 'programPath', 'app.exe', '', '请选择要启动的程序'],
     ['StartTag', 'tagName', 'tag', '', '请选择快捷标签'],
-    ['CloseProcess', 'processName', 'app.exe', '', '请输入进程名'],
+    ['EndProcess', 'processName', 'app.exe', '', '请输入进程名'],
     ['Delay', 'delaySeconds', 1, 0, '请输入有效的延迟秒数'],
     ['Shell', 'command', 'echo test', '', '请输入 Shell 命令'],
     ['Keyboard', 'keys', ['F11'], [], '请选择至少一个按键'],
@@ -482,7 +482,7 @@ test('save focuses and shakes only the first invalid task field in form order', 
 test('each built-in action focuses its invalid control rather than its type selector', async () => {
   for (const [type, changes, field] of [
     ['StartProgram', { programPath: '' }, 'programPath'],
-    ['StartTag', {}, 'tagName'], ['CloseProcess', {}, 'processName'],
+    ['StartTag', {}, 'tagName'], ['EndProcess', {}, 'processName'],
     ['Delay', { delaySeconds: '' }, 'delaySeconds'], ['Keyboard', {}, 'keys'],
     ['Shell', {}, 'command'], ['SendNotification', {}, 'notificationContent'],
     ['SendNotification', { notificationContent: 'content' }, 'notificationChannel'],
@@ -1148,7 +1148,7 @@ test('tag and close process actions report missing fields before saving', () => 
     const task = { name: 'Task', trigger: { type: 'WinPilotStartup' }, actions: [action] };
     for (const [type, field, message] of [
       ['StartTag', 'tagName', '请选择快捷标签'],
-      ['CloseProcess', 'processName', '请输入进程名'],
+      ['EndProcess', 'processName', '请输入进程名'],
     ]) {
       action.type = type;
       for (const value of ['', '   ']) {
@@ -1238,12 +1238,11 @@ test('action payloads exclude unrelated editor fields and keep current action se
     assert.equal('delaySeconds' in f.subject.actionPayload(action), false);
     action.type = 'Delay';
     assert.deepEqual(JSON.parse(JSON.stringify(f.subject.actionPayload(action))), { type: 'Delay', delaySeconds: 5 });
-    action.type = 'CloseProcess';
+    action.type = 'EndProcess';
     action.processName = 'app.exe';
-    action.force = true;
     action.currentUserOnly = true;
     assert.deepEqual(JSON.parse(JSON.stringify(f.subject.actionPayload(action))),
-      { type: 'CloseProcess', processName: 'app.exe', force: true, currentUserOnly: true });
+      { type: 'EndProcess', processName: 'app.exe', currentUserOnly: true });
   } finally { f.dispose(); }
 });
 

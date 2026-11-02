@@ -10,7 +10,7 @@ import * as apiErrors from '../support/apiErrors.mjs';
 test('mobile query controls use a full-width user field and one button row without desktop overrides', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
   assert.ok(source.includes('class="program-actions process-query-actions"'));
-  assert.ok(source.includes("isQuerying ? '查询中…' : '查询'"));
+  assert.ok(source.includes("isQuerying ? '查询中' : '查询'"));
   const mobile = source.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
   assert.match(mobile, /\.process-query-actions \.user-select\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*flex:\s*0 0 100%/);
   assert.match(mobile, /\.process-query-actions \.button\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*nowrap/);
@@ -18,6 +18,16 @@ test('mobile query controls use a full-width user field and one button row witho
   const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.program-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);
   assert.match(css, /\.program-panel-header \.program-actions \.button\s*\{\s*flex:\s*1/);
+});
+
+test('tag controls remain mounted and disable by the full list rather than search results', () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(source, /<div class="tag-controls">/);
+  assert.doesNotMatch(source, /<div v-if="tags.length" class="tag-controls">/);
+  assert.match(source, /<input v-model="tagSearch"[^>]*:disabled="!tags.length"/);
+  assert.match(source, /:disabled="safeModeEnabled \|\| !tags.length"\s*:title="safeModeEnabled \? safeModeMessage : undefined"\s*:aria-pressed="managingTags"/);
+  assert.match(css, /\.programs-view \.tag-controls \.button:disabled[^{}]*\{[^}]*background:\s*var\(--surface-subtle\);[^}]*color:\s*var\(--text-subtle\)/);
 });
 
 test('tag paths appear beneath their names only in management mode', () => {
@@ -44,8 +54,15 @@ test('process search appears with query results and uses the tag search font', (
   assert.match(css, /\.tag-search input\s*\{[^}]*font-size:\s*14px/);
 });
 
-test('mobile program pagination follows the compact file pagination layout', () => {
+test('all pagination buttons share disabled styling and mobile program pagination follows files', () => {
   const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const files = readFileSync(new URL('../../src/features/files/FilesView.vue', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.pagination-actions \.button:disabled[^{}]*\{[^}]*background:\s*var\(--surface-subtle\);[^}]*color:\s*var\(--text-subtle\)/);
+  assert.match(source, /:disabled="currentPage === 1"/);
+  assert.match(source, /:disabled="currentPage === pageCount"/);
+  assert.match(files, /:disabled="page === 1"/);
+  assert.match(files, /:disabled="page === pageCount"/);
   const mobile = source.match(/@media \(max-width: 767px\)\s*\{([\s\S]*?)\n\}/)?.[1];
   assert.match(mobile, /\.programs-view \.program-pagination\s*\{[^}]*flex-direction:\s*row/);
   assert.match(mobile, /\.programs-view \.page-size-control\s*\{[^}]*grid-template-columns:\s*auto 64px/);
@@ -55,7 +72,7 @@ test('mobile program pagination follows the compact file pagination layout', () 
 
 async function fixture() {
   const code = loadScriptModule(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url),
-    'launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, groups, selectedUserName, tagName, pendingActions, launchFormError, pageError, editTag, cancelTagEdit, editingTagName, launchPanel, programPath, argumentsText, workingDirectory, runElevated, silent, launchFormMessage, managingTags, toggleTagManagement, tagDeleteTarget');
+    'launch, saveTag, launchTag, queryPrograms, collapsePrograms, showUsage, refreshUsage, closeUsage, processUsage, processUsageTarget, isUsageLoading, isQuerying, hasQueried, programs, groups, selectedUserName, tagName, pendingActions, launchFormError, pageError, editTag, cancelTagEdit, editingTagName, launchPanel, programPath, argumentsText, workingDirectory, runElevated, silent, launchFormMessage, managingTags, toggleTagManagement, tagDeleteTarget, confirmDeleteTag, confirmClose, processCloseTarget, isClosing, filteredGroups, programSearch, targetForGroup, currentPage, pageSize, expandedGroups, toggleGroup, resultSummary, groupDetailCount');
   let mounted;
   let unmount;
   const requests = [];
@@ -111,6 +128,66 @@ test('tag management is opt-in, resets on leaving and is locked by safe mode', a
     assert.equal(f.requests.length, 0);
   } finally { f.dispose(); }
   assert.equal(f.subject.managingTags.value, false);
+});
+
+test('deleting the last tag exits management while remaining tags keep management open', async () => {
+  for (const remaining of [[], [{ name: 'Remaining', programPath: 'C:/app.exe' }]]) {
+    const f = await fixture();
+    try {
+      f.subject.managingTags.value = true;
+      f.subject.tagDeleteTarget.value = { name: 'Tag' };
+      const deleting = f.subject.confirmDeleteTag();
+      assert.equal(f.requests[0].init.method, 'DELETE');
+      f.requests[0].resolve({ ok: true });
+      await setImmediate();
+      assert.equal(f.requests[1].url, '/api/programs/tags');
+      f.requests[1].resolve({ ok: true, json: async () => remaining });
+      await deleting;
+      assert.equal(f.subject.managingTags.value, remaining.length > 0);
+      assert.equal(f.subject.tagDeleteTarget.value, undefined);
+      assert.equal(f.toasts.at(-1).text, '标签已删除');
+    } finally { f.dispose(); }
+  }
+});
+
+test('process ending selects the method from the target and prevents duplicate requests', async () => {
+  for (const isGroup of [false, true]) {
+    const f = await fixture();
+    try {
+      f.subject.processCloseTarget.value = { name: 'App', processIds: [1], singleProcess: isGroup ? undefined : { processId: 1 }, canEnd: true };
+      const closing = f.subject.confirmClose();
+      assert.equal(f.subject.isClosing.value, true);
+      await f.subject.confirmClose();
+      assert.equal(f.requests.length, 1);
+      assert.deepEqual(JSON.parse(f.requests[0].init.body), { processIds: [1], isGroup });
+      f.requests[0].reject(new Error('close failed'));
+      await closing;
+      assert.equal(f.subject.isClosing.value, false);
+      assert.ok(f.subject.processCloseTarget.value);
+    } finally { f.dispose(); }
+  }
+});
+
+test('protected members disable ending the group without blocking other members', async () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(source, /:disabled="!processUsageTarget.canEnd"/);
+  assert.match(source, /:disabled="isClosing \|\| !processCloseTarget.canEnd"/);
+  assert.match(css, /\.programs-view \.tag-controls \.button:disabled, \.program-end-button:disabled:not\(\.is-pending\)/);
+  const f = await fixture();
+  try {
+    const allowed = { processId: 1, canEnd: true };
+    const protectedProcess = { processId: 2, canEnd: false };
+    const group = { name: 'App', processName: 'app.exe', processes: [allowed, protectedProcess] };
+    const target = f.subject.targetForGroup(group);
+    assert.equal(target.canEnd, false);
+    assert.equal(f.subject.targetForGroup({ ...group, processes: [allowed] }).canEnd, true);
+    assert.equal(f.subject.targetForGroup({ ...group, processes: [protectedProcess] }).canEnd, false);
+    f.subject.processCloseTarget.value = target;
+    await f.subject.confirmClose();
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.subject.isClosing.value, false);
+  } finally { f.dispose(); }
 });
 
 test('program launch rejects blank and relative paths without a request', async () => {
@@ -382,11 +459,81 @@ test('leaving the page aborts all independent writes without late state changes 
   assert.equal(f.subject.pendingActions.size, 0);
 });
 
-test('program grouping preserves all processes and alphabetical ordering', async () => {
+test('changing pages or page size collapses groups without refetching or clearing results', async () => {
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  assert.match(source, /class="program-row" :class="\{ 'is-sticky': isExpanded\(group.id\) \}"/);
+  assert.match(source, /\.program-row\.is-sticky\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*z-index:\s*1;[^}]*background:\s*var\(--surface\)/);
   const f = await fixture();
   try {
-    f.subject.programs.value = [{ name: 'B', processId: 1 }, { name: 'A', processId: 2 }, { name: 'B', processId: 3 }];
-    assert.equal(f.subject.groups.value.map(group => group.name).join(','), 'A,B');
-    assert.equal(f.subject.groups.value[1].processes.map(process => process.processId).join(','), '1,3');
+    f.subject.programs.value = Array.from({ length: 21 }, (_, index) => ({
+      processId: index + 1, name: 'app.exe', displayName: 'App', groupId: String(index),
+      groupName: 'App', groupProcessName: 'app.exe', windowTitles: ['窗口'],
+    }));
+    await vue.nextTick();
+    for (const page of [2, 1]) {
+      f.subject.toggleGroup('0');
+      assert.equal(f.subject.expandedGroups.value.length, 1);
+      f.subject.currentPage.value = page;
+      await vue.nextTick();
+      assert.equal(f.subject.expandedGroups.value.length, 0);
+    }
+    f.subject.toggleGroup('0');
+    f.subject.pageSize.value = 20;
+    await vue.nextTick();
+    assert.equal(f.subject.expandedGroups.value.length, 0);
+    assert.equal(f.subject.programs.value.length, 21);
+    assert.equal(f.requests.length, 0);
+  } finally { f.dispose(); }
+});
+
+test('program grouping follows backend membership and name order without merging identical names', async () => {
+  const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.process-child\s*\{[^}]*padding:\s*0 18px/);
+  const source = readFileSync(new URL('../../src/features/programs/ProgramsView.vue', import.meta.url), 'utf8');
+  assert.match(source, /<li v-for="\(title, index\) in process.windowTitles"[^>]*class="process-child">\s*<span class="process-detail program-identity">\s*<span>\{\{ title \}\}<\/span>\s*<small>窗口<\/small>/);
+  assert.doesNotMatch(source, /window-prefix|窗口：/);
+  assert.doesNotMatch(source, /process-windows\.nested|nested: group.processes/);
+  assert.doesNotMatch(source, /PID \{\{ process\.processId \}\}/);
+  assert.match(source, /PID \{\{ processUsageTarget\.singleProcess\.processId \}\}/);
+  assert.match(source, /<small v-if="processUsageTarget\.processName !== processUsageTarget\.name">\{\{ processUsageTarget\.processName \}\}<\/small>/);
+  assert.match(source, /<small v-if="processCloseTarget\.processName !== processCloseTarget\.name">\{\{ processCloseTarget\.processName \}\}<\/small>/);
+  const f = await fixture();
+  try {
+    f.subject.programs.value = [
+      { name: 'node.exe', displayName: 'Node.js', processId: 2, groupId: 'app:1', groupName: 'App', groupProcessName: 'app.exe', windowTitles: [] },
+      { name: 'app.exe', displayName: 'App', processId: 1, groupId: 'app:1', groupName: 'App', groupProcessName: 'app.exe', windowTitles: ['编辑窗口'] },
+      { name: 'app.exe', displayName: 'App', processId: 3, groupId: 'app:3', groupName: 'App', groupProcessName: 'app.exe', windowTitles: [] },
+      { name: 'conhost.exe', displayName: '控制台窗口主机', processId: 4, groupId: 'app:4', groupName: '控制台窗口主机', groupProcessName: 'conhost.exe', windowTitles: ['终端窗口'] },
+    ];
+    const names = f.subject.groups.value.map(group => group.name);
+    assert.equal(names.join(','), [...names].sort((left, right) => left.localeCompare(right)).join(','));
+    const merged = f.subject.groups.value.find(group => group.id === 'app:1');
+    const background = f.subject.groups.value.find(group => group.id === 'app:3');
+    const windowed = f.subject.groups.value.find(group => group.id === 'app:4');
+    assert.equal(merged.processName, 'app.exe');
+    assert.equal(f.subject.targetForGroup(merged).processName, 'app.exe');
+    assert.equal(f.subject.targetForGroup(merged).singleProcess, undefined);
+    assert.equal(f.subject.targetForGroup(background).singleProcess.processId, 3);
+    assert.equal(merged.processes.map(process => process.processId).join(','), '2,1');
+    assert.equal(f.subject.groups.value.flatMap(group => group.processes).length, 4);
+    assert.equal(f.subject.resultSummary.value, '查询：4 个进程 · 3 个进程组');
+    assert.equal(f.subject.groupDetailCount(merged), 3);
+    assert.equal(f.subject.groupDetailCount(background), 0);
+    assert.equal(f.subject.groupDetailCount(windowed), 1);
+    assert.equal(f.subject.groupDetailCount({ processes: [{ windowTitles: ['窗口一', '窗口二'] }] }), 2);
+    assert.equal(f.subject.groupDetailCount({ processes: [{ windowTitles: [] }, { windowTitles: [] }] }), 2);
+    assert.match(source, /\{\{ groupDetailCount\(group\) \}\}/);
+    assert.match(source, /v-if="groupDetailCount\(group\) > 0"/);
+    assert.match(source, /共 \$\{groupDetailCount\(group\)\} 项，\$\{isExpanded\(group.id\) \? '收起详情' : '展开查看'\}/);
+    f.subject.programSearch.value = '编辑窗口';
+    assert.equal(f.subject.resultSummary.value, '搜索：2 个进程 · 1 个进程组');
+    assert.equal(f.subject.filteredGroups.value.length, 1);
+    assert.equal(f.subject.targetForGroup(f.subject.filteredGroups.value[0]).processIds.join(','), '2,1');
+    f.subject.programSearch.value = '终端';
+    assert.equal(f.subject.filteredGroups.value[0].processes[0].processId, 4);
+    f.subject.programSearch.value = '不存在';
+    assert.equal(f.subject.resultSummary.value, '搜索：0 个进程 · 0 个进程组');
+    f.subject.programSearch.value = '';
+    assert.equal(f.subject.resultSummary.value, '查询：4 个进程 · 3 个进程组');
   } finally { f.dispose(); }
 });

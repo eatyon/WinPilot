@@ -265,7 +265,7 @@ public sealed partial class TaskServiceTest
         Assert.False(action.TryGetProperty("programPath", out _));
         using var toggled = await client.PatchAsJsonAsync("/api/tasks/Sparse/enabled", new { enabled = false });
         using var toggledJson = JsonDocument.Parse(await toggled.Content.ReadAsStringAsync());
-        Assert.False(toggledJson.RootElement.GetProperty("actions")[0].TryGetProperty("force", out _));
+        Assert.False(toggledJson.RootElement.GetProperty("actions")[0].TryGetProperty("processName", out _));
     }
 
     [Theory]
@@ -476,7 +476,7 @@ public sealed partial class TaskServiceTest
             "working-directory" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, WorkingDirectory: Path.Combine(fixture.Paths.ApplicationDirectory, "missing"))] },
             "working-directory-file" => task with { Actions = [new(TaskActionType.StartProgram, ProgramPath: Environment.ProcessPath!, WorkingDirectory: Environment.ProcessPath!)] },
             "tag" => task with { Actions = [new(TaskActionType.StartTag)] },
-            "process" => task with { Actions = [new(TaskActionType.CloseProcess)] },
+            "process" => task with { Actions = [new(TaskActionType.EndProcess)] },
             "keyboard" => task with { Actions = [new(TaskActionType.Keyboard)] },
             "keyboard-count" => task with { Actions = [new(TaskActionType.Keyboard, Keys: ["A", "B", "C", "D"])] },
             "keyboard-duplicate" => task with { Actions = [new(TaskActionType.Keyboard, Keys: ["A", "a"])] },
@@ -565,27 +565,26 @@ public sealed partial class TaskServiceTest
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CloseProcess_CurrentUserOnlyFiltersOwnerAndProcessName(bool force)
+    [Fact]
+    public async Task EndProcess_CurrentUserOnlyDirectlyEndsAllMatchingProcesses()
     {
         await using var fixture = new TaskServiceFixture();
         using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
         fixture.Programs.RunningPrograms = [
             new(101, "APP.exe", identity.Name, 1),
             new(102, "app.exe", "OtherUser", 2),
-            new(103, "other.exe", identity.Name, 1)
+            new(103, "other.exe", identity.Name, 1),
+            new(104, "app.exe", identity.Name, 1)
         ];
         fixture.Tasks.Create(new("Close", true, new(TaskTriggerType.WinPilotStartup),
-            [new(TaskActionType.CloseProcess, ProcessName: "app.exe", Force: force, CurrentUserOnly: true)]));
+            [new(TaskActionType.EndProcess, ProcessName: "app.exe", CurrentUserOnly: true)]));
 
         fixture.Tasks.RunNow("Close");
         var closed = await fixture.Programs.Closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(identity.Name, fixture.Programs.QueriedUserName);
-        Assert.Equal(new[] { 101 }, closed.Ids);
-        Assert.Equal(force, closed.Force);
+        Assert.Equal(new[] { 101, 104 }, closed.Ids);
+        Assert.False(closed.IsGroup);
     }
 
     [Fact]
