@@ -1,7 +1,7 @@
+using Microsoft.Extensions.Logging;
 using WinPilot.Core;
 using WinPilot.Features.Logs;
 using WinPilot.Infrastructure;
-using Microsoft.Extensions.Logging;
 
 namespace WinPilot.Test;
 
@@ -51,7 +51,10 @@ public sealed class RollingFileLoggerProviderTest
         }
         finally
         {
-            if (Directory.Exists(applicationDirectory)) Directory.Delete(applicationDirectory, recursive: true);
+            if (Directory.Exists(applicationDirectory))
+            {
+                Directory.Delete(applicationDirectory, recursive: true);
+            }
         }
     }
 }

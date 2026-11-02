@@ -2,6 +2,9 @@ using System.Diagnostics;
 
 namespace WinPilot.Infrastructure;
 
+/// <summary>
+/// 按本地日期写入日志文件，在每日首次写入时按保留时长和文件数量清理历史日志。
+/// </summary>
 public sealed class RollingFileLoggerProvider : ILoggerProvider
 {
     private const int RetentionDays = 21;
@@ -21,10 +24,18 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
 
     public void Dispose()
     {
-        lock (syncRoot) disposed = true;
+        lock (syncRoot)
+        {
+            disposed = true;
+        }
     }
 
-    private void Write(string categoryName, LogLevel level, EventId eventId, string message, Exception? exception)
+    private void Write(
+        string categoryName,
+        LogLevel level,
+        EventId eventId,
+        string message,
+        Exception? exception)
     {
         if (disposed)
         {
@@ -35,7 +46,10 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         {
             lock (syncRoot)
             {
-                if (disposed) return;
+                if (disposed)
+                {
+                    return;
+                }
                 Directory.CreateDirectory(logsDirectory);
                 var now = DateTimeOffset.Now;
                 var logFile = Path.Combine(logsDirectory, $"winpilot{now:yyyyMMdd}.log");
@@ -48,12 +62,14 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
                     lastCleanupDate = today;
                     if (deletedCount > 0)
                     {
-                        WriteEntry(logFile, CreateEntry(
-                            DateTimeOffset.Now,
-                            typeof(RollingFileLoggerProvider).FullName!,
-                            LogLevel.Debug,
-                            $"日志维护已清理 {deletedCount} 个过期或超出保留数量的日志文件",
-                            null));
+                        WriteEntry(
+                            logFile,
+                            CreateEntry(
+                                DateTimeOffset.Now,
+                                typeof(RollingFileLoggerProvider).FullName!,
+                                LogLevel.Debug,
+                                $"日志维护已清理 {deletedCount} 个过期或超出保留数量的日志文件",
+                                null));
                     }
                 }
             }
@@ -66,16 +82,24 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
 
     private void WriteFallback(Exception exception)
     {
+        // 文件日志失败后直接写备用输出，避免递归记录；并发调用共用一分钟的输出限频。
         var now = DateTime.UtcNow.Ticks;
         var previous = Interlocked.Read(ref lastFallbackWriteTicks);
-        if (now - previous < TimeSpan.FromMinutes(1).Ticks || Interlocked.CompareExchange(ref lastFallbackWriteTicks, now, previous) != previous)
+        if (now - previous < TimeSpan.FromMinutes(1).Ticks
+            || Interlocked.CompareExchange(ref lastFallbackWriteTicks, now, previous) != previous)
         {
             return;
         }
 
         var message = $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff}] WinPilot 文件日志写入失败：{exception}";
         Debug.WriteLine(message);
-        try { Console.Error.WriteLine(message); } catch { }
+        try
+        {
+            Console.Error.WriteLine(message);
+        }
+        catch
+        {
+        }
     }
 
     private int DeleteExpiredFiles()
@@ -96,7 +120,9 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
             }
         }
 
-        var retainedFiles = Directory.EnumerateFiles(logsDirectory, "winpilot*.log*")
+        // 先删除超期文件，再按最近修改时间保留限额内的文件。
+        var retainedFiles = Directory
+            .EnumerateFiles(logsDirectory, "winpilot*.log*")
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .ThenByDescending(Path.GetFileName, StringComparer.Ordinal)
             .ToArray();
@@ -117,7 +143,12 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         writer.Write(entry);
     }
 
-    private static string CreateEntry(DateTimeOffset timestamp, string categoryName, LogLevel level, string message, Exception? exception)
+    private static string CreateEntry(
+        DateTimeOffset timestamp,
+        string categoryName,
+        LogLevel level,
+        string message,
+        Exception? exception)
     {
         var header = $"[{timestamp:HH:mm:ss.fff}] [{GetLevelAbbreviation(level)}] {categoryName}";
         var escapedMessage = message.Replace("\r", "\\r").Replace("\n", "\\n");
@@ -125,23 +156,30 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         return $"{header}{Environment.NewLine}{escapedMessage}{Environment.NewLine}{details}{Environment.NewLine}";
     }
 
-    private static string GetLevelAbbreviation(LogLevel level) => level switch
-    {
-        LogLevel.Trace => "TRC",
-        LogLevel.Debug => "DBG",
-        LogLevel.Information => "INF",
-        LogLevel.Warning => "WRN",
-        LogLevel.Error => "ERR",
-        LogLevel.Critical => "FTL",
-        _ => "UNK"
-    };
+    private static string GetLevelAbbreviation(LogLevel level) =>
+        level switch
+        {
+            LogLevel.Trace => "TRC",
+            LogLevel.Debug => "DBG",
+            LogLevel.Information => "INF",
+            LogLevel.Warning => "WRN",
+            LogLevel.Error => "ERR",
+            LogLevel.Critical => "FTL",
+            _ => "UNK"
+        };
 
     private sealed class RollingFileLogger(RollingFileLoggerProvider provider, string categoryName) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             if (IsEnabled(logLevel))
             {

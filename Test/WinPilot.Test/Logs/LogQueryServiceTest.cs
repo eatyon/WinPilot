@@ -47,11 +47,12 @@ public sealed class LogQueryServiceTest
         WithLogs((paths, service) =>
         {
             var date = new DateOnly(2026, 10, 4);
-            File.WriteAllText(Path.Combine(paths.LogsDirectory, "winpilot20261004.log"),
+            File.WriteAllText(
+                Path.Combine(paths.LogsDirectory, "winpilot20261004.log"),
                 string.Concat(Enumerable.Repeat("[10:00:00.000] [INF] Test\nentry\n\n", 11000)));
-            Assert.Equal(500, service.Query(new(date, null, null, 0, 1000)).Entries.Count);
-            var last = service.Query(new(date, null, null, 10000, 500));
-            Assert.Equal(500, last.Entries.Count);
+            Assert.Equal(100, service.Query(new(date, null, null, 0, 1000)).Entries.Count);
+            var last = service.Query(new(date, null, null, 10000, 100));
+            Assert.Equal(100, last.Entries.Count);
             Assert.False(last.HasMore);
             Assert.Throws<ArgumentOutOfRangeException>(() => service.Query(new(date, null, null, 10001, 500)));
         });
@@ -81,8 +82,15 @@ public sealed class LogQueryServiceTest
     {
         WithLogs((paths, service) =>
         {
-            foreach (var name in new[] { "winpilot20261004.log", "winpilot20260930.log", "winpilot20260230.log", "winpilotarchive.log" })
+            foreach (var name in new[] {
+                "winpilot20261004.log",
+                "winpilot20260930.log",
+                "winpilot20260230.log",
+                "winpilotarchive.log"
+})
+            {
                 File.WriteAllText(Path.Combine(paths.LogsDirectory, name), "");
+            }
             Assert.Equal(new[] { new DateOnly(2026, 10, 4), new DateOnly(2026, 9, 30) }, service.GetAvailableDates().Select(date => date.Value));
         });
     }
@@ -96,7 +104,13 @@ public sealed class LogQueryServiceTest
             Directory.CreateDirectory(paths.LogsDirectory);
             action(paths, new LogQueryService(paths));
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
     }
 
     [Fact]
@@ -109,7 +123,9 @@ public sealed class LogQueryServiceTest
             var paths = PortableDataPaths.Create(applicationDirectory);
             Directory.CreateDirectory(paths.LogsDirectory);
             var date = new DateOnly(2026, 8, 30);
-            File.WriteAllText(Path.Combine(paths.LogsDirectory, "winpilot20260830.log"), "[10:00:00.001] [INF] WinPilot.Test.Source\n第一条日志\n\n[10:00:01.002] [ERR] WinPilot.Test.Source\n发生错误\nSystem.InvalidOperationException: 测试异常\n   at Test.Method()\n\n[10:00:02.003] [DBG] WinPilot.Other\n最后一条日志\n\n");
+            File.WriteAllText(
+                Path.Combine(paths.LogsDirectory, "winpilot20260830.log"),
+                "[10:00:00.001] [INF] WinPilot.Test.Source\n第一条日志\n\n[10:00:01.002] [ERR] WinPilot.Test.Source\n发生错误\nSystem.InvalidOperationException: 测试异常\n   at Test.Method()\n\n[10:00:02.003] [DBG] WinPilot.Other\n最后一条日志\n\n");
 
             var service = new LogQueryService(paths);
             var page = service.Query(new LogQuery(date, null, null, 0, 2));

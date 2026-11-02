@@ -62,11 +62,26 @@ public sealed class LogEndpointTest : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, clamped.StatusCode);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("&limit=500")]
+    public async Task PageSizeDefaultsAndClampsToOneHundred(string query)
+    {
+        File.WriteAllText(
+            Path.Combine(paths.LogsDirectory, "winpilot20261004.log"),
+            string.Concat(Enumerable.Repeat("[10:00:00.000] [INF] Test\nentry\n\n", 101)));
+        var page = await client.GetFromJsonAsync<JsonElement>("/api/logs?date=2026-10-04" + query);
+        Assert.Equal(100, page.GetProperty("entries").GetArrayLength());
+        Assert.True(page.GetProperty("hasMore").GetBoolean());
+    }
+
     [Fact]
     public async Task FilteredPaginationKeepsTheSnapshotAndOriginalResponseFields()
     {
         var file = Path.Combine(paths.LogsDirectory, "winpilot20261004.log");
-        File.WriteAllText(file, "[10:00:00.000] [INF] Test\nfirst\n\n[10:00:01.000] [DBG] Test\nskip\n\n[10:00:02.000] [ERR] Test\nlast\n\n");
+        File.WriteAllText(
+            file,
+            "[10:00:00.000] [INF] Test\nfirst\n\n[10:00:01.000] [DBG] Test\nskip\n\n[10:00:02.000] [ERR] Test\nlast\n\n");
         var first = await client.GetFromJsonAsync<JsonElement>("/api/logs?date=2026-10-04&level=inf,err&limit=1");
         Assert.Equal(3, first.GetProperty("snapshot").GetInt32());
         Assert.Equal("last", first.GetProperty("entries")[0].GetProperty("message").GetString());
@@ -86,11 +101,13 @@ public sealed class LogEndpointTest : IAsyncLifetime
         var file = Path.Combine(paths.LogsDirectory, "winpilot20261004.log");
         File.WriteAllText(file, "[10:00:00.000] [INF] Test\nentry\n\n");
         using (var locked = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
-        using (var response = await client.GetAsync("/api/logs?date=2026-10-04"))
         {
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-            var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
-            Assert.Equal("日志文件暂时无法读取，请稍后重试", problem.GetProperty("detail").GetString());
+            using (var response = await client.GetAsync("/api/logs?date=2026-10-04"))
+            {
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+                Assert.Equal("日志文件暂时无法读取，请稍后重试", problem.GetProperty("detail").GetString());
+            }
         }
         File.Delete(file);
         Assert.Empty((await client.GetFromJsonAsync<JsonElement[]>("/api/logs/dates"))!);

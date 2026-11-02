@@ -112,7 +112,7 @@ async function readEntries(signal: AbortSignal, reset: boolean) {
     clearEntries();
     return;
   }
-  const query = new URLSearchParams({ date: selectedDate.value, limit: '500' });
+  const query = new URLSearchParams({ date: selectedDate.value, limit: '100' });
   query.set('level', selectedLevels.value.flatMap(level => level === 'ERR' ? ['ERR', 'FTL'] : [level]).join(','));
   if (keyword.value.trim()) query.set('keyword', keyword.value.trim());
   const queryKey = query.toString();

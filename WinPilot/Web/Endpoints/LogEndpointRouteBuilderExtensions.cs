@@ -9,12 +9,23 @@ public static class LogEndpointRouteBuilderExtensions
 
     public static IEndpointRouteBuilder MapLogEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/logs/dates", (LogQueryService service, ILoggerFactory loggerFactory) => Execute(() => Results.Ok(service.GetAvailableDates().Select(date => new
-        {
-            date = date.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-        })), loggerFactory.CreateLogger("LogEndpoints")));
+        endpoints.MapGet("/api/logs/dates", (LogQueryService service, ILoggerFactory loggerFactory) =>
+            Execute(() =>
+                Results.Ok(service.GetAvailableDates().Select(date => new
+                {
+                    date = date.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                })), loggerFactory.CreateLogger("LogEndpoints")));
 
-        endpoints.MapGet("/api/logs", (string? date, string? level, string? keyword, int? offset, int? limit, int? snapshot, HttpContext context, LogQueryService service, ILoggerFactory loggerFactory) =>
+        endpoints.MapGet("/api/logs", (
+            string? date,
+            string? level,
+            string? keyword,
+            int? offset,
+            int? limit,
+            int? snapshot,
+            HttpContext context,
+            LogQueryService service,
+            ILoggerFactory loggerFactory) =>
         {
             if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var selectedDate))
             {
@@ -35,18 +46,21 @@ public static class LogEndpointRouteBuilderExtensions
             {
                 return Execute(() =>
                 {
-                    var page = service.Query(new LogQuery(selectedDate, selectedLevels, keyword?.Trim(), offset ?? 0, limit ?? 500, snapshot), context.RequestAborted);
+                    var page = service.Query(
+                        new LogQuery(selectedDate, selectedLevels, keyword?.Trim(), offset ?? 0, limit ?? 100, snapshot),
+                        context.RequestAborted);
                     return Results.Ok(new
                     {
-                        entries = page.Entries.Select(entry => new
-                        {
-                            id = entry.Id,
-                            time = entry.Time.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture),
-                            level = entry.Level,
-                            source = entry.Source,
-                            message = entry.Message,
-                            details = entry.Details
-                        }),
+                        entries = page.Entries.Select(entry =>
+                            new
+                            {
+                                id = entry.Id,
+                                time = entry.Time.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                                level = entry.Level,
+                                source = entry.Source,
+                                message = entry.Message,
+                                details = entry.Details
+                            }),
                         hasMore = page.HasMore,
                         snapshot = page.Snapshot
                     });
@@ -66,7 +80,10 @@ public static class LogEndpointRouteBuilderExtensions
 
     private static IResult Execute(Func<IResult> action, ILogger logger)
     {
-        try { return action(); }
+        try
+        {
+            return action();
+        }
         catch (UnauthorizedAccessException exception)
         {
             logger.LogWarning("日志读取权限不足：{Reason}", exception.Message);
@@ -75,9 +92,13 @@ public static class LogEndpointRouteBuilderExtensions
         catch (IOException exception)
         {
             if ((exception.HResult & 0xFFFF) is 32 or 33)
+            {
                 logger.LogDebug("日志文件正在被占用：{Reason}", exception.Message);
+            }
             else
+            {
                 logger.LogError(exception, "日志读取失败");
+            }
             return Results.Problem(statusCode: 503, title: "无法读取日志", detail: "日志文件暂时无法读取，请稍后重试");
         }
     }
