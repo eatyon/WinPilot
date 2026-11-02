@@ -27,7 +27,7 @@ public sealed partial class TaskServiceTest
             {
                 name = "Normalized", enabled = false,
                 trigger = new { type = "Process", @event = "Started", processPaths = new[] { $" {Environment.ProcessPath} ", Environment.ProcessPath!.ToUpperInvariant(), " " } },
-                actions = new[] { new { type = "SendNotification", notificationTitle = (string?)null, notificationContent = "content", notificationChannel = "QQBot" } }
+                actions = new[] { new { type = "SendNotification", notificationContent = "content", notificationChannel = "QQBot" } }
             };
             using var response = create ? await client.PostAsJsonAsync("/api/tasks", task) : await client.PutAsJsonAsync("/api/tasks/Normalized", task);
             Assert.Equal(create ? HttpStatusCode.Created : HttpStatusCode.OK, response.StatusCode);

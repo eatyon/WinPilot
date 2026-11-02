@@ -10,7 +10,7 @@ internal static class TelegramNotificationChannel
     {
         if (string.IsNullOrWhiteSpace(settings.TelegramBotToken) || string.IsNullOrWhiteSpace(settings.TelegramChatId))
             throw new InvalidOperationException("Telegram 配置不完整");
-        var text = NotificationContent.FormatMessage(message);
+        var text = message.Content;
         var image = string.IsNullOrWhiteSpace(message.ImagePath) ? null : await NotificationContent.ReadPngBytesAsync(message.ImagePath, token);
         await SendToAsync(settings, settings.TelegramChatId, text, image, null, token);
     }

@@ -10,26 +10,6 @@ namespace WinPilot.Test;
 public sealed class SecurityEventNotifierTest
 {
     [Fact]
-    public void LoginFailureDeduplicationRemovesExpiredSourcesWithoutDroppingActiveOnes()
-    {
-        var paths = PortableDataPaths.Create(Path.Combine(Path.GetTempPath(), "WinPilot.Security.Test", Guid.NewGuid().ToString("N")));
-        using var loggerFactory = LoggerFactory.Create(builder => { });
-        var notifier = new SecurityEventNotifier(paths, new RecordingNotificationService(), loggerFactory.CreateLogger<SecurityEventNotifier>());
-        var field = typeof(SecurityEventNotifier).GetField("loginFailureNotifications", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var cache = (System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset>)field.GetValue(notifier)!;
-        cache["expired"] = DateTimeOffset.UtcNow.AddMinutes(-6);
-        cache["active"] = DateTimeOffset.UtcNow;
-        notifier.Record(SecurityEventType.LoginFailed, "current", notificationSettings: new SecurityNotificationSettings
-        {
-            Channel = NotificationChannelCatalog.Telegram,
-            Events = [SecurityEventType.LoginFailed]
-        });
-        Assert.False(cache.ContainsKey("expired"));
-        Assert.True(cache.ContainsKey("active"));
-        Assert.True(cache.ContainsKey("current"));
-    }
-
-    [Fact]
     public void DefaultsAndValidation_FollowTheSecurityNotificationContract()
     {
         var settings = new SecurityNotificationSettings();
@@ -74,7 +54,7 @@ public sealed class SecurityEventNotifierTest
         {
             var paths = PortableDataPaths.Create(root);
             using var service = new NotificationService(paths, Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationService>.Instance);
-            var results = await service.SendAsync(new NotificationMessage("security", "event"), channel: "telegram");
+            var results = await service.SendAsync(new NotificationMessage("event"), channel: "telegram");
             Assert.Single(results);
             Assert.False(results[0].Succeeded);
         }
@@ -91,7 +71,7 @@ public sealed class SecurityEventNotifierTest
             using var provider = new RollingFileLoggerProvider(paths.LogsDirectory);
             using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(provider));
             var notifier = new SecurityEventNotifier(paths, new RecordingNotificationService(), loggerFactory.CreateLogger<SecurityEventNotifier>());
-            foreach (var type in Enum.GetValues<SecurityEventType>()) notifier.Record(type, "192.168.1.10", false, success: false, lockoutDuration: TimeSpan.FromMinutes(5));
+            foreach (var type in Enum.GetValues<SecurityEventType>()) notifier.Record(type, "192.168.1.10");
             Assert.False(notifier.ObserveAuthConfiguration(false));
             Assert.False(notifier.ObserveAuthConfiguration(true));
             Assert.True(notifier.ObserveAuthConfiguration(false));
@@ -99,9 +79,19 @@ public sealed class SecurityEventNotifierTest
             Assert.False(notifier.ObserveAuthConfiguration(true));
             Assert.True(notifier.ObserveAuthConfiguration(false));
 
+            notifier.Record(SecurityEventType.LanAccessChanged, enabled: true);
+            notifier.Record(SecurityEventType.LanAccessChanged, enabled: false);
             var log = File.ReadAllText(Directory.GetFiles(paths.LogsDirectory).Single());
-            foreach (var type in Enum.GetValues<SecurityEventType>()) Assert.Contains($"事件标识=Security.{type}", log);
-            Assert.Equal(3, Count(log, "事件标识=Security.AuthConfigurationInvalid"));
+            foreach (var name in new[] { "管理员密码已设置", "管理员密码已修改", "登录成功", "登录失败", "登录来源已锁定",
+                "密码配置缺失或损坏", "局域网访问设置已变更", "安全事件通知配置已修改", "局域网访问已开启", "局域网访问已关闭" })
+                Assert.Contains($"[安全事件] {name}", log);
+            Assert.Contains("[安全事件] 登录来源已锁定，来源 IP：192.168.1.10", log);
+            Assert.DoesNotContain("锁定时长", log);
+            Assert.Equal(3, Count(log, "[安全事件] 密码配置缺失或损坏"));
+            Assert.DoesNotContain("事件标识=", log);
+            Assert.DoesNotContain("发生时间=", log);
+            Assert.DoesNotContain("本机来源=", log);
+            Assert.DoesNotContain("结果=", log);
             Assert.DoesNotContain("password=", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("hash=", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("salt=", log, StringComparison.OrdinalIgnoreCase);

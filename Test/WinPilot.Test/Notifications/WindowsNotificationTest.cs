@@ -14,22 +14,26 @@ namespace WinPilot.Test.Notifications;
 
 public sealed class WindowsNotificationTest
 {
-    [Fact]
-    public void ContentPreservesTextAndEscapesXml()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public void ContentPreservesTextAndEscapesXml(string newline)
     {
-        var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new("标题 <测试> & 中文", "正文\n第二行")));
+        var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new($"标题 <测试> & 中文{newline}正文\n\n第二行")));
         var binding = Assert.Single(xml.Descendants("binding"));
         Assert.Equal("ToastGeneric", (string?)binding.Attribute("template"));
-        Assert.Equal(new[] { "标题 <测试> & 中文", "正文\n第二行" }, binding.Elements("text").Select(element => element.Value));
+        Assert.Equal(new[] { "标题 <测试> & 中文", "正文\n\n第二行" }, binding.Elements("text").Select(element => element.Value));
         Assert.Empty(binding.Elements("image"));
     }
 
     [Theory]
-    [InlineData("", "正文")]
-    [InlineData("标题", "  ")]
-    public void EmptyTextIsOmitted(string title, string content)
+    [InlineData("\n正文")]
+    [InlineData("标题\n  ")]
+    [InlineData("单行内容")]
+    public void EmptyTextIsOmitted(string content)
     {
-        var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new(title, content)));
+        var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new(content)));
         Assert.Single(xml.Descendants("text"));
     }
 
@@ -39,7 +43,7 @@ public sealed class WindowsNotificationTest
         var path = Path.GetTempFileName();
         try
         {
-            var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new("标题", "正文", path)));
+            var xml = XDocument.Parse(WindowsNotificationChannel.CreateContent(new("标题\n正文", path)));
             var image = Assert.Single(xml.Descendants("image"));
             Assert.Equal("hero", (string?)image.Attribute("placement"));
             Assert.Equal(new Uri(Path.GetFullPath(path)).AbsoluteUri, (string?)image.Attribute("src"));
@@ -51,7 +55,7 @@ public sealed class WindowsNotificationTest
     public void MissingImageFailsBeforeSending()
     {
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
-        var exception = Assert.Throws<FileNotFoundException>(() => WindowsNotificationChannel.CreateContent(new("标题", "正文", path)));
+        var exception = Assert.Throws<FileNotFoundException>(() => WindowsNotificationChannel.CreateContent(new("标题\n正文", path)));
         Assert.Equal(path, exception.FileName);
     }
 
@@ -60,7 +64,7 @@ public sealed class WindowsNotificationTest
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WindowsNotificationChannel.SendAsync(new("标题", "正文"), cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WindowsNotificationChannel.SendAsync(new("标题\n正文"), cancellation.Token));
     }
 
     [Theory]
@@ -96,7 +100,7 @@ public sealed class WindowsNotificationTest
     public void NativeNotificationPreservesContentAndGroupWithoutExpiration()
     {
         using var apartment = new NativeWindowsNotification.Apartment();
-        var xml = WindowsNotificationChannel.CreateContent(new("中文 <标题>", "正文 & 内容"));
+        var xml = WindowsNotificationChannel.CreateContent(new("中文 <标题>\n正文 & 内容"));
         using var native = NativeWindowsNotification.Create(xml, "Security.Event", CancellationToken.None);
         var toast = WinRT.MarshalInterface<ToastNotification>.FromAbi(native.Pointer);
         Assert.Equal("Security.Event", toast.Group);

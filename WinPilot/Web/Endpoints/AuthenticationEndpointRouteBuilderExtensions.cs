@@ -11,19 +11,18 @@ public static class AuthenticationEndpointRouteBuilderExtensions
         {
             if (!auth.IsConfigured) return Results.NotFound();
             var source = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            var loopback = context.Connection.RemoteIpAddress is { } address && System.Net.IPAddress.IsLoopback(address);
             if (limiter.IsLocked(source)) return Results.StatusCode(StatusCodes.Status429TooManyRequests);
             if (!auth.Verify(request.Password, out var authenticationVersion))
             {
-                securityEvents.Record(SecurityEventType.LoginFailed, source, loopback, success: false);
-                if (limiter.Failure(source)) securityEvents.Record(SecurityEventType.LoginSourceLocked, source, loopback, success: false, lockoutDuration: TimeSpan.FromMinutes(5));
+                securityEvents.Record(SecurityEventType.LoginFailed, source);
+                if (limiter.Failure(source)) securityEvents.Record(SecurityEventType.LoginSourceLocked, source);
                 return Results.Unauthorized();
             }
             var session = sessions.Create(auth, authenticationVersion);
             if (session is null) return Results.Unauthorized();
             limiter.Success(source);
             if (facade.IsEnabled()) facade.ConsumeManagementEntry(context);
-            securityEvents.Record(SecurityEventType.LoginSucceeded, source, loopback, success: true, allowNotification: !loopback);
+            securityEvents.Record(SecurityEventType.LoginSucceeded, source);
             context.Response.Cookies.Append("WinPilot.Session", session, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = context.Request.IsHttps, Path = "/", MaxAge = TimeSpan.FromMinutes(30) });
             return Results.NoContent();
         });
@@ -43,7 +42,6 @@ public static class AuthenticationEndpointRouteBuilderExtensions
                 securityEvents.ObserveAuthConfiguration(true);
                 sessions.RevokeAll();
                 securityEvents.Record(changed ? SecurityEventType.PasswordChanged : SecurityEventType.PasswordSet);
-                securityEvents.Record(SecurityEventType.SessionsRevoked);
                 return Results.NoContent();
             }
             catch (InvalidOperationException exception) { return Results.ValidationProblem(new Dictionary<string, string[]> { ["password"] = [exception.Message] }); }

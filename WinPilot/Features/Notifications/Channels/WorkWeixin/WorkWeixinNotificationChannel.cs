@@ -25,7 +25,7 @@ internal sealed class WorkWeixinNotificationChannel(HttpClient httpClient)
             imageResponse.EnsureSuccessStatusCode();
             await Task.Delay(1000, token);
         }
-        var text = NotificationContent.FormatMessage(message);
+        var text = message.Content;
         if (!string.IsNullOrWhiteSpace(text))
         {
             using var textResponse = await httpClient.PostAsJsonAsync(url,

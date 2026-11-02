@@ -16,7 +16,7 @@ internal static class WindowsNotificationChannel
     internal static string CreateContent(NotificationMessage message)
     {
         var binding = new XElement("binding", new XAttribute("template", "ToastGeneric"),
-            new[] { message.Title, message.Content }
+            message.Content.Split(["\r\n", "\n", "\r"], 2, StringSplitOptions.None)
                 .Where(text => !string.IsNullOrWhiteSpace(text))
                 .Select(text => new XElement("text", text)));
         if (!string.IsNullOrWhiteSpace(message.ImagePath))

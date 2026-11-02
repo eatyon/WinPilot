@@ -13,7 +13,7 @@ internal sealed class OneBotNotificationChannel(HttpClient httpClient)
         var targets = SelectTargets(settings);
         var endpoint = settings.OneBotEndpoint.TrimEnd('/');
         var url = endpoint.EndsWith("/send_msg", StringComparison.OrdinalIgnoreCase) ? endpoint : endpoint + "/send_msg";
-        var text = NotificationContent.FormatMessage(message);
+        var text = message.Content;
         var image = string.IsNullOrWhiteSpace(message.ImagePath) ? null : await NotificationContent.ReadPngBytesAsync(message.ImagePath, token);
         var segments = CreateSegments(text, image);
         foreach (var target in targets)

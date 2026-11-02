@@ -15,7 +15,7 @@ internal sealed class FeishuNotificationChannel(HttpClient httpClient) : IDispos
         if (!string.IsNullOrWhiteSpace(message.ImagePath) &&
             (string.IsNullOrWhiteSpace(settings.FeishuAppId) || string.IsNullOrWhiteSpace(settings.FeishuAppSecret)))
             throw new InvalidOperationException("飞书图片通知需要配置 App ID 和 App Secret");
-        var text = NotificationContent.FormatMessage(message);
+        var text = message.Content;
         object body;
         if (!string.IsNullOrWhiteSpace(message.ImagePath))
         {

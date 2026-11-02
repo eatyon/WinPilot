@@ -9,7 +9,6 @@ public enum SecurityEventType
     LoginSourceLocked,
     AuthConfigurationInvalid,
     LanAccessChanged,
-    SessionsRevoked,
     SecurityNotificationSettingsChanged
 }
 

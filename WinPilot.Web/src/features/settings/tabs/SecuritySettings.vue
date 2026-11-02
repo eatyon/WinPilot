@@ -35,11 +35,10 @@ const eventOptions = [
   ['PasswordSet', '管理员密码已设置/修改'],
   ['LanAccessChanged', '局域网访问已开启/关闭'],
   ['AuthConfigurationInvalid', '密码配置缺失或损坏'],
-  ['LoginSourceLocked', '登录来源被锁定'],
+  ['LoginSourceLocked', '登录来源已锁定'],
   ['LoginSucceeded', '登录成功'],
   ['LoginFailed', '登录失败'],
-  ['SessionsRevoked', 'Session 被撤销'],
-  ['SecurityNotificationSettingsChanged', '安全通知配置已修改'],
+  ['SecurityNotificationSettingsChanged', '安全事件通知配置已修改'],
 ] as const;
 const channelOptions = ref<{ value: string; label: string }[]>([]);
 const eventsLabel = computed(() => {
@@ -208,8 +207,8 @@ async function saveNotifications() {
             </button>
           </span>
         </label>
-        <p v-if="error" class="status-message error" role="alert">{{ error }}</p>
-        <button class="button button-primary" type="button" :disabled="saving" @click="savePassword">
+        <p v-if="error" class="field-error" role="alert">{{ error }}</p>
+        <button class="button button-primary" :class="{ 'is-pending': saving }" type="button" :disabled="saving" @click="savePassword">
           {{ saving ? '正在保存' : configured ? '修改密码' : '设置密码' }}
         </button>
       </div>
@@ -248,6 +247,7 @@ async function saveNotifications() {
         <div class="settings-actions security-notification-actions">
           <button
             class="button button-primary"
+            :class="{ 'is-pending': notificationSaving }"
             type="button"
             :disabled="loading || !settingsLoaded || notificationSaving"
             @click="saveNotifications"

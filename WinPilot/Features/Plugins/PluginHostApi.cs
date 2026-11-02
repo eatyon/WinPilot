@@ -28,7 +28,7 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
             logger.LogDebug("开始执行插件请求的主程序操作，操作类型：{ActionName}", actionName);
             if (step.Type == PluginHostActionType.StartProgram && !step.Parameters.ContainsKey("programPath"))
                 throw new InvalidOperationException("缺少 programPath");
-            var (action, image) = PluginHostActionConverter.Convert(step, defaultSilent: true, defaultShell: "cmd", includeNotificationTitle: false);
+            var (action, image) = PluginHostActionConverter.Convert(step, defaultSilent: true, defaultShell: "cmd");
             switch (step.Type)
             {
                 case PluginHostActionType.StartProgram:
@@ -40,7 +40,7 @@ public sealed class PluginHostActionApi(IProgramManager programs, KeyboardInputS
                     await terminals.ExecuteTaskCommandAsync(action.Shell ?? "", action.Command ?? "", cancellationToken); break;
                 case PluginHostActionType.SendNotification:
                     PluginNotificationImageValidator.ValidateImageSize(image);
-                    await NotificationDelivery.SendAsync(notifications, new NotificationMessage("", action.NotificationContent ?? ""),
+                    await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationContent ?? ""),
                         action.NotificationChannel?.Trim(), cancellationToken,
                         imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger); break;
                 default: throw new InvalidOperationException("Host Action 类型不支持");

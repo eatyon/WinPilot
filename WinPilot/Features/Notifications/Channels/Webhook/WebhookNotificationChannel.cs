@@ -15,7 +15,7 @@ internal sealed class WebhookNotificationChannel(HttpClient httpClient)
             ["result"] = message.Result,
             ["timestamp"] = message.Timestamp ?? DateTimeOffset.Now.ToString("O"),
             ["screenshot"] = await NotificationContent.ReadJpegBase64Async(message.ImagePath, token),
-            ["message"] = NotificationContent.FormatMessage(message),
+            ["message"] = message.Content,
             ["data"] = message.Data
         };
         using var response = await httpClient.PostAsJsonAsync(settings.WebhookUrl, payload, cancellationToken: token);

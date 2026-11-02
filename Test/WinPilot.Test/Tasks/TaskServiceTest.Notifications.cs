@@ -534,24 +534,8 @@ public sealed partial class TaskServiceTest
         Assert.Equal(channel, sent.Channel);
     }
 
-    [Theory]
-    [InlineData(null, "")]
-    [InlineData("", "")]
-    [InlineData("任务标题", "任务标题")]
-    public async Task NotificationUsesConfiguredTaskTitle(string? title, string expectedTitle)
-    {
-        var notifications = new RecordingNotifications();
-        await using var fixture = new TaskServiceFixture(notifications);
-
-        await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot",
-            NotificationTitle: title, NotificationContent: "测试通知"), true);
-
-        var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(expectedTitle, sent.Message.Title);
-    }
-
     [Fact]
-    public async Task NotificationResolvesRequestedVariablesAndSendTimeButPreservesTitle()
+    public async Task NotificationResolvesRequestedVariablesAndSendTime()
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
@@ -573,10 +557,9 @@ public sealed partial class TaskServiceTest
         var before = DateTimeOffset.Now.AddSeconds(-1);
 
         await RunNotificationAsync(fixture, new(TaskActionType.SendNotification, NotificationChannel: "QQBot",
-            NotificationTitle: "任务通知 $test.summary", NotificationContent: "结果：$test.summary\n\n&test.image\n$time\n$unknown"), true);
+            NotificationContent: "结果：$test.summary\n\n&test.image\n$time\n$unknown"), true);
 
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal("任务通知 $test.summary", sent.Message.Title);
         var lines = sent.Message.Content.Split(Environment.NewLine);
         Assert.Equal(5, lines.Length);
         Assert.Equal("结果：已完成", lines[0]);

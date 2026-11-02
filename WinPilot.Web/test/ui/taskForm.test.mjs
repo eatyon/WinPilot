@@ -84,7 +84,7 @@ test('each action payload excludes fields belonging to other action types', () =
     StartProgram: ['programPath', 'arguments', 'workingDirectory', 'runElevated', 'silent'],
     StartTag: ['tagName'], EndProcess: ['processName', 'currentUserOnly'],
     Delay: ['delaySeconds'], Keyboard: ['keys'], Shell: ['shell', 'command'],
-    SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
+    SendNotification: ['notificationContent', 'notificationChannel'],
     TaskState: ['taskName', 'state'], Extension: ['pluginId', 'actionId', 'parameters'],
   };
   for (const [type, keys] of Object.entries(fields)) {

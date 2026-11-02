@@ -30,7 +30,7 @@ public sealed class NotificationServiceLifetimeTest
     public async Task InvalidChannelDoesNotCreateResources(string? channel, string message)
     {
         using var fixture = new Fixture();
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SendAsync(new("标题", "正文"), channel: channel));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SendAsync(new("标题\n正文"), channel: channel));
         Assert.Equal(message, error.Message);
         AssertUnused(fixture.Service);
     }
@@ -44,13 +44,13 @@ public sealed class NotificationServiceLifetimeTest
     public async Task OnlySelectedChannelIsCreatedAndReused(string selected, string field)
     {
         using var fixture = new Fixture();
-        Assert.False(Assert.Single(await fixture.Service.SendAsync(new("标题", "正文"), channel: selected)).Succeeded);
+        Assert.False(Assert.Single(await fixture.Service.SendAsync(new("标题\n正文"), channel: selected)).Succeeded);
         var channel = Read(fixture.Service, field);
         var client = Assert.IsType<HttpClient>(Read(fixture.Service, "httpClient"));
         Assert.Equal(TimeSpan.FromSeconds(30), client.Timeout);
         Assert.NotNull(channel);
         Assert.All(ChannelFields.Where(name => name != field), name => Assert.Null(Read(fixture.Service, name)));
-        await fixture.Service.SendAsync(new("标题", "正文"), channel: selected);
+        await fixture.Service.SendAsync(new("标题\n正文"), channel: selected);
         Assert.Same(channel, Read(fixture.Service, field));
         Assert.Same(client, Read(fixture.Service, "httpClient"));
         fixture.Service.Dispose();
@@ -67,9 +67,9 @@ public sealed class NotificationServiceLifetimeTest
     public async Task DifferentChannelsReuseOneSharedClient()
     {
         using var fixture = new Fixture();
-        await fixture.Service.SendAsync(new("标题", "正文"), channel: "Webhook");
+        await fixture.Service.SendAsync(new("标题\n正文"), channel: "Webhook");
         var client = Read(fixture.Service, "httpClient");
-        await fixture.Service.SendAsync(new("标题", "正文"), channel: "QQBot");
+        await fixture.Service.SendAsync(new("标题\n正文"), channel: "QQBot");
         Assert.NotNull(client);
         Assert.Same(client, Read(fixture.Service, "httpClient"));
         Assert.NotNull(Read(fixture.Service, "webhook"));
@@ -81,11 +81,11 @@ public sealed class NotificationServiceLifetimeTest
     public async Task StaticChannelsDoNotCreateSharedNetworkResources()
     {
         using var fixture = new Fixture();
-        Assert.False(Assert.Single(await fixture.Service.SendAsync(new("标题", "正文"), channel: "Telegram")).Succeeded);
+        Assert.False(Assert.Single(await fixture.Service.SendAsync(new("标题\n正文"), channel: "Telegram")).Succeeded);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Service.SendAsync(
-            new("标题", "正文"), "Windows", cancellation.Token));
+            new("标题\n正文"), "Windows", cancellation.Token));
         AssertUnused(fixture.Service);
     }
 

@@ -30,6 +30,61 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     private HttpClient client = null!;
     private RollingFileLoggerProvider? logProvider;
 
+    [Theory]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::1", true)]
+    [InlineData("192.168.1.10", true)]
+    [InlineData("192.168.1.10", false)]
+    public async Task LoginEventsLogEveryAttemptAndNotifySelectedEventsForAnySource(string source, bool selected)
+    {
+        var paths = app.Services.GetRequiredService<PortableDataPaths>();
+        app.Services.GetRequiredService<AuthStore>().SetInitialPassword("test-password");
+        WinPilotSettings.Update(paths.ConfigurationFile, current => current with
+        {
+            SecurityNotifications = new SecurityNotificationSettings
+            {
+                Channel = "telegram",
+                Events = selected ? [SecurityEventType.LoginFailed, SecurityEventType.LoginSourceLocked, SecurityEventType.LoginSucceeded] : []
+            }
+        });
+        client.DefaultRequestHeaders.Add("X-Test-Remote-IP", source);
+        var sender = (TestNotificationService)app.Services.GetRequiredService<INotificationService>();
+        for (var index = 0; index < 5; index++)
+        {
+            using var failed = await client.PostAsJsonAsync("/login", new { password = "wrong-password" });
+            Assert.Equal(HttpStatusCode.Unauthorized, failed.StatusCode);
+            Assert.Equal(selected ? index + 1 : 0, sender.Messages.Count(message => message.Event == "Security.LoginFailed"));
+        }
+        Assert.Equal(selected ? 6 : 0, sender.Messages.Count);
+        for (var index = 0; index < 2; index++)
+        {
+            using var locked = await client.PostAsJsonAsync("/login", new { password = "test-password" });
+            Assert.Equal(HttpStatusCode.TooManyRequests, locked.StatusCode);
+        }
+        Assert.Equal(selected ? 6 : 0, sender.Messages.Count);
+        app.Services.GetRequiredService<LoginRateLimiter>().Success(source);
+        using var success = await client.PostAsJsonAsync("/login", new { password = "test-password" });
+        Assert.Equal(HttpStatusCode.NoContent, success.StatusCode);
+        Assert.Equal(selected ? 1 : 0, sender.Messages.Count(message => message.Event == "Security.LoginSucceeded"));
+        Assert.All(sender.Messages, message =>
+        {
+            var occurredAt = DateTimeOffset.Parse(message.Timestamp!);
+            var name = message.Event switch
+            {
+                "Security.LoginSucceeded" => "登录成功",
+                "Security.LoginFailed" => "登录失败",
+                "Security.LoginSourceLocked" => "登录来源已锁定",
+                _ => throw new InvalidOperationException(message.Event)
+            };
+            Assert.Equal($"WinPilot 安全事件\n事件：{name}\n来源：{source}\n时间：{occurredAt:yyyy-MM-dd HH:mm:ss}", message.Content);
+        });
+        logProvider!.Dispose();
+        var log = ReadActiveLog(paths.LogsDirectory);
+        Assert.Equal(5, log.Split($"[安全事件] 登录失败，来源 IP：{source}", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, log.Split($"[安全事件] 登录来源已锁定，来源 IP：{source}", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, log.Split($"[安全事件] 登录成功，来源 IP：{source}", StringSplitOptions.None).Length - 1);
+    }
+
     [Fact]
     public async Task PasswordChangeRejectsSessionFromPendingOldPasswordLogin()
     {
@@ -104,7 +159,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         public bool IsEnabled(LogLevel level) => true;
         public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            if (!formatter(state, exception).Contains("安全事件：登录成功", StringComparison.Ordinal)) return;
+            if (!formatter(state, exception).StartsWith("[安全事件] 登录成功", StringComparison.Ordinal)) return;
             Entered.TrySetResult();
             if (!Release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("登录握手未解除");
         }
@@ -1414,7 +1469,7 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, unchanged.StatusCode);
         logProvider!.Dispose();
         var log = ReadActiveLog(PortableDataPaths.Create(root).LogsDirectory);
-        Assert.Equal(1, log.Split("安全事件：局域网访问设置已变更", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, log.Split("[安全事件] 局域网访问已开启", StringSplitOptions.None).Length - 1);
     }
 
     private static string ReadActiveLog(string logsDirectory)
@@ -1440,5 +1495,10 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
 
 public sealed class TestNotificationService : INotificationService
 {
-    public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
+    public System.Collections.Concurrent.ConcurrentQueue<NotificationMessage> Messages { get; } = new();
+    public Task<IReadOnlyList<NotificationChannelResult>> SendAsync(NotificationMessage message, string? channel, CancellationToken cancellationToken = default)
+    {
+        Messages.Enqueue(message);
+        return Task.FromResult<IReadOnlyList<NotificationChannelResult>>([]);
+    }
 }

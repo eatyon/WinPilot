@@ -6,9 +6,6 @@ namespace WinPilot.Features.Notifications;
 
 internal static class NotificationContent
 {
-    internal static string FormatMessage(NotificationMessage message) =>
-        string.Join("\n", new[] { message.Title, message.Content }.Where(text => !string.IsNullOrWhiteSpace(text)));
-
     internal static async Task<byte[]> ReadPngBytesAsync(string path, CancellationToken token) =>
         await ReadImageBytesAsync(path, ImageFormat.Png, token);
 

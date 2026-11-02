@@ -46,8 +46,8 @@ public static class NotificationEndpointRouteBuilderExtensions
             if (string.IsNullOrWhiteSpace(request.Channel)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["channel"] = ["请选择发送渠道"] });
             if (NotificationChannelCatalog.Find(request.Channel) is null)
                 return Results.BadRequest(new { message = "通知渠道无效" });
-            if (string.IsNullOrWhiteSpace(request.Content) && string.IsNullOrWhiteSpace(request.Title)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["content"] = ["请输入测试内容"] });
-            var results = await notifications.SendAsync(new NotificationMessage(request.Title ?? "WinPilot 测试通知", request.Content, request.ImagePath), request.Channel, context.RequestAborted);
+            if (string.IsNullOrWhiteSpace(request.Content)) return Results.ValidationProblem(new Dictionary<string, string[]> { ["content"] = ["请输入测试内容"] });
+            var results = await notifications.SendAsync(new NotificationMessage(request.Content, request.ImagePath), request.Channel, context.RequestAborted);
             if (results.Count == 0) return Results.BadRequest(new { message = "没有可用的通知渠道" });
             return Results.Ok(results);
         });
@@ -103,5 +103,5 @@ public static class NotificationEndpointRouteBuilderExtensions
         await context.Response.WriteAsync($"data: {System.Text.Json.JsonSerializer.Serialize(value, ResponseJson.Default)}\n\n", token);
         await context.Response.Body.FlushAsync(token);
     }
-    private sealed record NotificationTestRequest(string? Title, string Content, string? ImagePath, string? Channel);
+    private sealed record NotificationTestRequest(string Content, string? ImagePath, string? Channel);
 }

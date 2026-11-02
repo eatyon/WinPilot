@@ -7,7 +7,7 @@ namespace WinPilot.Features.Plugins;
 internal static class PluginHostActionConverter
 {
     internal static (TaskAction Action, PluginImageContent? Image) Convert(PluginHostActionStep step,
-        bool defaultSilent, string? defaultShell, bool includeNotificationTitle)
+        bool defaultSilent, string? defaultShell)
     {
         var values = step.Parameters;
         return step.Type switch
@@ -20,21 +20,20 @@ internal static class PluginHostActionConverter
             PluginHostActionType.Keyboard => (new TaskAction(TaskActionType.Keyboard, Keys: GetStrings(values, "keys")), null),
             PluginHostActionType.Shell => (new TaskAction(TaskActionType.Shell,
                 Shell: GetString(values, "shell") ?? defaultShell, Command: GetString(values, "command")), null),
-            PluginHostActionType.SendNotification => ConvertNotification(values, includeNotificationTitle),
+            PluginHostActionType.SendNotification => ConvertNotification(values),
             _ => throw new InvalidOperationException("Host Action 类型不支持")
         };
     }
 
-    private static (TaskAction Action, PluginImageContent? Image) ConvertNotification(IReadOnlyDictionary<string, object?> values, bool includeTitle)
+    private static (TaskAction Action, PluginImageContent? Image) ConvertNotification(IReadOnlyDictionary<string, object?> values)
     {
         var channel = GetString(values, "channel");
         NotificationChannelCatalog.RequireChannel(channel);
         values.TryGetValue("image", out var imageValue);
         if (imageValue is not null && imageValue is not PluginImageContent)
             throw new InvalidOperationException("image 必须是 PluginImageContent");
-        var title = includeTitle ? GetString(values, "title") ?? "" : "";
         var content = GetString(values, "content") ?? "";
-        return (new TaskAction(TaskActionType.SendNotification, NotificationTitle: title, NotificationContent: content,
+        return (new TaskAction(TaskActionType.SendNotification, NotificationContent: content,
             NotificationChannel: channel), imageValue as PluginImageContent);
     }
 

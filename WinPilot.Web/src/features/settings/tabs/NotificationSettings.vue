@@ -57,6 +57,8 @@ const loading = ref(false),
   error = ref(''),
   binding = ref('');
 const qqbotOpenIdStatus = reactive<Record<QQBotOpenIdTarget, QQBotOpenIdStatus>>({ user: null, group: null });
+const savingChannel = ref('');
+const testingChannel = ref('');
 let qqbotOpenIdController: AbortController | undefined;
 type BotChannel = 'telegram' | 'feishu' | 'qqbot' | 'onebot';
 const botEnabled = reactive<Record<BotChannel, boolean>>({ telegram: false, feishu: false, qqbot: false, onebot: false });
@@ -128,6 +130,7 @@ async function toggleChannel(channel: string) {
 async function save(channel: string) {
   if (!settingsLoaded.value || saving.value || safeModeEnabled.value || !requests.active) return;
   saving.value = true;
+  savingChannel.value = channel;
   const submitted = { ...form };
   try {
     const response = await requests.fetch(`/api/settings/notifications/${channel}`, {
@@ -152,6 +155,7 @@ async function save(channel: string) {
     showToast(error.value);
   } finally {
     saving.value = false;
+    savingChannel.value = '';
   }
 }
 function togglePassword(field: string) {
@@ -160,11 +164,12 @@ function togglePassword(field: string) {
 async function test(channel: string) {
   if (!settingsLoaded.value || testing.value || saving.value || safeModeEnabled.value || !requests.active) return;
   testing.value = true;
+  testingChannel.value = channel;
   try {
     const response = await requests.fetch('/api/notifications/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: '这是一条测试通知信息', content: '', channel }),
+      body: JSON.stringify({ content: '这是一条测试通知信息', channel }),
     });
     if (!response.ok) throw new Error(await readApiError(response, '通知测试失败', requests.json));
     const results = await requests.json(response);
@@ -178,12 +183,13 @@ async function test(channel: string) {
     showToast(userErrorMessage(cause, '通知测试失败'));
   } finally {
     testing.value = false;
+    testingChannel.value = '';
   }
 }
 async function bindQQBot(target: QQBotOpenIdTarget) {
   if (!settingsLoaded.value || safeModeEnabled.value || !requests.active) return;
   if (binding.value === target) {
-    qqbotOpenIdStatus[target] = { text: '已取消获取', tone: 'info' };
+    qqbotOpenIdStatus[target] = null;
     qqbotOpenIdController?.abort();
     binding.value = '';
     return;
@@ -251,19 +257,18 @@ onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
       class="settings-section notification-channel-section"
       :class="{ expanded: expanded[channel.key] }"
     >
-      <div
+      <button
         class="notification-channel-header"
-        role="button"
-        tabindex="0"
+        type="button"
+        :aria-expanded="expanded[channel.key] === true"
         @click="toggleChannel(channel.key)"
-        @keydown.enter="toggleChannel(channel.key)"
       >
         <span class="notification-channel-copy">
           <strong>{{ channel.title }}</strong>
           <small>{{ channel.desc }}</small>
         </span>
         <span class="notification-chevron" :class="{ open: expanded[channel.key] }" aria-hidden="true" />
-      </div>
+      </button>
       <div v-if="expanded[channel.key]" class="notification-channel-body" :class="{ 'settings-data-pending': !settingsLoaded }">
         <template v-if="channel.key === 'webhook'">
           <label class="field-control">
@@ -408,10 +413,9 @@ onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
                 class="button button-secondary"
                 type="button"
                 :disabled="binding !== '' && binding !== 'user'"
-                :title="binding === 'user' ? '点击取消获取' : undefined"
                 @click="bindQQBot('user')"
               >
-                {{ binding === 'user' ? '获取中…' : '获取' }}
+                {{ binding === 'user' ? '取消' : '获取' }}
               </button>
             </div>
             <small
@@ -434,10 +438,9 @@ onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
                 class="button button-secondary"
                 type="button"
                 :disabled="binding !== '' && binding !== 'group'"
-                :title="binding === 'group' ? '点击取消获取' : undefined"
                 @click="bindQQBot('group')"
               >
-                {{ binding === 'group' ? '获取中…' : '获取' }}
+                {{ binding === 'group' ? '取消' : '获取' }}
               </button>
             </div>
             <small
@@ -481,13 +484,14 @@ onBeforeUnmount(() => { requests.dispose(); qqbotOpenIdController?.abort(); });
           ><AppIcon name="bot" /></button>
           <button
             class="button button-secondary"
+            :class="{ 'is-pending': testingChannel === channel.key }"
             :disabled="loading || !settingsLoaded || saving || testing"
             @click="test(channel.key)"
           >
-            测试发送
+            {{ testingChannel === channel.key ? '正在发送' : '测试发送' }}
           </button>
-          <button v-if="channel.key !== 'windows'" class="button button-primary" :disabled="loading || !settingsLoaded || saving" @click="save(channel.key)">
-            保存
+          <button v-if="channel.key !== 'windows'" class="button button-primary" :class="{ 'is-pending': savingChannel === channel.key }" :disabled="loading || !settingsLoaded || saving" @click="save(channel.key)">
+            {{ savingChannel === channel.key ? '正在保存' : '保存' }}
           </button>
         </div>
       </div>

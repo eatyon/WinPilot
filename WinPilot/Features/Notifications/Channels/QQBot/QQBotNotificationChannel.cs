@@ -16,17 +16,17 @@ internal sealed class QQBotNotificationChannel(HttpClient httpClient) : IDisposa
         if (string.IsNullOrWhiteSpace(settings.QQBotAppId) || string.IsNullOrWhiteSpace(settings.QQBotClientSecret))
             throw new InvalidOperationException("QQBot 配置不完整");
         var targets = SelectTargets(settings);
+        var text = message.Content;
         var access = await GetAccessTokenAsync(settings, token);
         foreach (var target in targets)
         {
             var targetType = target.Type == "private" ? "users" : "groups";
             var baseUrl = $"https://api.sgroup.qq.com/v2/{targetType}/{Uri.EscapeDataString(target.Id)}";
             var textSent = false;
-            if (!string.IsNullOrWhiteSpace(message.Content) ||
-                string.IsNullOrWhiteSpace(message.ImagePath) && !string.IsNullOrWhiteSpace(message.Title))
+            if (!string.IsNullOrWhiteSpace(text))
             {
                 await SendRequestAsync(baseUrl + "/messages",
-                    CreateTextPayload(settings, NotificationContent.FormatMessage(message)), access, token);
+                    CreateTextPayload(settings, text), access, token);
                 textSent = true;
             }
             if (!string.IsNullOrWhiteSpace(message.ImagePath))

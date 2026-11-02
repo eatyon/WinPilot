@@ -64,7 +64,6 @@ export type Action = {
   keys: string[];
   shell: 'CMD' | 'PowerShell';
   command: string;
-  notificationTitle: string;
   notificationContent: string;
   notificationChannel: string;
   taskName: string;
@@ -126,7 +125,6 @@ export const createAction = (): Action => ({
   keys: [],
   shell: 'PowerShell',
   command: '',
-  notificationTitle: '',
   notificationContent: '',
   notificationChannel: '',
   taskName: '',
@@ -152,7 +150,7 @@ const actionFields: Record<Action['type'], readonly (keyof Action)[]> = {
   Delay: ['delaySeconds'],
   Keyboard: ['keys'],
   Shell: ['shell', 'command'],
-  SendNotification: ['notificationTitle', 'notificationContent', 'notificationChannel'],
+  SendNotification: ['notificationContent', 'notificationChannel'],
   TaskState: ['taskName', 'state'],
   Extension: ['pluginId', 'actionId', 'parameters'],
 };

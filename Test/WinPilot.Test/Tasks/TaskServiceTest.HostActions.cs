@@ -193,7 +193,7 @@ public sealed partial class TaskServiceTest
     }
 
     [Fact]
-    public async Task HostPlanNotificationResolvesParametersAndContentButPreservesTitleAndChannel()
+    public async Task HostPlanNotificationResolvesParametersAndContentButPreservesChannel()
     {
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
@@ -202,17 +202,16 @@ public sealed partial class TaskServiceTest
             Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["$vars.result"] = "已完成" }));
         var parameters = new Dictionary<string, object?>
         {
-            ["title"] = "$vars.result", ["content"] = "$vars.result\n$time", ["channel"] = " QQBot "
+            ["content"] = "$vars.result\n$time", ["channel"] = " QQBot "
         };
 
         var error = await RunHostPlanAsync(fixture, new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
-            ["title"] = "$param.title", ["content"] = "$param.content", ["channel"] = "$param.channel", ["image"] = null
+            ["content"] = "$param.content", ["channel"] = "$param.channel", ["image"] = null
         }), parameters);
 
         Assert.Null(error);
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal("$vars.result", sent.Message.Title);
         var lines = sent.Message.Content.Split(Environment.NewLine);
         Assert.Equal("已完成", lines[0]);
         Assert.True(DateTimeOffset.TryParseExact(lines[1], "[yyyy-MM-dd HH:mm:ss]", null,

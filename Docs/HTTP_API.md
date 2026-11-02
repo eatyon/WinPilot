@@ -166,7 +166,7 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 | GET | `/api/notifications/channels` | 读取可选通知渠道 | 200 `{ value, label }` 数组 | — |
 | GET | `/api/settings/notifications` | 读取通知渠道配置；`no-store` | 200 通知设置 | 403 |
 | PATCH | `/api/settings/notifications/{channel}` | 更新指定通知渠道配置（Windows 除外）；JSON 提交通知设置 | 200 合并后的通知设置 | 400、403、500 |
-| POST | `/api/notifications/test` | 发送测试通知；JSON `{ channel, title, content, imagePath }`；channel 必填，标题或内容至少一项非空；检查 `succeeded` 判断投递结果 | 200 渠道投递结果数组 | 400 |
+| POST | `/api/notifications/test` | 发送测试通知；JSON `{ channel, content, imagePath }`；channel、content 必填；检查 `succeeded` 判断投递结果 | 200 渠道投递结果数组 | 400 |
 | POST | `/api/notifications/qqbot/bind-user` | 无请求体；`data` JSON 的 `type` 为 `code/success/error`，分别携带 `code/openId/message`；取消结束流，`no-cache` | 200 SSE | — |
 | POST | `/api/notifications/qqbot/bind-group` | 同 bind-user 协议，获取群 OpenID；超时和绑定失败由 `type: "error"` 报告 | 200 SSE | — |
 

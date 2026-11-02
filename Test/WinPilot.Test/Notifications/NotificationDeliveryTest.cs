@@ -17,7 +17,7 @@ public sealed class NotificationDeliveryTest
         var notifications = new LockedImageNotifications(kind);
         try
         {
-            var delivery = NotificationDelivery.SendAsync(notifications, new("title", "body"), "QQBot", CancellationToken.None,
+            var delivery = NotificationDelivery.SendAsync(notifications, new("title\nbody"), "QQBot", CancellationToken.None,
                 imageContent: [1], imageContentType: "image/png", logger: logger);
             if (kind == "success") await delivery;
             else Assert.Same(notifications.Failure, await Assert.ThrowsAnyAsync<Exception>(() => delivery));
@@ -49,7 +49,7 @@ public sealed class NotificationDeliveryTest
     {
         var logger = new RecordingLogger();
         var notifications = new LockedImageNotifications("success", false);
-        await NotificationDelivery.SendAsync(notifications, new("title", "body"), "QQBot", CancellationToken.None,
+        await NotificationDelivery.SendAsync(notifications, new("title\nbody"), "QQBot", CancellationToken.None,
             imageContent: [1], imageContentType: "image/png", logger: logger);
         Assert.False(File.Exists(notifications.Path));
         Assert.Empty(logger.Entries);
@@ -57,7 +57,7 @@ public sealed class NotificationDeliveryTest
         try
         {
             await File.WriteAllBytesAsync(path, [1]);
-            await NotificationDelivery.SendAsync(notifications, new("title", "body", path), "QQBot", CancellationToken.None, logger: logger);
+            await NotificationDelivery.SendAsync(notifications, new("title\nbody", path), "QQBot", CancellationToken.None, logger: logger);
             Assert.True(File.Exists(path));
             Assert.Empty(logger.Entries);
         }

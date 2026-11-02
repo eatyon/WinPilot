@@ -81,7 +81,6 @@ public sealed class PluginHostActionApiTest
 
         Assert.True(result.Succeeded);
         Assert.Equal("签到完成", notifications.Message?.Content);
-        Assert.Equal("", notifications.Message?.Title);
         Assert.Equal(channel, notifications.Channel);
     }
 
@@ -176,7 +175,6 @@ public sealed class PluginHostActionApiTest
         Assert.True(result.Succeeded);
         Assert.Null(result.Error);
         Assert.NotNull(notifications.Message);
-        Assert.Equal("", notifications.Message.Title);
         Assert.Equal("", notifications.Message.Content);
         Assert.Equal(extension, Path.GetExtension(notifications.Message.ImagePath));
         Assert.Equal(image, notifications.ImageBytes);
@@ -345,7 +343,6 @@ public sealed class PluginHostActionApiTest
 
         Assert.True(result.Succeeded);
         Assert.NotNull(notifications.Message);
-        Assert.Equal("", notifications.Message.Title);
         Assert.Equal(content, notifications.Message.Content);
         Assert.Null(notifications.Message.ImagePath);
     }
@@ -638,7 +635,7 @@ public sealed class PluginHostActionApiTest
     }
 
     [Fact]
-    public async Task HostActionNotificationDoesNotResolveParametersOrReadTitle()
+    public async Task HostActionNotificationDoesNotResolveParameters()
     {
         var notifications = new RecordingNotificationService();
         await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
@@ -646,11 +643,10 @@ public sealed class PluginHostActionApiTest
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
-            ["title"] = new UnreadableHostValue(), ["content"] = "$param.content", ["channel"] = " QQBot ", ["image"] = null
+            ["content"] = "$param.content", ["channel"] = " QQBot ", ["image"] = null
         }));
 
         Assert.True(result.Succeeded);
-        Assert.Equal("", notifications.Message?.Title);
         Assert.Equal("$param.content", notifications.Message?.Content);
         Assert.Equal("QQBot", notifications.Channel);
         Assert.Null(notifications.Message?.ImagePath);
@@ -756,7 +752,7 @@ public sealed class PluginHostActionApiTest
         public IReadOnlyList<InteractiveUser> GetInteractiveUsers() => [];
         public IReadOnlyList<RunningProgram> GetRunningPrograms(string userName) => [];
         public ProgramUsage GetUsage(IReadOnlyList<int> processIds, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public void Close(IReadOnlyList<int> processIds, bool force) => throw new NotSupportedException();
+        public void Close(IReadOnlyList<int> processIds, bool isGroup) => throw new NotSupportedException();
         public void Launch(ProgramLaunchRequest request) => LastLaunch = request;
     }
 

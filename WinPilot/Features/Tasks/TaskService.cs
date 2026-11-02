@@ -988,7 +988,7 @@ public sealed class TaskService : BackgroundService
     private async Task ExecuteHostStep(PluginHostActionStep step, IReadOnlyDictionary<string, object?> extensionParameters, PluginTaskRunContext context)
     {
         var values = step.Parameters.ToDictionary(pair => pair.Key, pair => ResolvePlanValue(pair.Value, extensionParameters));
-        var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null, includeNotificationTitle: true);
+        var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null);
         if (step.Type == PluginHostActionType.SendNotification)
         {
             await SendConfiguredNotification(action, context, image);
@@ -1076,7 +1076,7 @@ public sealed class TaskService : BackgroundService
         var image = pluginImage ?? ResolveNotificationImage(contentImageNames.FirstOrDefault(), resolvedContext);
         if (pluginImage is not null)
             PluginNotificationImageValidator.ValidateImageSize(pluginImage);
-        await NotificationDelivery.SendAsync(notifications, new NotificationMessage(action.NotificationTitle ?? "WinPilot 通知", content, directImagePath),
+        await NotificationDelivery.SendAsync(notifications, new NotificationMessage(content, directImagePath),
             channel, context.CancellationToken,
             imageContent: image?.Content, imageContentType: image?.ContentType, logger: logger);
     }
@@ -1248,7 +1248,6 @@ public sealed class TaskService : BackgroundService
                 : action.Keys ?? [],
             Shell = action.Shell ?? "",
             Command = action.Command ?? "",
-            NotificationTitle = action.NotificationTitle ?? "",
             NotificationContent = action.NotificationContent ?? "",
             NotificationChannel = action.NotificationChannel ?? ""
         }).ToArray()

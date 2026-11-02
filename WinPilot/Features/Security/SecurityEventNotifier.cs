@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using WinPilot.Core;
 using WinPilot.Core.Notifications;
 using WinPilot.Features.Notifications;
@@ -17,9 +16,6 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
     private Task cancellation = Task.CompletedTask;
     private Task? disposal;
     private bool stopping;
-    private static readonly TimeSpan LoginFailureNotificationInterval = TimeSpan.FromMinutes(5);
-    private readonly ConcurrentDictionary<string, DateTimeOffset> loginFailureNotifications = new(StringComparer.Ordinal);
-    private long nextFailureCleanupUtcTicks;
     private bool? authConfigured;
     private readonly object authStateGate = new();
 
@@ -46,15 +42,17 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
         return invalidated;
     }
 
-    public void Record(SecurityEventType type, string? sourceIp = null, bool? isLoopback = null, bool? success = null, TimeSpan? lockoutDuration = null, bool? enabled = null, bool allowNotification = true, SecurityNotificationSettings? notificationSettings = null)
+    public void Record(SecurityEventType type, string? sourceIp = null, bool? enabled = null, SecurityNotificationSettings? notificationSettings = null)
     {
-        var occurredAtUtc = DateTimeOffset.UtcNow;
-        logger.LogInformation("安全事件：{EventName}；{Details}", EventName(type), FormatLogDetails(type, occurredAtUtc, sourceIp, isLoopback, success, lockoutDuration, enabled));
+        var occurredAt = DateTimeOffset.Now;
+        logger.LogInformation("[安全事件] {Description}", FormatLogMessage(type, sourceIp, enabled));
         try
         {
             var settings = notificationSettings ?? LoadSettings();
-            if (allowNotification && ShouldNotify(type, sourceIp, settings))
+            if (ShouldNotify(type, settings))
             {
+                var message = new NotificationMessage(FormatNotificationMessage(type, sourceIp, enabled, occurredAt),
+                    Event: $"Security.{type}", Timestamp: occurredAt.ToString("O"));
                 TaskCompletionSource completion;
                 CancellationToken token;
                 lock (deliveryGate)
@@ -64,7 +62,7 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
                     deliveries.Add(completion.Task);
                     token = stoppingCancellation.Token;
                 }
-                _ = CompleteDeliveryAsync(completion, type, sourceIp, isLoopback, lockoutDuration, enabled, settings, token);
+                _ = CompleteDeliveryAsync(completion, type, message, settings, token);
             }
         }
         catch (Exception exception)
@@ -88,44 +86,30 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
 
     private SecurityNotificationSettings LoadSettings() => WinPilotSettings.LoadAndInitialize(paths.ConfigurationFile).SecurityNotifications;
 
-    private bool ShouldNotify(SecurityEventType type, string? sourceIp, SecurityNotificationSettings settings)
+    private static bool ShouldNotify(SecurityEventType type, SecurityNotificationSettings settings)
     {
         var selected = settings.Events ?? [];
         var enabled = type is SecurityEventType.PasswordSet or SecurityEventType.PasswordChanged
             ? selected.Contains(SecurityEventType.PasswordSet) || selected.Contains(SecurityEventType.PasswordChanged)
             : selected.Contains(type);
-        if (string.IsNullOrWhiteSpace(settings.Channel) || !enabled) return false;
-        if (type != SecurityEventType.LoginFailed || string.IsNullOrWhiteSpace(sourceIp)) return true;
-        var now = DateTimeOffset.UtcNow;
-        var nextCleanup = Volatile.Read(ref nextFailureCleanupUtcTicks);
-        if (now.UtcTicks >= nextCleanup &&
-            Interlocked.CompareExchange(ref nextFailureCleanupUtcTicks, now.AddMinutes(1).UtcTicks, nextCleanup) == nextCleanup)
-        {
-            foreach (var item in loginFailureNotifications)
-                if (now - item.Value >= LoginFailureNotificationInterval)
-                    ((ICollection<KeyValuePair<string, DateTimeOffset>>)loginFailureNotifications).Remove(item);
-        }
-        return !loginFailureNotifications.TryGetValue(sourceIp, out var last) || now - last >= LoginFailureNotificationInterval
-            ? loginFailureNotifications.TryAdd(sourceIp, now) || loginFailureNotifications.TryUpdate(sourceIp, now, last)
-            : false;
+        return !string.IsNullOrWhiteSpace(settings.Channel) && enabled;
     }
 
-    private async Task CompleteDeliveryAsync(TaskCompletionSource completion, SecurityEventType type, string? sourceIp, bool? isLoopback,
-        TimeSpan? lockoutDuration, bool? enabled, SecurityNotificationSettings settings, CancellationToken token)
+    private async Task CompleteDeliveryAsync(TaskCompletionSource completion, SecurityEventType type, NotificationMessage message,
+        SecurityNotificationSettings settings, CancellationToken token)
     {
-        try { await NotifySafelyAsync(type, sourceIp, isLoopback, lockoutDuration, enabled, settings, token).ConfigureAwait(false); }
+        try { await NotifySafelyAsync(type, message, settings, token).ConfigureAwait(false); }
         finally
         {
             lock (deliveryGate) { completion.TrySetResult(); deliveries.Remove(completion.Task); }
         }
     }
 
-    private async Task NotifySafelyAsync(SecurityEventType type, string? sourceIp, bool? isLoopback, TimeSpan? lockoutDuration, bool? enabled, SecurityNotificationSettings settings, CancellationToken token)
+    private async Task NotifySafelyAsync(SecurityEventType type, NotificationMessage message, SecurityNotificationSettings settings, CancellationToken token)
     {
         try
         {
             token.ThrowIfCancellationRequested();
-            var message = new NotificationMessage("WinPilot 安全事件", Describe(type, sourceIp, isLoopback, lockoutDuration, enabled), Event: $"Security.{type}");
             var results = await notifications.SendAsync(message, settings.Channel, token).ConfigureAwait(false);
             foreach (var result in results.Where(result => !result.Succeeded)) logger.LogWarning("安全事件通知发送失败，事件：{Event}，通知渠道：{Channel}", EventName(type), result.Channel);
         }
@@ -189,44 +173,31 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
         stoppingCancellation.Dispose();
     }
 
-    private static string Describe(SecurityEventType type, string? sourceIp, bool? isLoopback, TimeSpan? lockoutDuration, bool? enabled) => type switch
+    private static string FormatNotificationMessage(SecurityEventType type, string? sourceIp, bool? enabled, DateTimeOffset occurredAt)
     {
-        SecurityEventType.PasswordSet => "管理员密码已设置",
-        SecurityEventType.PasswordChanged => "管理员密码已修改",
-        SecurityEventType.LanAccessChanged => enabled == true ? "局域网访问已开启" : "局域网访问已关闭",
-        SecurityEventType.AuthConfigurationInvalid => "密码配置缺失或损坏",
-        SecurityEventType.LoginSourceLocked => $"登录来源已锁定{FormatSource(sourceIp)}，锁定时长 {lockoutDuration?.TotalMinutes:0} 分钟",
-        SecurityEventType.LoginSucceeded => $"登录成功{FormatSource(sourceIp)}",
-        SecurityEventType.LoginFailed => $"登录失败{FormatSource(sourceIp)}",
-        SecurityEventType.SessionsRevoked => "现有登录会话已全部撤销",
-        SecurityEventType.SecurityNotificationSettingsChanged => "安全事件通知配置已修改",
-        _ => "安全事件已发生"
-    };
+        var lines = new List<string> { "WinPilot 安全事件", $"事件：{EventName(type, enabled)}" };
+        if (!string.IsNullOrWhiteSpace(sourceIp)) lines.Add($"来源：{sourceIp}");
+        lines.Add($"时间：{occurredAt:yyyy-MM-dd HH:mm:ss}");
+        return string.Join("\n", lines);
+    }
 
-    private static string EventName(SecurityEventType type) => type switch
+    private static string EventName(SecurityEventType type, bool? enabled = null) => type switch
     {
         SecurityEventType.PasswordSet => "管理员密码已设置",
         SecurityEventType.PasswordChanged => "管理员密码已修改",
         SecurityEventType.LoginSucceeded => "登录成功",
         SecurityEventType.LoginFailed => "登录失败",
         SecurityEventType.LoginSourceLocked => "登录来源已锁定",
-        SecurityEventType.AuthConfigurationInvalid => "认证配置无效",
-        SecurityEventType.LanAccessChanged => "局域网访问设置已变更",
-        SecurityEventType.SessionsRevoked => "登录会话已撤销",
-        SecurityEventType.SecurityNotificationSettingsChanged => "安全通知设置已修改",
+        SecurityEventType.AuthConfigurationInvalid => "密码配置缺失或损坏",
+        SecurityEventType.LanAccessChanged => enabled switch { true => "局域网访问已开启", false => "局域网访问已关闭", null => "局域网访问设置已变更" },
+        SecurityEventType.SecurityNotificationSettingsChanged => "安全事件通知配置已修改",
         _ => "未知安全事件"
     };
 
-    private static string FormatLogDetails(SecurityEventType type, DateTimeOffset occurredAtUtc, string? sourceIp, bool? isLoopback, bool? success, TimeSpan? lockoutDuration, bool? enabled)
+    private static string FormatLogMessage(SecurityEventType type, string? sourceIp, bool? enabled)
     {
-        var details = new List<string> { $"事件标识=Security.{type}", $"发生时间={occurredAtUtc.LocalDateTime:yyyy-MM-dd HH:mm:ss}" };
-        if (!string.IsNullOrWhiteSpace(sourceIp)) details.Add($"来源 IP={sourceIp}");
-        if (isLoopback is not null) details.Add($"本机来源={(isLoopback == true ? "是" : "否")}");
-        if (success is not null) details.Add($"结果={(success == true ? "成功" : "失败")}");
-        if (lockoutDuration is not null) details.Add($"锁定时长={lockoutDuration.Value.TotalMinutes:0} 分钟");
-        if (enabled is not null) details.Add($"启用状态={(enabled == true ? "开启" : "关闭")}");
-        return string.Join("；", details);
+        var details = new List<string> { EventName(type, enabled) };
+        if (!string.IsNullOrWhiteSpace(sourceIp)) details.Add($"来源 IP：{sourceIp}");
+        return string.Join("，", details);
     }
-
-    private static string FormatSource(string? sourceIp) => string.IsNullOrWhiteSpace(sourceIp) ? string.Empty : $"，来源 {sourceIp}";
 }
