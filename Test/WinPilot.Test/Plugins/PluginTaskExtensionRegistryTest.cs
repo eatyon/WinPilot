@@ -1,6 +1,6 @@
-using WinPilot.Core;
-using System.Text.Json;
 using System.Collections;
+using System.Text.Json;
+using WinPilot.Core;
 using WinPilot.Features.Plugins;
 using WinPilot.PluginContract;
 
@@ -43,7 +43,10 @@ public sealed class PluginTaskExtensionRegistryTest
                 }
                 Assert.True(original.CancellationToken.IsCancellationRequested);
             }
-            finally { current?.Dispose(); }
+            finally
+            {
+                current?.Dispose();
+            }
         }
     }
 
@@ -74,7 +77,12 @@ public sealed class PluginTaskExtensionRegistryTest
             Assert.Single(received);
             Assert.False(received[0].CancellationToken.IsCancellationRequested);
         }
-        finally { release.Set(); await pending.WaitAsync(TimeSpan.FromSeconds(5)); current?.Dispose(); }
+        finally
+        {
+            release.Set();
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            current?.Dispose();
+        }
     }
 
     private sealed class TriggerSnapshotHandshake(TaskCompletionSource entered, ManualResetEventSlim release) : IReadOnlyDictionary<string, object?>
@@ -83,15 +91,28 @@ public sealed class PluginTaskExtensionRegistryTest
         public int Count => 1;
         public IEnumerable<string> Keys => ["value"];
         public IEnumerable<object?> Values => ["old"];
+
         public object? this[string key] => key == "value" ? "old" : throw new KeyNotFoundException();
+
         public bool ContainsKey(string key) => key == "value";
-        public bool TryGetValue(string key, out object? value) { value = key == "value" ? "old" : null; return key == "value"; }
+
+        public bool TryGetValue(string key, out object? value)
+        {
+            value = key == "value" ? "old" : null;
+            return key == "value";
+        }
+
         public IEnumerator<KeyValuePair<string, object?>> GetEnumerator()
         {
             entered.TrySetResult();
-            if (!release.Wait(TimeSpan.FromSeconds(5))) { Error = new TimeoutException("事件快照握手未解除"); throw Error; }
+            if (!release.Wait(TimeSpan.FromSeconds(5)))
+            {
+                Error = new TimeoutException("事件快照握手未解除");
+                throw Error;
+            }
             yield return new("value", "old");
         }
+
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
@@ -141,7 +162,10 @@ public sealed class PluginTaskExtensionRegistryTest
             var warning = Assert.Single(logger.Errors);
             Assert.Same(failure, Assert.Single(Assert.IsType<AggregateException>(warning).InnerExceptions));
         }
-        finally { current?.Dispose(); }
+        finally
+        {
+            current?.Dispose();
+        }
         Assert.Empty(registry.GetTriggers());
         Assert.Empty(registry.GetVariables());
         Assert.Empty(registry.GetActions());
@@ -150,9 +174,17 @@ public sealed class PluginTaskExtensionRegistryTest
     private sealed class CancellationLogger : Microsoft.Extensions.Logging.ILogger<PluginTaskTriggerRegistry>
     {
         internal List<Exception?> Errors { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
-        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel level,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, level);
             Assert.Contains("test-plugin", formatter(state, exception));
@@ -170,7 +202,9 @@ public sealed class PluginTaskExtensionRegistryTest
         var triggers = registry.GetTriggers();
         Assert.Empty(triggers);
         using var registration = scope.Register([new PluginTriggerDefinition("trigger-a", "Trigger A")]);
-        Assert.Equal(("plugin-a", "Plugin A", "trigger-a"), registry.GetTriggers().Select(item => (item.PluginId, item.PluginDisplayName, item.TriggerId)).Single());
+        Assert.Equal(
+            ("plugin-a", "Plugin A", "trigger-a"),
+            registry.GetTriggers().Select(item => (item.PluginId, item.PluginDisplayName, item.TriggerId)).Single());
         scope.Emit(new PluginTriggerEvent("trigger-a", DateTimeOffset.UtcNow, new Dictionary<string, object?> { ["value"] = "current" }));
         Assert.Equal(1, received);
         registration.Dispose();
@@ -201,10 +235,13 @@ public sealed class PluginTaskExtensionRegistryTest
         var registry = new PluginTaskExtensionRegistry(new(), new(), new());
         using var scope = registry.CreateScope("plugin-a", "Plugin A");
 
-        Assert.Throws<ArgumentException>(() => scope.Register(
+        Assert.Throws<ArgumentException>(() =>
+            scope.Register(
         [
             new PluginTriggerDefinition("trigger-a", "Trigger A"),
-            new PluginTriggerDefinition("trigger-b", "Trigger B",
+            new PluginTriggerDefinition(
+                "trigger-b",
+                "Trigger B",
                 [new PluginActionParameterDefinition("", "Invalid parameter", PluginActionParameterType.Text)])
         ]));
 
@@ -219,11 +256,13 @@ public sealed class PluginTaskExtensionRegistryTest
         var registry = new PluginTaskExtensionRegistry(new(), new(), new());
         using var scope = registry.CreateScope("plugin-a", "Plugin A");
         var actions = (IPluginTaskActionApi)scope;
-        PluginActionParameterDefinition[]? parameters = invalidPlan ? null
+        PluginActionParameterDefinition[]? parameters = invalidPlan
+            ? null
             : [new PluginActionParameterDefinition("", "Invalid parameter", PluginActionParameterType.Text)];
         var plan = invalidPlan ? new PluginHostActionPlan([]) : null;
 
-        Assert.Throws<ArgumentException>(() => actions.Register(
+        Assert.Throws<ArgumentException>(() =>
+            actions.Register(
         [
             new PluginTaskActionDefinition("action-a", "Action A"),
             new PluginTaskActionDefinition("action-b", "Action B", parameters, plan)
@@ -240,7 +279,8 @@ public sealed class PluginTaskExtensionRegistryTest
         var registry = new PluginTaskExtensionRegistry(new(), new(), new());
         using var scope = registry.CreateScope("plugin-a", "Plugin A");
 
-        Assert.Throws<InvalidOperationException>(() => scope.Register(
+        Assert.Throws<InvalidOperationException>(() =>
+            scope.Register(
         [
             new PluginTriggerDefinition("trigger-a", "Trigger A"),
             new PluginTriggerDefinition(duplicateId, "Duplicate trigger")
@@ -258,7 +298,8 @@ public sealed class PluginTaskExtensionRegistryTest
         using var scope = registry.CreateScope("plugin-a", "Plugin A");
         var actions = (IPluginTaskActionApi)scope;
 
-        Assert.Throws<InvalidOperationException>(() => actions.Register(
+        Assert.Throws<InvalidOperationException>(() =>
+            actions.Register(
         [
             new PluginTaskActionDefinition("action-a", "Action A"),
             new PluginTaskActionDefinition(duplicateId, "Duplicate action")
@@ -299,7 +340,8 @@ public sealed class PluginTaskExtensionRegistryTest
         using var scope = registry.CreateScope("test-plugin", "Test");
         ((IPluginNotificationVariableApi)scope).Register(
             [new PluginVariableDefinition("&test.image", "Image", Type: PluginVariableType.Image)],
-            (_, _, _) => Task.FromResult<IReadOnlyDictionary<string, object?>>(
+            (_, _, _) =>
+                Task.FromResult<IReadOnlyDictionary<string, object?>>(
                 new Dictionary<string, object?> { ["&test.image"] = "not-an-image" }));
         Assert.Equal(PluginVariableType.Image, Assert.Single(registry.GetVariables()).Type);
 
@@ -325,8 +367,15 @@ public sealed class PluginTaskExtensionRegistryTest
         PluginNotificationVariableResolver resolver = async (names, _, _) =>
         {
             var call = Interlocked.Increment(ref calls);
-            if (call == 1) { entered.TrySetResult(); await release.Task; }
-            return names.ToDictionary(name => name, name => (object?)$"{(call == 1 ? "old" : "new")}:{name}", StringComparer.OrdinalIgnoreCase);
+            if (call == 1)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+            return names.ToDictionary(
+                name => name,
+                name => (object?)$"{(call == 1 ? "old" : "new")}:{name}",
+                StringComparer.OrdinalIgnoreCase);
         };
         using var first = variables.Register([new("$test.first", "First")], resolver);
         using var second = variables.Register([new("$test.second", "Second")], resolver);
@@ -336,9 +385,18 @@ public sealed class PluginTaskExtensionRegistryTest
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             first.Dispose();
-            if (operation != "replace-one") second.Dispose();
-            if (operation != "remove") variables.Register([new("$test.first", "First")], resolver);
-            if (operation == "replace-all") variables.Register([new("$test.second", "Second")], resolver);
+            if (operation != "replace-one")
+            {
+                second.Dispose();
+            }
+            if (operation != "remove")
+            {
+                variables.Register([new("$test.first", "First")], resolver);
+            }
+            if (operation == "replace-all")
+            {
+                variables.Register([new("$test.second", "Second")], resolver);
+            }
             release.TrySetResult();
             var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, calls);
@@ -348,7 +406,10 @@ public sealed class PluginTaskExtensionRegistryTest
                 Assert.Equal("old:$test.second", result["$test.second"]);
                 Assert.False(result.ContainsKey("$test.first"));
             }
-            else Assert.Empty(result);
+            else
+            {
+                Assert.Empty(result);
+            }
             var current = await registry.ResolveVariablesAsync(["$test.first", "$test.second"], context, CancellationToken.None);
             if (operation == "remove")
             {
@@ -363,7 +424,11 @@ public sealed class PluginTaskExtensionRegistryTest
                 Assert.Equal("new:$test.second", current["$test.second"]);
             }
         }
-        finally { release.TrySetResult(); await pending.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally
+        {
+            release.TrySetResult();
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -377,17 +442,31 @@ public sealed class PluginTaskExtensionRegistryTest
         PluginNotificationVariableResolver resolver = (names, receivedContext, token) =>
         {
             calls++;
-            Assert.Equal(new[] { "$test.first", "$test.second", "$test.third" }, names);
+            Assert.Equal(new[] {
+                "$test.first",
+                "$test.second",
+                "$test.third"
+}, names);
             Assert.Same(context, receivedContext);
             Assert.Equal(cancellation.Token, token);
             return Task.FromResult<IReadOnlyDictionary<string, object?>>(names.ToDictionary(name => name, name => (object?)name));
         };
         using var first = ((IPluginNotificationVariableApi)scope).Register([new("$test.first", "First")], resolver);
         using var rest = ((IPluginNotificationVariableApi)scope).Register([new("$test.second", "Second"), new("$test.third", "Third")], resolver);
-        var result = await registry.ResolveVariablesAsync(["$test.first", "$TEST.FIRST", "$test.second", "$test.third", "$test.missing"], context, cancellation.Token);
+        var result = await registry.ResolveVariablesAsync(
+            ["$test.first", "$TEST.FIRST", "$test.second", "$test.third", "$test.missing"],
+            context,
+            cancellation.Token);
         Assert.Equal(1, calls);
         Assert.Equal(3, result.Count);
-        foreach (var name in new[] { "$test.first", "$test.second", "$test.third" }) Assert.Equal(name, result[name]);
+        foreach (var name in new[] {
+            "$test.first",
+            "$test.second",
+            "$test.third"
+})
+        {
+            Assert.Equal(name, result[name]);
+        }
     }
 
     [Fact]
@@ -410,8 +489,13 @@ public sealed class PluginTaskExtensionRegistryTest
         var variables = new Dictionary<string, object?> { ["$test.value"] = "current" };
         using var cancellation = new CancellationTokenSource();
         using var triggerCancellation = new CancellationTokenSource();
-        var context = new PluginTaskRunContext("task", "test-plugin", "test-trigger",
-            new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), variables, triggerCancellation.Token);
+        var context = new PluginTaskRunContext(
+            "task",
+            "test-plugin",
+            "test-trigger",
+            new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
+            variables,
+            triggerCancellation.Token);
         var calls = 0;
         var receivedToken = CancellationToken.None;
         ((IPluginTaskActionApi)scope).Register([new("test-action", "Test action")], (receivedParameters, receivedContext, token) =>

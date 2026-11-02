@@ -22,8 +22,14 @@ public sealed class PluginCommandRegistryTest
         using var scope = registry.CreateScope("plugin-id", "插件名称");
         using var registration = scope.Register(new(name, "说明"), (_, _) => throw new IOException());
         var execution = registry.ExecuteAsync("查询", _ => new RecordingReply(), CancellationToken.None);
-        if (name == "*") Assert.True(await execution);
-        else await Assert.ThrowsAsync<IOException>(() => execution);
+        if (name == "*")
+        {
+            Assert.True(await execution);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<IOException>(() => execution);
+        }
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, entry.Level);
         Assert.Equal(expected, entry.Message);
@@ -65,7 +71,11 @@ public sealed class PluginCommandRegistryTest
         var registry = Registry();
         using var scope = registry.CreateScope("plugin", "插件");
         var broadcasts = 0;
-        scope.Register(new("*", ""), (_, _) => { Interlocked.Increment(ref broadcasts); return Task.CompletedTask; });
+        scope.Register(new("*", ""), (_, _) =>
+        {
+            Interlocked.Increment(ref broadcasts);
+            return Task.CompletedTask;
+        });
         scope.Register(new("明确命令", "说明"), (_, _) => throw new IOException());
         await Assert.ThrowsAsync<IOException>(() => registry.ExecuteAsync("明确命令", _ => new RecordingReply(), CancellationToken.None));
         Assert.False(await registry.ExecuteAsync("帮助", _ => throw new InvalidOperationException(), CancellationToken.None));
@@ -123,8 +133,14 @@ public sealed class PluginCommandRegistryTest
         {
             retained = context.Reply;
             entered.TrySetResult();
-            try { await release.Task; }
-            finally { finished.TrySetResult(); }
+            try
+            {
+                await release.Task;
+            }
+            finally
+            {
+                finished.TrySetResult();
+            }
         });
         var otherCalls = 0;
         second.Register(new("*", ""), (_, token) =>
@@ -133,7 +149,14 @@ public sealed class PluginCommandRegistryTest
             Interlocked.Increment(ref otherCalls);
             return Task.CompletedTask;
         });
-        var executing = registry.ExecuteAsync("未知", token => new PluginCommandReply((_, _, _, _) => Task.CompletedTask, token), CancellationToken.None);
+        var executing = registry.ExecuteAsync(
+            "未知",
+            token => new PluginCommandReply((
+                _,
+                _,
+                _,
+                _) => Task.CompletedTask, token),
+            CancellationToken.None);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -144,7 +167,11 @@ public sealed class PluginCommandRegistryTest
             Assert.True(await registry.ExecuteAsync("另一个命令", _ => new RecordingReply(), CancellationToken.None));
             Assert.Equal(2, otherCalls);
         }
-        finally { release.TrySetResult(); await finished.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        }
     }
 
     [Fact]
@@ -175,8 +202,16 @@ public sealed class PluginCommandRegistryTest
         using var first = registry.CreateScope("first", "插件甲");
         using var second = registry.CreateScope("second", "插件乙");
         var calls = 0;
-        first.Register(new("*", ""), (_, _) => { Interlocked.Increment(ref calls); return Task.CompletedTask; });
-        second.Register(new("*", ""), (_, _) => { Interlocked.Increment(ref calls); return Task.CompletedTask; });
+        first.Register(new("*", ""), (_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.CompletedTask;
+        });
+        second.Register(new("*", ""), (_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.CompletedTask;
+        });
         Assert.True(await registry.ExecuteAsync("未知命令", _ => new FailingCleanupReply(), CancellationToken.None, ["sensitive-token"]));
         Assert.Equal(2, calls);
         Assert.Equal(2, logger.Entries.Count(entry => entry.Message.Contains("通配命令回复清理失败")));
@@ -200,8 +235,13 @@ public sealed class PluginCommandRegistryTest
         using var scope = registry.CreateScope("plugin", "插件");
         using var skipped = scope.Register(new(name, "说明"), (_, _) => throw new InvalidOperationException());
         Assert.Empty(registry.GetAll());
-        Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning &&
-            entry.Message.Contains(name) && entry.Message.Contains("WinPilot") && entry.Message.Contains("plugin"));
+        Assert.Contains(
+            logger.Entries,
+            entry =>
+                entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                && entry.Message.Contains(name)
+                && entry.Message.Contains("WinPilot")
+                && entry.Message.Contains("plugin"));
         using var accepted = scope.Register(new("其他命令", "说明"), (_, _) => Task.CompletedTask);
         Assert.Equal("其他命令", Assert.Single(registry.GetAll()).Definition.Name);
     }
@@ -215,14 +255,26 @@ public sealed class PluginCommandRegistryTest
         using var second = registry.CreateScope("second", "第二个");
         var firstCalls = 0;
         var secondCalls = 0;
-        var registration = first.Register(new("PluginStatus", "查看状态"), (_, _) => { firstCalls++; return Task.CompletedTask; });
+        var registration = first.Register(new("PluginStatus", "查看状态"), (_, _) =>
+        {
+            firstCalls++;
+            return Task.CompletedTask;
+        });
         using var skipped = second.Register(new("pluginstatus", "查看状态"), (_, _) => throw new InvalidOperationException());
         skipped.Dispose();
         skipped.Dispose();
         Assert.Equal("first", Assert.Single(registry.GetAll()).PluginId);
-        Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning &&
-            entry.Message.Contains("第二个 (second)") && entry.Message.Contains("第一个 (first)"));
-        using var other = second.Register(new("OtherStatus", "查看其他状态"), (_, _) => { secondCalls++; return Task.CompletedTask; });
+        Assert.Contains(
+            logger.Entries,
+            entry =>
+                entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                && entry.Message.Contains("第二个 (second)")
+                && entry.Message.Contains("第一个 (first)"));
+        using var other = second.Register(new("OtherStatus", "查看其他状态"), (_, _) =>
+        {
+            secondCalls++;
+            return Task.CompletedTask;
+        });
         Assert.True(await registry.ExecuteAsync("pluginstatus", _ => new RecordingReply(), CancellationToken.None));
         Assert.True(await registry.ExecuteAsync("OtherStatus", _ => new RecordingReply(), CancellationToken.None));
         Assert.Equal(1, firstCalls);
@@ -264,7 +316,10 @@ public sealed class PluginCommandRegistryTest
     [InlineData(false, "插件任务 我的 任务", "我的 任务")]
     [InlineData(false, "插件任务\tExample", "Example")]
     [InlineData(true, "插件任务Example", "Example")]
-    public async Task ArgumentsArePassedToHandlerWithoutChangingInternalSpaces(bool attached, string text, string expected)
+    public async Task ArgumentsArePassedToHandlerWithoutChangingInternalSpaces(
+        bool attached,
+        string text,
+        string expected)
     {
         var registry = Registry();
         using var scope = registry.CreateScope("plugin", "插件");
@@ -286,8 +341,16 @@ public sealed class PluginCommandRegistryTest
         var registry = Registry();
         using var scope = registry.CreateScope("plugin", "插件");
         var matched = "";
-        scope.Register(new("查询", "查询", "[参数]", true), (_, _) => { matched = "查询"; return Task.CompletedTask; });
-        scope.Register(new("查询状态", "状态"), (_, _) => { matched = "查询状态"; return Task.CompletedTask; });
+        scope.Register(new("查询", "查询", "[参数]", true), (_, _) =>
+        {
+            matched = "查询";
+            return Task.CompletedTask;
+        });
+        scope.Register(new("查询状态", "状态"), (_, _) =>
+        {
+            matched = "查询状态";
+            return Task.CompletedTask;
+        });
         await registry.ExecuteAsync("查询状态", _ => new RecordingReply(), CancellationToken.None);
         Assert.Equal("查询状态", matched);
     }
@@ -327,7 +390,14 @@ public sealed class PluginCommandRegistryTest
         });
         var executing = registry.ExecuteAsync("等待", _ => new RecordingReply(), CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        if (unload) scope.Dispose(); else registration.Dispose();
+        if (unload)
+        {
+            scope.Dispose();
+        }
+        else
+        {
+            registration.Dispose();
+        }
         Assert.True(await executing.WaitAsync(TimeSpan.FromSeconds(3)));
         Assert.True(handlerToken.IsCancellationRequested);
         Assert.Empty(registry.GetAll());
@@ -353,7 +423,11 @@ public sealed class PluginCommandRegistryTest
             await released.Task;
         });
         var sent = 0;
-        var executing = registry.ExecuteAsync("等待回复", token => new PluginCommandReply((_, _, _, _) =>
+        var executing = registry.ExecuteAsync("等待回复", token => new PluginCommandReply((
+            _,
+            _,
+            _,
+            _) =>
         {
             sent++;
             return Task.CompletedTask;
@@ -364,7 +438,11 @@ public sealed class PluginCommandRegistryTest
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => retained!.ReplyTextAsync("失效回复"));
             Assert.Equal(0, sent);
         }
-        finally { released.TrySetResult(); await executing; }
+        finally
+        {
+            released.TrySetResult();
+            await executing;
+        }
     }
 
     [Fact]
@@ -372,8 +450,14 @@ public sealed class PluginCommandRegistryTest
     {
         var registry = Registry();
         var scope = registry.CreateScope("plugin", "插件");
-        using var context = new CSharpPluginContext("plugin", "directory", NullLogger.Instance,
-            new PluginStorageContext("data"), new Status(), new(null, null), new(null, null, null),
+        using var context = new CSharpPluginContext(
+            "plugin",
+            "directory",
+            NullLogger.Instance,
+            new PluginStorageContext("data"),
+            new Status(),
+            new(null, null),
+            new(null, null, null),
             new(null, null, new Security()));
         Assert.Null(context.Commands);
         context.Track(scope);
@@ -401,12 +485,20 @@ public sealed class PluginCommandRegistryTest
         var replies = new List<(string Text, byte[]? Image)>();
         await processor.ProcessAsync(new("original-chat", "sender", "插件查询 我的 参数")
         {
-            Reply = (text, image, _) => { replies.Add((text, image)); return Task.CompletedTask; }
+            Reply = (text, image, _) =>
+            {
+                replies.Add((text, image));
+                return Task.CompletedTask;
+            }
         }, "/", CancellationToken.None);
         Assert.Equal(2, replies.Count);
         Assert.Equal(("插件文字", (byte[]?)null), replies[0]);
         Assert.Equal("", replies[1].Text);
-        Assert.Equal(new byte[] { 1, 2, 3 }, replies[1].Image);
+        Assert.Equal(new byte[] {
+            1,
+            2,
+            3
+}, replies[1].Image);
         Assert.Contains(logger.Entries, entry => entry.Message == "Test 插件命令已处理：插件查询 我的 参数");
         await Assert.ThrowsAsync<ObjectDisposedException>(() => retained!.ReplyTextAsync("迟到回复"));
     }
@@ -415,7 +507,11 @@ public sealed class PluginCommandRegistryTest
     public async Task ReplySequenceIsSerializedAndInvalidImagesAreRejected()
     {
         var sequences = new List<int>();
-        using var reply = new PluginCommandReply(async (_, _, sequence, _) =>
+        using var reply = new PluginCommandReply(async (
+            _,
+            _,
+            sequence,
+            _) =>
         {
             await Task.Yield();
             sequences.Add(sequence);
@@ -433,12 +529,20 @@ public sealed class PluginCommandRegistryTest
         var registry = new PluginCommandRegistry(CommandProcessor.IsSupportedCommand, logger);
         using var scope = registry.CreateScope("plugin", "插件");
         var executions = 0;
-        scope.Register(new("故障", "故障"), (_, _) => { executions++; throw new IOException("sensitive-token"); });
+        scope.Register(new("故障", "故障"), (_, _) =>
+        {
+            executions++;
+            throw new IOException("sensitive-token");
+        });
         using var processor = new CommandProcessor("Test", new() { QQBotClientSecret = "sensitive-token" }, logger, pluginCommands: registry);
         var replies = 0;
         await processor.ProcessAsync(new("original", "user", "故障")
         {
-            Reply = (_, _, _) => { replies++; return Task.CompletedTask; }
+            Reply = (_, _, _) =>
+            {
+                replies++;
+                return Task.CompletedTask;
+            }
         }, "", CancellationToken.None);
         Assert.Equal(1, executions);
         Assert.Equal(0, replies);
@@ -461,7 +565,12 @@ public sealed class PluginCommandRegistryTest
         second.Register(new("ATest", "说明"), (_, _) => Task.CompletedTask);
 
         var commands = registry.GetAll();
-        Assert.Equal(new[] { "ZStatus", "ATask", "BStatus", "ATest" },
+        Assert.Equal(new[] {
+            "ZStatus",
+            "ATask",
+            "BStatus",
+            "ATest"
+},
             commands.Select(command => command.Definition.Name));
         var text = CommandProcessor.HelpText("", commands);
         Assert.True(text.IndexOf("ZStatus", StringComparison.Ordinal) < text.IndexOf("ATask", StringComparison.Ordinal));
@@ -493,7 +602,10 @@ public sealed class PluginCommandRegistryTest
     [Theory]
     [InlineData("插件查询", "插件查询", "")]
     [InlineData("*", "/未知 参数", "/")]
-    public async Task BotDispatchesRegisteredPluginCommandsAndIgnoresThemAfterUnload(string registeredName, string content, string prefix)
+    public async Task BotDispatchesRegisteredPluginCommandsAndIgnoresThemAfterUnload(
+        string registeredName,
+        string content,
+        string prefix)
     {
         var directory = Path.Combine(Path.GetTempPath(), "winpilot-plugin-command-tests", Guid.NewGuid().ToString("N"));
         var paths = PortableDataPaths.Create(directory);
@@ -504,7 +616,10 @@ public sealed class PluginCommandRegistryTest
         scope.Register(new(registeredName, "查询"), async (context, _) =>
         {
             executions++;
-            if (registeredName == "*") Assert.Equal("未知 参数", context.Arguments);
+            if (registeredName == "*")
+            {
+                Assert.Equal("未知 参数", context.Arguments);
+            }
             await context.Reply.ReplyTextAsync("插件回复");
         });
         using var configuration = new CommandBotConfiguration();
@@ -517,7 +632,11 @@ public sealed class PluginCommandRegistryTest
             var sent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var message = new CommandBotMessage("origin", "sender", content)
             {
-                Reply = (text, _, _) => { sent.TrySetResult(text); return Task.CompletedTask; }
+                Reply = (text, _, _) =>
+                {
+                    sent.TrySetResult(text);
+                    return Task.CompletedTask;
+                }
             };
             if (prefix.Length > 0)
             {
@@ -537,46 +656,95 @@ public sealed class PluginCommandRegistryTest
         finally
         {
             await bot.DisposeAsync();
-            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
         }
     }
 
     private sealed class FailingCleanupReply : IPluginCommandReply, IDisposable
     {
         public Task ReplyTextAsync(string text) => Task.CompletedTask;
+
         public Task ReplyImageAsync(PluginImageContent image) => Task.CompletedTask;
+
         public void Dispose() => throw new IOException("sensitive-token");
     }
 
     private sealed class RecordingReply : IPluginCommandReply
     {
         public Task ReplyTextAsync(string text) => Task.CompletedTask;
+
         public Task ReplyImageAsync(PluginImageContent image) => Task.CompletedTask;
     }
 
-    private sealed class Security : IPluginHostSecurityApi { public bool SafeModeEnabled => false; }
+    private sealed class Security : IPluginHostSecurityApi
+    {
+        public bool SafeModeEnabled => false;
+    }
+
     private sealed class Status : IPluginStatus
     {
         public string? StatusJson => null;
-        public event Action<string>? StateChanged { add { } remove { } }
-        public event Action<int>? SubscriberCountChanged { add { } remove { } }
-        public void Publish(string json) { }
-        public void Dispose() { }
+
+        public event Action<string>? StateChanged
+        {
+            add
+            {
+            }
+            remove
+            {
+            }
+        }
+
+        public event Action<int>? SubscriberCountChanged
+        {
+            add
+            {
+            }
+            remove
+            {
+            }
+        }
+
+        public void Publish(string json)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
     }
 
-    private sealed class TestBot(PortableDataPaths paths, CommandBotConfiguration configuration, PluginCommandRegistry registry, CommandBotTestObserver logger)
+    private sealed class TestBot(
+        PortableDataPaths paths,
+        CommandBotConfiguration configuration,
+        PluginCommandRegistry registry,
+        CommandBotTestObserver logger)
         : CommandBotService(paths, configuration, logger, "Test", pluginCommands: registry)
     {
         internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         internal void Emit(CommandBotMessage message) => Receive(message);
+
         protected override bool IsEnabled(CommandBotSettings settings) => settings.TelegramEnabled;
-        protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) => settings with { TelegramEnabled = enabled };
+
+        protected override CommandBotSettings WithEnabled(CommandBotSettings settings, bool enabled) =>
+            settings with { TelegramEnabled = enabled };
+
         protected override string GetPrefix(CommandBotSettings settings) => settings.TelegramPrefix;
-        protected override CommandBotSettings WithPrefix(CommandBotSettings settings, string prefix) => settings with { TelegramPrefix = prefix };
+
+        protected override CommandBotSettings WithPrefix(CommandBotSettings settings, string prefix) =>
+            settings with { TelegramPrefix = prefix };
+
         private protected override CommandBotReceiver CreateReceiver() => new Receiver(this, () => Status, SetStatus, Receive);
     }
 
-    private sealed class Receiver(TestBot owner, Func<CommandBotStatus> status, Action<CommandBotStatus> publish,
+    private sealed class Receiver(
+        TestBot owner,
+        Func<CommandBotStatus> status,
+        Action<CommandBotStatus> publish,
         Action<CommandBotMessage> receive) : CommandBotReceiver(status, publish, receive)
     {
         public override async Task RunAsync(WinPilotSettings settings, CancellationToken token)

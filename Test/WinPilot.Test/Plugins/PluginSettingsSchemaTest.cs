@@ -37,7 +37,9 @@ public sealed class PluginSettingsSchemaTest
         {
             var field = $$"""{"name":"choice","type":"{{type}}","options":{{options}}}""";
             foreach (var schema in FieldScopes(field))
+            {
                 Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(schema));
+            }
         }
     }
 
@@ -49,9 +51,12 @@ public sealed class PluginSettingsSchemaTest
     public void RequiredDeclarationMustBeBooleanAtEveryScope(string required)
     {
         foreach (var schema in FieldScopes($$"""{"name":"value","type":"text","required":{{required}}}"""))
+        {
             Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(schema));
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(
-            "[{\"name\":\"rows\",\"type\":\"collection\",\"required\":" + required + ",\"mode\":\"dynamic\",\"item\":{\"fields\":[{\"name\":\"value\",\"type\":\"text\"}]}}]"));
+        }
+        Assert.Throws<InvalidOperationException>(() =>
+            PluginSettingsSchema.ValidateDefinition(
+                    "[{\"name\":\"rows\",\"type\":\"collection\",\"required\":" + required + ",\"mode\":\"dynamic\",\"item\":{\"fields\":[{\"name\":\"value\",\"type\":\"text\"}]}}]"));
     }
 
     [Theory]
@@ -113,8 +118,10 @@ public sealed class PluginSettingsSchemaTest
     {
         PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"select","optionsSource":"notificationChannels"}]""");
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"select","optionsSource":"unknown"}]"""));
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"select","optionsSource":"notificationChannels","options":["qqbot"]}]"""));
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"text","optionsSource":"notificationChannels"}]"""));
+        Assert.Throws<InvalidOperationException>(() =>
+            PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"select","optionsSource":"notificationChannels","options":["qqbot"]}]"""));
+        Assert.Throws<InvalidOperationException>(() =>
+            PluginSettingsSchema.ValidateDefinition("""[{"name":"channel","type":"text","optionsSource":"notificationChannels"}]"""));
     }
 
     [Fact]
@@ -148,7 +155,8 @@ public sealed class PluginSettingsSchemaTest
     {
         const string schema = "[{\"name\":\"items\",\"type\":\"collection\",\"mode\":\"dynamic\",\"item\":{\"fields\":[{\"name\":\"name\",\"type\":\"text\",\"required\":true}]}}]";
 
-        Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"a\"},{\"id\":\"1\",\"name\":\"b\"}]}"));
+        Assert.Throws<InvalidOperationException>(() =>
+            PluginSettingsSchema.ValidateConfiguration(schema, "{\"items\":[{\"id\":\"1\",\"name\":\"a\"},{\"id\":\"1\",\"name\":\"b\"}]}"));
     }
 
     [Theory]
@@ -170,7 +178,9 @@ public sealed class PluginSettingsSchemaTest
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(definition.ToJsonString()));
         var nested = new JsonArray(new JsonObject
         {
-            ["name"] = "fixed", ["type"] = "collection", ["mode"] = "fixed",
+            ["name"] = "fixed",
+            ["type"] = "collection",
+            ["mode"] = "fixed",
             ["items"] = new JsonArray(new JsonObject { ["name"] = "group", ["fields"] = definition.DeepClone() })
         });
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(nested.ToJsonString()));
@@ -199,7 +209,9 @@ public sealed class PluginSettingsSchemaTest
              {"name":"rows","type":"collection","mode":"dynamic","item":{"fields":[
                {"name":"number","type":"number","default":2.5}]}}]
             """;
-        var config = PluginSettingsSchema.ApplyDefaults(schema, JsonNode.Parse(
+        var config = PluginSettingsSchema.ApplyDefaults(
+            schema,
+            JsonNode.Parse(
             """{"number":"","zero":0,"text":"","fixed":{"group":{"number":""}},"rows":[{"number":"","__winpilot":{"id":"row","remark":"条目"}}]}""")!.AsObject());
         Assert.Equal(5, config["number"]!.GetValue<int>());
         Assert.Equal(0, config["zero"]!.GetValue<int>());
@@ -228,7 +240,9 @@ public sealed class PluginSettingsSchemaTest
         var fields = JsonNode.Parse(schema)!.AsArray();
         var collection = new JsonArray(new JsonObject
         {
-            ["name"] = "group", ["type"] = "collection", ["mode"] = "dynamic",
+            ["name"] = "group",
+            ["type"] = "collection",
+            ["mode"] = "dynamic",
             ["item"] = new JsonObject { ["fields"] = fields }
         });
         Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateDefinition(collection.ToJsonString()));
@@ -254,7 +268,11 @@ public sealed class PluginSettingsSchemaTest
     public void NumericLimitsApplyToOrdinaryAndCollectionFields(string number, bool valid)
     {
         const string field = """{"name":"value","type":"number","min":0.1,"max":0.5,"step":0.2,"default":0.1}""";
-        foreach (var mode in new[] { "ordinary", "fixed", "dynamic" })
+        foreach (var mode in new[] {
+            "ordinary",
+            "fixed",
+            "dynamic"
+})
         {
             var schema = mode switch
             {
@@ -269,8 +287,14 @@ public sealed class PluginSettingsSchemaTest
                 _ => "{\"value\":" + number + "}"
             };
             PluginSettingsSchema.ValidateDefinition(schema);
-            if (valid) PluginSettingsSchema.ValidateConfiguration(schema, content);
-            else Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, content));
+            if (valid)
+            {
+                PluginSettingsSchema.ValidateConfiguration(schema, content);
+            }
+            else
+            {
+                Assert.Throws<InvalidOperationException>(() => PluginSettingsSchema.ValidateConfiguration(schema, content));
+            }
         }
     }
 
@@ -293,8 +317,10 @@ public sealed class PluginSettingsSchemaTest
         var schema = $$"""[{"name":"interval","label":{{label}},"type":"number","min":1,"max":5,"step":2,"default":1,"required":true}]""";
         var cases = new[]
         {
-            ("{}", "不能为空"), ("{\"interval\":\"bad\"}", "格式无效"),
-            ("{\"interval\":0}", "不能小于 1"), ("{\"interval\":6}", "不能大于 5"),
+            ("{}", "不能为空"),
+            ("{\"interval\":\"bad\"}", "格式无效"),
+            ("{\"interval\":0}", "不能小于 1"),
+            ("{\"interval\":6}", "不能大于 5"),
             ("{\"interval\":2}", "不符合步长 2")
         };
         foreach (var (content, message) in cases)
@@ -309,7 +335,9 @@ public sealed class PluginSettingsSchemaTest
     [InlineData("{\"rows\":[1]}", "路线配置包含无效条目，请重新添加")]
     [InlineData("{\"rows\":[{}]}", "路线配置条目信息不完整，请重新添加")]
     [InlineData("{\"rows\":[{\"__winpilot\":{\"id\":\"item\"}}]}", "备注不能为空")]
-    [InlineData("{\"rows\":[{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}},{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}}]}", "路线配置包含重复条目，请删除后重新添加")]
+    [InlineData(
+        "{\"rows\":[{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}},{\"__winpilot\":{\"id\":\"item\",\"remark\":\"条目\"}}]}",
+        "路线配置包含重复条目，请删除后重新添加")]
     public void CollectionConfigurationErrorsUseDisplayNamesAndActionableMessages(string content, string message)
     {
         const string schema = """[{"name":"rows","label":"路线配置","type":"collection","mode":"dynamic","item":{"fields":[{"name":"value","type":"text"}]}}]""";

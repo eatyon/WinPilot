@@ -113,8 +113,12 @@ public sealed class PluginConfigurationResponseTest
         var filtered = JsonNode.Parse(result.Configuration)!;
         Assert.Equal(new string('•', "private".Length), filtered["secret"]!.GetValue<string>());
         Assert.Equal("visible", filtered["plain"]!.GetValue<string>());
-        Assert.Equal(new string('•', "private-token".Length), filtered["fixed"]!["account"]!["token"]!.GetValue<string>());
-        Assert.Equal(new string('•', "private-password".Length), filtered["dynamic"]![0]!["password"]!.GetValue<string>());
+        Assert.Equal(
+            new string('•', "private-token".Length),
+            filtered["fixed"]!["account"]!["token"]!.GetValue<string>());
+        Assert.Equal(
+            new string('•', "private-password".Length),
+            filtered["dynamic"]![0]!["password"]!.GetValue<string>());
         Assert.Equal("", filtered["dynamic"]![1]!["password"]!.GetValue<string>());
         Assert.Equal("name", filtered["dynamic"]![0]!["user"]!.GetValue<string>());
         Assert.Equal("1", filtered["dynamic"]![0]!["__winpilot"]!["id"]!.GetValue<string>());

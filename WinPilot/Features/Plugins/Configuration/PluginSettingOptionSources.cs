@@ -12,19 +12,31 @@ public static class PluginSettingOptionSources
         NotificationChannelCatalog.All
             .Select(channel => new PluginSettingOption(channel.Id.ToLowerInvariant(), channel.DisplayName)).ToArray();
 
-    public static IReadOnlyList<PluginSettingOption> GetOptions(string source) => source switch
-    {
-        NotificationChannels => ChannelOptions,
-        _ => throw new PluginValidationException($"不支持的配置选项来源：{source}")
-    };
+    public static IReadOnlyList<PluginSettingOption> GetOptions(string source) =>
+        source switch
+        {
+            NotificationChannels => ChannelOptions,
+            _ => throw new PluginValidationException($"不支持的配置选项来源：{source}")
+        };
 
-    public static string WithSelectedOptions(string definitionJson, string? configurationJson, JsonSerializerOptions? options = null)
+    /// <summary>
+    /// 为动态选项补入已保存值和默认值的显示标签；选项已不可用时仍保留其原值供界面展示。
+    /// </summary>
+    public static string WithSelectedOptions(
+        string definitionJson,
+        string? configurationJson,
+        JsonSerializerOptions? options = null)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray ?? throw new InvalidOperationException("settings.json 必须是数组");
-        var configuration = string.IsNullOrWhiteSpace(configurationJson) ? null : JsonNode.Parse(configurationJson) as JsonObject;
+        var configuration = string.IsNullOrWhiteSpace(configurationJson)
+            ? null
+            : JsonNode.Parse(configurationJson) as JsonObject;
         foreach (var item in definition.OfType<JsonObject>())
         {
-            if (item["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name)) continue;
+            if (item["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name))
+            {
+                continue;
+            }
             HydrateField(item, [configuration?[name]]);
         }
         return definition.ToJsonString(options);
@@ -35,9 +47,16 @@ public static class PluginSettingOptionSources
         var values = storedValues.ToArray();
         if (ReadString(field["optionsSource"]) is { } source)
         {
-            var selectedValues = values.Select(ReadString).Append(ReadString(field["default"]))
-                .Where(value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).ToArray();
-            if (selectedValues.Length == 0) return;
+            var selectedValues = values
+                .Select(ReadString)
+                .Append(ReadString(field["default"]))
+                .Where(value => !string.IsNullOrEmpty(value))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (selectedValues.Length == 0)
+            {
+                return;
+            }
             var choices = GetOptions(source);
             field["options"] = new JsonArray(selectedValues.Select(value =>
             {
@@ -46,13 +65,19 @@ public static class PluginSettingOptionSources
             }).ToArray());
             return;
         }
-        if (ReadString(field["type"]) != "collection") return;
+        if (ReadString(field["type"]) != "collection")
+        {
+            return;
+        }
         if (ReadString(field["mode"]) == "fixed" && field["items"] is JsonArray items)
         {
             foreach (var item in items.OfType<JsonObject>())
             {
                 var name = ReadString(item["name"]);
-                if (name is null || item["fields"] is not JsonArray fields) continue;
+                if (name is null || item["fields"] is not JsonArray fields)
+                {
+                    continue;
+                }
                 HydrateFields(fields, values.Select(value => (value as JsonObject)?[name]));
             }
         }
@@ -68,11 +93,15 @@ public static class PluginSettingOptionSources
         foreach (var field in fields.OfType<JsonObject>())
         {
             var name = ReadString(field["name"]);
-            if (name is not null) HydrateField(field, items.Select(item => item[name]));
+            if (name is not null)
+            {
+                HydrateField(field, items.Select(item => item[name]));
+            }
         }
     }
 
-    private static string? ReadString(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+    private static string? ReadString(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 }
 
 public sealed record PluginSettingOption(string Value, string Label);

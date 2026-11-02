@@ -30,7 +30,11 @@ public sealed class PluginPageSessionTest
             Assert.True(token.IsCancellationRequested);
             Assert.Equal(0, disposed);
         }
-        finally { release.TrySetResult(); await request; }
+        finally
+        {
+            release.TrySetResult();
+            await request;
+        }
         Assert.Equal(1, disposed);
         sessions.Close(id);
         Assert.Equal(1, disposed);
@@ -60,13 +64,16 @@ public sealed class PluginPageSessionTest
     public async Task PageWithoutUploadHandlerRejectsBeforeReadingBody()
     {
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
-        var id = sessions.Open("plugin", "page", _ => { });
+        var id = sessions.Open("plugin", "page", _ =>
+        {
+        });
         await Assert.ThrowsAsync<PluginOperationException>(() => sessions.UploadAsync(id, _ =>
         {
             Assert.Fail("不支持上传的页面不应读取上传数据");
             return Task.FromResult(new WinPilot.PluginContract.PluginPageUpload("chunk", "{}", new byte[] { 1 }));
         }, CancellationToken.None));
     }
+
     [Fact]
     public async Task UploadsAreCancelledWhenSessionCloses()
     {
@@ -79,8 +86,10 @@ public sealed class PluginPageSessionTest
         var request = sessions.UploadAsync(id, _ => Task.FromResult(new WinPilot.PluginContract.PluginPageUpload("chunk", "{}", new byte[] { 1 })), CancellationToken.None);
         sessions.Close(id);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => sessions.UploadAsync(id, _ => Task.FromResult(new WinPilot.PluginContract.PluginPageUpload("chunk", "{}", new byte[] { 1 })), CancellationToken.None));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            sessions.UploadAsync(id, _ => Task.FromResult(new WinPilot.PluginContract.PluginPageUpload("chunk", "{}", new byte[] { 1 })), CancellationToken.None));
     }
+
     [Fact]
     public async Task ThrowingCancellationCallbackDoesNotPreventResourceCleanup()
     {
@@ -111,14 +120,19 @@ public sealed class PluginPageSessionTest
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var id = sessions.Open("plugin", "first", session =>
-            session.RegisterMessageHandler(async (_, token) =>
+        var id = sessions.Open("plugin", "first", session => session.RegisterMessageHandler(async (_, token) =>
             {
-                using var registration = token.Register(() => { entered.TrySetResult(); release.Wait(); });
+                using var registration = token.Register(() =>
+                {
+                    entered.TrySetResult();
+                    release.Wait();
+                });
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 return "unreachable";
             }));
-        var other = sessions.Open("plugin", "second", _ => { });
+        var other = sessions.Open("plugin", "second", _ =>
+        {
+        });
         var request = sessions.SendAsync(id, "request", CancellationToken.None);
         var closing = Task.Run(() => sessions.Close(id));
         try
@@ -126,7 +140,10 @@ public sealed class PluginPageSessionTest
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await Task.Run(() => sessions.Touch(other)).WaitAsync(TimeSpan.FromSeconds(5));
         }
-        finally { release.Set(); }
+        finally
+        {
+            release.Set();
+        }
         await closing;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
     }
@@ -142,20 +159,39 @@ public sealed class PluginPageSessionTest
         var disposed = 0;
         sessions.Open("plugin", "first", session => session.RegisterResource(new Resource(() =>
         {
-            try { sessions.Touch(other); }
-            catch (KeyNotFoundException) { removedBeforeCleanup = true; }
+            try
+            {
+                sessions.Touch(other);
+            }
+            catch (KeyNotFoundException)
+            {
+                removedBeforeCleanup = true;
+            }
             disposed++;
         })));
         other = sessions.Open("plugin", "second", session => session.RegisterResource(new Resource(() => disposed++)));
-        var independent = sessions.Open("other-plugin", "page", _ => { });
+        var independent = sessions.Open("other-plugin", "page", _ =>
+        {
+        });
 
-        if (closeAll) sessions.CloseAll();
-        else sessions.CloseByPlugin("plugin");
-
+        if (closeAll)
+        {
+            sessions.CloseAll();
+        }
+        else
+        {
+            sessions.CloseByPlugin("plugin");
+        }
         Assert.True(removedBeforeCleanup);
         Assert.Equal(2, disposed);
-        if (closeAll) Assert.Throws<KeyNotFoundException>(() => sessions.Touch(independent));
-        else sessions.Touch(independent);
+        if (closeAll)
+        {
+            Assert.Throws<KeyNotFoundException>(() => sessions.Touch(independent));
+        }
+        else
+        {
+            sessions.Touch(independent);
+        }
     }
 
     private sealed class Resource(Action cleanup) : IDisposable
@@ -167,7 +203,10 @@ public sealed class PluginPageSessionTest
     public async Task PageSession_ForwardsMessagesAndRejectsAfterClose()
     {
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
-        var id = sessions.Open("test-plugin", "test-page", session => session.RegisterMessageHandler((message, _) => Task.FromResult("reply:" + message)));
+        var id = sessions.Open(
+            "test-plugin",
+            "test-page",
+            session => session.RegisterMessageHandler((message, _) => Task.FromResult("reply:" + message)));
 
         Assert.Equal("reply:request", await sessions.SendAsync(id, "request", CancellationToken.None));
 
@@ -179,8 +218,7 @@ public sealed class PluginPageSessionTest
     public async Task PageSession_CloseAllCancelsActiveRequestsAndRemovesSessions()
     {
         using var sessions = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
-        var id = sessions.Open("test-plugin", "test-page", session =>
-            session.RegisterMessageHandler(async (_, cancellationToken) =>
+        var id = sessions.Open("test-plugin", "test-page", session => session.RegisterMessageHandler(async (_, cancellationToken) =>
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 return "unreachable";

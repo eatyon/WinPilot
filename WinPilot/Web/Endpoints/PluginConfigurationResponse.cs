@@ -3,9 +3,14 @@ using System.Text.Json.Nodes;
 
 namespace WinPilot.Web;
 
+/// <summary>
+/// 按插件设置声明投影前端可见配置，移除敏感默认值，并用等长掩码代替敏感字段原值。
+/// </summary>
 public static class PluginConfigurationResponse
 {
-    public static (string Definition, string Configuration) MaskSensitiveValues(string definitionJson, string configurationJson)
+    public static (string Definition, string Configuration) MaskSensitiveValues(
+        string definitionJson,
+        string configurationJson)
     {
         var definition = JsonNode.Parse(definitionJson) as JsonArray
             ?? throw new InvalidOperationException("settings.json 必须是数组");
@@ -19,14 +24,25 @@ public static class PluginConfigurationResponse
     {
         foreach (var field in fields.OfType<JsonObject>())
         {
-            if (field["masked"]?.GetValue<bool>() == true) field.Remove("default");
-            if (field["type"]?.GetValue<string>() != "collection") continue;
+            if (field["masked"]?.GetValue<bool>() == true)
+            {
+                field.Remove("default");
+            }
+            if (field["type"]?.GetValue<string>() != "collection")
+            {
+                continue;
+            }
             if (field["mode"]?.GetValue<string>() == "fixed")
             {
                 foreach (var item in ((JsonArray)field["items"]!).OfType<JsonObject>())
+                {
                     RemoveSensitiveDefaults((JsonArray)item["fields"]!);
+                }
             }
-            else RemoveSensitiveDefaults((JsonArray)field["item"]!["fields"]!);
+            else
+            {
+                RemoveSensitiveDefaults((JsonArray)field["item"]!["fields"]!);
+            }
         }
     }
 
@@ -45,7 +61,9 @@ public static class PluginConfigurationResponse
                     {
                         var itemName = item["name"]!.GetValue<string>();
                         if (fixedItems[itemName] is JsonObject values)
+                        {
                             projected[itemName] = ProjectFields((JsonArray)item["fields"]!, values);
+                        }
                     }
                     result[name] = projected;
                 }
@@ -59,8 +77,12 @@ public static class PluginConfigurationResponse
                         {
                             var projectedMetadata = new JsonObject();
                             foreach (var key in new[] { "id", "remark" })
+                            {
                                 if (metadata[key]?.GetValueKind() == JsonValueKind.String)
+                                {
                                     projectedMetadata[key] = metadata[key]!.DeepClone();
+                                }
+                            }
                             values["__winpilot"] = projectedMetadata;
                         }
                         projected.Add(values);
@@ -72,21 +94,28 @@ public static class PluginConfigurationResponse
             var masked = field["masked"]?.GetValue<bool>() == true;
             if (!source.TryGetPropertyValue(name, out var value))
             {
-                if (masked) result[name] = "";
+                if (masked)
+                {
+                    result[name] = "";
+                }
                 continue;
             }
-            if (!IsFieldValue(field["type"]!.GetValue<string>(), value)) continue;
+            if (!IsFieldValue(field["type"]!.GetValue<string>(), value))
+            {
+                continue;
+            }
             result[name] = masked ? JsonValue.Create(new string('•', value!.GetValue<string>().Length)) : value!.DeepClone();
         }
         return result;
     }
 
-    private static bool IsFieldValue(string type, JsonNode? value) => type switch
-    {
-        "text" or "textarea" or "select" => value?.GetValueKind() == JsonValueKind.String,
-        "number" => value?.GetValueKind() == JsonValueKind.Number,
-        "checkbox" => value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
-        "multi-checkbox" => value is JsonArray items && items.All(item => item?.GetValueKind() == JsonValueKind.String),
-        _ => false
-    };
+    private static bool IsFieldValue(string type, JsonNode? value) =>
+        type switch
+        {
+            "text" or "textarea" or "select" => value?.GetValueKind() == JsonValueKind.String,
+            "number" => value?.GetValueKind() == JsonValueKind.Number,
+            "checkbox" => value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
+            "multi-checkbox" => value is JsonArray items && items.All(item => item?.GetValueKind() == JsonValueKind.String),
+            _ => false
+        };
 }

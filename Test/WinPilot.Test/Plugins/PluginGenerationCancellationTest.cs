@@ -22,8 +22,14 @@ public sealed class PluginGenerationCancellationTest
         });
         var retiring = Task.Run(() =>
         {
-            if (invalidate) registry.Invalidate("test", previous.Generation);
-            else registry.BeginGeneration("test");
+            if (invalidate)
+            {
+                registry.Invalidate("test", previous.Generation);
+            }
+            else
+            {
+                registry.BeginGeneration("test");
+            }
         });
         Task? probing = null;
         try
@@ -74,13 +80,19 @@ public sealed class PluginGenerationCancellationTest
             Assert.Equal(2, CurrentGeneration(registry));
             Assert.Throws<InvalidOperationException>(() => registry.Register("test", "Test", 2, [new("trigger", "Trigger")]));
             registry.Invalidate("test", previous.Generation);
-            if (invalidatePending) registry.Invalidate("test", 2);
+            if (invalidatePending)
+            {
+                registry.Invalidate("test", 2);
+            }
         }
         finally
         {
             release.Set();
             await first.WaitAsync(TimeSpan.FromSeconds(5));
-            if (rejected is not null) await rejected.WaitAsync(TimeSpan.FromSeconds(5));
+            if (rejected is not null)
+            {
+                await rejected.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         var current = await first;
         Assert.Equal(2, current.Generation);
@@ -126,26 +138,45 @@ public sealed class PluginGenerationCancellationTest
             {
                 workerEntered.Set();
                 rejection = Record.Exception(() => registry.BeginGeneration("TEST"));
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             worker.Start();
             try
             {
-                if (!workerEntered.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("重入线程未进入");
-                if (!worker.Join(TimeSpan.FromSeconds(5))) throw new TimeoutException("重入线程等待取消回调结束，形成循环等待");
+                if (!workerEntered.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("重入线程未进入");
+                }
+                if (!worker.Join(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("重入线程等待取消回调结束，形成循环等待");
+                }
             }
-            catch (Exception exception) { callbackFailure = exception; }
+            catch (Exception exception)
+            {
+                callbackFailure = exception;
+            }
         });
         try
         {
             await Task.Run(() =>
             {
-                if (invalidate) registry.Invalidate("test", previous.Generation);
-                else registry.BeginGeneration("test");
+                if (invalidate)
+                {
+                    registry.Invalidate("test", previous.Generation);
+                }
+                else
+                {
+                    registry.BeginGeneration("test");
+                }
             }).WaitAsync(TimeSpan.FromSeconds(15));
         }
         finally
         {
-            if (worker is not null) Assert.True(worker.Join(TimeSpan.FromSeconds(5)));
+            if (worker is not null)
+            {
+                Assert.True(worker.Join(TimeSpan.FromSeconds(5)));
+            }
         }
         Assert.Null(callbackFailure);
         Assert.Equal("插件正在取消交接，请在交接完成后重试", Assert.IsType<InvalidOperationException>(rejection).Message);
@@ -181,6 +212,9 @@ public sealed class PluginGenerationCancellationTest
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var gate = typeof(PluginTaskTriggerRegistry).GetField("gate", flags)!.GetValue(registry)!;
-        lock (gate) return ((Dictionary<string, long>)typeof(PluginTaskTriggerRegistry).GetField("generations", flags)!.GetValue(registry)!)["test"];
+        lock (gate)
+        {
+            return ((Dictionary<string, long>)typeof(PluginTaskTriggerRegistry).GetField("generations", flags)!.GetValue(registry)!)["test"];
+        }
     }
 }

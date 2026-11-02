@@ -39,7 +39,10 @@ public sealed class PluginStatusBridgeTest
                 entered.Set();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
             }
-            lock (delivered) delivered.Add(json);
+            lock (delivered)
+            {
+                delivered.Add(json);
+            }
         };
         var first = Task.Run(() => bridge.Publish("1"));
         Task? second = null;
@@ -49,13 +52,19 @@ public sealed class PluginStatusBridgeTest
             second = Task.Run(() => bridge.Publish("2"));
             Assert.True(SpinWait.SpinUntil(() => bridge.StatusJson == "2", TimeSpan.FromSeconds(10)));
             Assert.False(second.IsCompleted);
-            lock (delivered) Assert.Empty(delivered);
+            lock (delivered)
+            {
+                Assert.Empty(delivered);
+            }
         }
         finally
         {
             release.Set();
             await first.WaitAsync(TimeSpan.FromSeconds(10));
-            if (second is not null) await second.WaitAsync(TimeSpan.FromSeconds(10));
+            if (second is not null)
+            {
+                await second.WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
         Assert.Equal(["1", "2"], delivered);
         Assert.Equal(delivered[^1], bridge.StatusJson);
@@ -120,14 +129,23 @@ public sealed class PluginStatusBridgeTest
         bridge.StateChanged += json =>
         {
             delivered.Add("first:" + json);
-            if (json == "2" && failNested) throw failure;
-            if (json != "1") return;
+            if (json == "2" && failNested)
+            {
+                throw failure;
+            }
+            if (json != "1")
+            {
+                return;
+            }
             if (newThread)
             {
                 thread = new Thread(PublishNested) { IsBackground = true };
                 thread.Start();
             }
-            else worker = Task.Run(PublishNested);
+            else
+            {
+                worker = Task.Run(PublishNested);
+            }
             Assert.True(workerReturned.Wait(TimeSpan.FromSeconds(10)));
             Assert.Null(workerFailure);
             Assert.Equal(["first:1"], delivered);
@@ -141,19 +159,33 @@ public sealed class PluginStatusBridgeTest
             Assert.False(outer.IsCompleted);
             publishAllowed.Set();
             var error = await outer.WaitAsync(TimeSpan.FromSeconds(20));
-            if (failNested) Assert.Same(failure, error);
-            else Assert.Null(error);
-            Assert.Equal(failNested
-                ? ["first:1", "second:1", "first:2"]
-                : ["first:1", "second:1", "first:2", "second:2"], delivered);
+            if (failNested)
+            {
+                Assert.Same(failure, error);
+            }
+            else
+            {
+                Assert.Null(error);
+            }
+            Assert.Equal(
+                failNested
+                            ? ["first:1", "second:1", "first:2"]
+                            : ["first:1", "second:1", "first:2", "second:2"],
+                delivered);
             Assert.Equal("2", bridge.StatusJson);
         }
         finally
         {
             publishAllowed.Set();
             await outer.WaitAsync(TimeSpan.FromSeconds(20));
-            if (worker is not null) await worker.WaitAsync(TimeSpan.FromSeconds(10));
-            if (thread is not null) Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
+            if (worker is not null)
+            {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            if (thread is not null)
+            {
+                Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
+            }
         }
 
         void PublishNested()
@@ -165,8 +197,14 @@ public sealed class PluginStatusBridgeTest
                 bridge.Publish("2");
                 bridge.Publish("2");
             }
-            catch (Exception exception) { workerFailure = exception; }
-            finally { workerReturned.Set(); }
+            catch (Exception exception)
+            {
+                workerFailure = exception;
+            }
+            finally
+            {
+                workerReturned.Set();
+            }
         }
     }
 
@@ -182,13 +220,16 @@ public sealed class PluginStatusBridgeTest
         bridge.StateChanged += json =>
         {
             delivered.Add(json);
-            if (json == "2") throw failure;
-            worker = Task.Run(async () =>
+            if (json == "2")
             {
-                entered.TrySetResult();
-                await release.Task;
-                return Record.Exception(() => bridge.Publish("2"));
-            });
+                throw failure;
+            }
+            worker = Task.Run(async () =>
+                        {
+                            entered.TrySetResult();
+                            await release.Task;
+                            return Record.Exception(() => bridge.Publish("2"));
+                        });
         };
         bridge.Publish("1");
         try
@@ -202,7 +243,10 @@ public sealed class PluginStatusBridgeTest
         finally
         {
             release.TrySetResult();
-            if (worker is not null) await worker.WaitAsync(TimeSpan.FromSeconds(10));
+            if (worker is not null)
+            {
+                await worker.WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
     }
 }

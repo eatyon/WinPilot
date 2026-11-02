@@ -1,8 +1,8 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
-using System.Text.Json;
-using WinPilot.Features.Plugins;
 using WinPilot.Core.Plugins;
+using WinPilot.Features.Plugins;
 using WinPilot.PluginContract;
 
 using static WinPilot.Test.PluginTestSupport;
@@ -26,7 +26,9 @@ public sealed partial class PluginManagerTest
             var runtime = new RecordingPluginRuntime();
             if (initialScan)
             {
-                Assert.Same(cancellation, Assert.Throws<OperationCanceledException>(() => CreatePluginManager(paths, runtime, pages, logger)));
+                Assert.Same(
+                    cancellation,
+                    Assert.Throws<OperationCanceledException>(() => CreatePluginManager(paths, runtime, pages, logger)));
             }
             else
             {
@@ -39,19 +41,36 @@ public sealed partial class PluginManagerTest
             }
             Assert.Equal(0, logger.ErrorCount);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     private sealed class ScanCancellationLogger(OperationCanceledException cancellation) : Microsoft.Extensions.Logging.ILogger<PluginManager>
     {
         public bool Cancel { get; set; }
         public int ErrorCount { get; private set; }
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
-        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
-            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Error) ErrorCount++;
-            if (Cancel && formatter(state, exception).StartsWith("插件扫描完成", StringComparison.Ordinal)) throw cancellation;
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Error)
+            {
+                ErrorCount++;
+            }
+            if (Cancel && formatter(state, exception).StartsWith("插件扫描完成", StringComparison.Ordinal))
+            {
+                throw cancellation;
+            }
         }
     }
 
@@ -68,23 +87,36 @@ public sealed partial class PluginManagerTest
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
-            if (!restart) manager.Disable("example");
-            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"), """
+            if (!restart)
+            {
+                manager.Disable("example");
+            }
+            File.WriteAllText(
+                Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
+                """
                 { "id": "example", "name": "新版插件", "version": "2.0.0", "main": "new.dll" }
                 """);
             File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "new.dll"), "");
             runtime.StartedPlugins.Clear();
 
-            if (restart) manager.Restart("example");
-            else manager.Enable("example");
-
+            if (restart)
+            {
+                manager.Restart("example");
+            }
+            else
+            {
+                manager.Enable("example");
+            }
             var started = Assert.Single(runtime.StartedPlugins);
             Assert.Equal("新版插件", started.Manifest!.Name);
             Assert.Equal("2.0.0", started.Manifest.Version);
             Assert.Equal("new.dll", started.Manifest.Main);
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -114,9 +146,13 @@ public sealed partial class PluginManagerTest
             Assert.NotEmpty(failed.Errors);
             Assert.False(failed.Enabled);
             using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+            {
                 Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+            }
             if (manifest.Contains("winpilot_version"))
+            {
                 Assert.Contains(failed.Errors, error => error.Contains("需要 WinPilot 999.0.0 或更高版本"));
+            }
             Assert.False(Directory.Exists(Path.Combine(paths.PluginDataDirectory, "other")));
             WritePlugin(paths, "example", "example", "");
             manager.Scan();
@@ -124,7 +160,10 @@ public sealed partial class PluginManagerTest
             Assert.Equal(["example"], runtime.StartedIds);
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -140,13 +179,23 @@ public sealed partial class PluginManagerTest
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
-            if (enabled) manager.Stop("example");
-            else manager.Disable("example");
+            if (enabled)
+            {
+                manager.Stop("example");
+            }
+            else
+            {
+                manager.Disable("example");
+            }
             var original = manager.GetPlugin("example");
-            File.WriteAllText(Path.Combine(original.Directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(original.Directory, "manifest.json"),
+                """
                 { "id": "example", "name": "新版插件", "version": "2.0.0", "main": "plugin.dll", "features_ui": "features.json" }
                 """);
-            File.WriteAllText(Path.Combine(original.Directory, "features.json"), """
+            File.WriteAllText(
+                Path.Combine(original.Directory, "features.json"),
+                """
                 { "features": [{ "id": "refresh", "name": "刷新", "mode": "action" }] }
                 """);
             runtime.StartedIds.Clear();
@@ -168,7 +217,10 @@ public sealed partial class PluginManagerTest
             Assert.Empty(manager.GetPlugins());
             Assert.Empty(runtime.StartedIds);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -202,7 +254,10 @@ public sealed partial class PluginManagerTest
             Assert.Throws<FileNotFoundException>(() => manager.GetPlugin("removed"));
             Assert.True(File.Exists(Path.Combine(paths.PluginDataDirectory, "removed", "plugin.json")));
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -235,7 +290,10 @@ public sealed partial class PluginManagerTest
             Assert.Equal(["example"], runtime.DisposedIds);
             Assert.Equal(["example"], runtime.StartedIds);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -251,9 +309,14 @@ public sealed partial class PluginManagerTest
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
-            if (!running) manager.Stop("example");
+            if (!running)
+            {
+                manager.Stop("example");
+            }
             WritePlugin(paths, "duplicate", "example", "");
-            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "duplicate", "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(paths.PluginsDirectory, "duplicate", "manifest.json"),
+                """
                 { "id": "example", "name": "重复插件", "version": "1.0.0", "main": "plugin.dll", "winpilot_version": "999.0.0" }
                 """);
 
@@ -267,7 +330,10 @@ public sealed partial class PluginManagerTest
             using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
             Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -293,7 +359,9 @@ public sealed partial class PluginManagerTest
             Assert.Same(plugin, Assert.Single(manager.GetPlugins()));
             Assert.Empty(runtime.StartedIds);
             Assert.Empty(runtime.DisposedIds);
-            Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error && entry.Message == "扫描插件目录失败");
+            Assert.Contains(
+                logger.Entries,
+                entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error && entry.Message == "扫描插件目录失败");
             Assert.Single(logger.Entries.Where(entry => entry.Message == "扫描插件目录失败"));
             File.Delete(paths.PluginsDirectory);
             Directory.Move(paths.PluginsDirectory + "-unavailable", paths.PluginsDirectory);
@@ -302,7 +370,10 @@ public sealed partial class PluginManagerTest
             Assert.Empty(runtime.StartedIds);
             Assert.Empty(runtime.DisposedIds);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -328,7 +399,10 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Running, Assert.Single(manager.GetPlugins()).State);
             Assert.Equal(new[] { "example" }, runtime.StartedIds);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -342,7 +416,9 @@ public sealed partial class PluginManagerTest
             var bad = Path.Combine(paths.PluginsDirectory, "bad");
             Directory.CreateDirectory(bad);
             File.WriteAllText(Path.Combine(bad, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(bad, "manifest.json"), "{\"id\":\"bad\",\"name\":\"bad\",\"version\":\"1.0.0\",\"main\":\"plugin.dll\",\"authors\":[null]}");
+            File.WriteAllText(
+                Path.Combine(bad, "manifest.json"),
+                "{\"id\":\"bad\",\"name\":\"bad\",\"version\":\"1.0.0\",\"main\":\"plugin.dll\",\"authors\":[null]}");
             var runtime = new RecordingPluginRuntime();
             var logger = new CommandBotTestObserver<PluginManager>();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
@@ -355,23 +431,39 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Running, manager.GetPlugin("valid").State);
             Assert.Single(runtime.StartedIds);
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
     [InlineData("missing.dll", null, null)]
     [InlineData("plugin.dll", "missing.json", null)]
     [InlineData("plugin.dll", null, "999.0.0")]
-    public void InitialScan_InvalidDuplicateCannotChangeSharedEnabledSetting(string main, string? featuresUi, string? minimumVersion)
+    public void InitialScan_InvalidDuplicateCannotChangeSharedEnabledSetting(
+        string main,
+        string? featuresUi,
+        string? minimumVersion)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
         {
             var paths = PortableDataPaths.Create(directory);
             foreach (var name in new[] { "valid", "invalid" })
+            {
                 WritePlugin(paths, name, "example", "");
+            }
             File.WriteAllText(Path.Combine(paths.PluginsDirectory, "invalid", "manifest.json"),
-                JsonSerializer.Serialize(new { id = "example", name = "Invalid", version = "1.0.0", main, features_ui = featuresUi, winpilot_version = minimumVersion }));
+                            JsonSerializer.Serialize(new
+                            {
+                                id = "example",
+                                name = "Invalid",
+                                version = "1.0.0",
+                                main,
+                                features_ui = featuresUi,
+                                winpilot_version = minimumVersion
+                            }));
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
@@ -392,7 +484,10 @@ public sealed partial class PluginManagerTest
             using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
             Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -416,7 +511,10 @@ public sealed partial class PluginManagerTest
             using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
             Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -431,10 +529,15 @@ public sealed partial class PluginManagerTest
             foreach (var name in duplicate ? new[] { "first", "second" } : new[] { "first" })
             {
                 WritePlugin(paths, name, "example", "");
-                File.WriteAllText(Path.Combine(paths.PluginsDirectory, name, "manifest.json"),
+                File.WriteAllText(
+                    Path.Combine(paths.PluginsDirectory, name, "manifest.json"),
                     """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
                 File.WriteAllText(Path.Combine(paths.PluginsDirectory, name, "settings.json"),
-                    JsonSerializer.Serialize(new[] { new { name = "value", type = "text", @default = name } }));
+                    JsonSerializer.Serialize(new[] { new {
+                        name = "value",
+                        type = "text",
+                        @default = name
+} }));
             }
             var lifecyclePath = Path.Combine(paths.PluginDataDirectory, "example", "plugin.json");
             var configPath = Path.Combine(paths.PluginDataDirectory, "example", "config.json");
@@ -446,7 +549,10 @@ public sealed partial class PluginManagerTest
             Assert.Empty(runtime.StartedIds);
             Assert.Equal(!duplicate, File.Exists(lifecyclePath));
             Assert.Equal(!duplicate, File.Exists(configPath));
-            if (duplicate) Assert.Empty(manager.GetPlugins());
+            if (duplicate)
+            {
+                Assert.Empty(manager.GetPlugins());
+            }
             else
             {
                 Assert.Equal(PluginState.Disabled, Assert.Single(manager.GetPlugins()).State);
@@ -454,7 +560,10 @@ public sealed partial class PluginManagerTest
                 Assert.Equal("first", config.RootElement.GetProperty("value").GetString());
             }
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -473,12 +582,19 @@ public sealed partial class PluginManagerTest
             var brokenData = Path.Combine(paths.PluginDataDirectory, "broken");
             Directory.CreateDirectory(Path.Combine(brokenData, "plugin.json.tmp"));
             if (failure == "incompatible")
-                File.WriteAllText(Path.Combine(brokenDirectory, "manifest.json"),
+            {
+                File.WriteAllText(
+                    Path.Combine(brokenDirectory, "manifest.json"),
                     """{"id":"broken","name":"Broken","version":"1.0.0","main":"plugin.dll","winpilot_version":"999.0.0"}""");
-            else if (failure == "declaration") File.Delete(Path.Combine(brokenDirectory, "plugin.dll"));
+            }
+            else if (failure == "declaration")
+            {
+                File.Delete(Path.Combine(brokenDirectory, "plugin.dll"));
+            }
             else
             {
-                File.WriteAllText(Path.Combine(brokenDirectory, "manifest.json"),
+                File.WriteAllText(
+                    Path.Combine(brokenDirectory, "manifest.json"),
                     """{"id":"broken","name":"Broken","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
                 File.WriteAllText(Path.Combine(brokenDirectory, "settings.json"), "[]");
                 Directory.CreateDirectory(Path.Combine(brokenData, "config.json.tmp"));
@@ -490,10 +606,16 @@ public sealed partial class PluginManagerTest
 
             foreach (var scan in new[] { false, true })
             {
-                if (scan) manager.Scan();
+                if (scan)
+                {
+                    manager.Scan();
+                }
                 Assert.Equal(PluginState.Running, manager.GetPlugin("healthy").State);
                 Assert.Equal(["healthy"], runtime.StartedIds);
-                if (failure == "declaration") Assert.Single(manager.GetPlugins());
+                if (failure == "declaration")
+                {
+                    Assert.Single(manager.GetPlugins());
+                }
                 else
                 {
                     var broken = manager.GetPlugin("broken");
@@ -504,11 +626,16 @@ public sealed partial class PluginManagerTest
                 using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(brokenData, "plugin.json")));
                 Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
             }
-            Assert.Contains(logger.Entries, entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            Assert.Contains(
+                logger.Entries,
+                entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error
                 && entry.Message.Contains("禁用设置保存失败"));
             Assert.DoesNotContain(logger.Entries, entry => entry.Message == "扫描插件目录失败");
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -548,7 +675,10 @@ public sealed partial class PluginManagerTest
             using var lifecycle = JsonDocument.Parse(File.ReadAllText(lifecyclePath));
             Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -563,9 +693,11 @@ public sealed partial class PluginManagerTest
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
             manager.Disable("example");
-            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
+            File.WriteAllText(
+                Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
                 """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
-            File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "settings.json"),
+            File.WriteAllText(
+                Path.Combine(paths.PluginsDirectory, "example", "settings.json"),
                 """[{"name":"value","type":"text","default":"最新默认值"}]""");
 
             manager.Enable("example");
@@ -574,7 +706,10 @@ public sealed partial class PluginManagerTest
             using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "config.json")));
             Assert.Equal("最新默认值", config.RootElement.GetProperty("value").GetString());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -595,11 +730,16 @@ public sealed partial class PluginManagerTest
             manager.Dispose();
             Assert.Equal(new[] { "first", "second" }, runtime.DisposedIds.OrderBy(id => id));
             foreach (var (id, content) in settings)
+            {
                 Assert.Equal(content, File.ReadAllText(Path.Combine(paths.PluginDataDirectory, id, "plugin.json")));
+            }
             Assert.Throws<ObjectDisposedException>(() => manager.Start("first"));
             Assert.Throws<ObjectDisposedException>(() => manager.Scan());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
@@ -619,7 +759,9 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "example");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                """
                 { "id": "example", "name": "Example", "version": "1.0.0", "main": "plugin.dll" }
                 """);
             WritePlugin(paths, "other", "other", "");
@@ -632,12 +774,26 @@ public sealed partial class PluginManagerTest
                 Directory.Move(directory, directory + "-moved");
             }
             runtime.BlockStart = true;
-            operation = Task.Run(() => { if (scan) manager.Scan(); else manager.Enable("example"); });
+            operation = Task.Run(() =>
+            {
+                if (scan)
+                {
+                    manager.Scan();
+                }
+                else
+                {
+                    manager.Enable("example");
+                }
+            });
             await runtime.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(PluginState.Loaded, manager.GetPlugin("example").State);
             if (!scan)
-                Assert.Equal(PluginState.Running, (await manager.GetPluginAfterLifecycleAsync("other", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5))).State);
+            {
+                Assert.Equal(
+                    PluginState.Running,
+                    (await manager.GetPluginAfterLifecycleAsync("other", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5))).State);
+            }
             var waiting = manager.GetPluginAfterLifecycleAsync("example", CancellationToken.None);
             Assert.False(waiting.IsCompleted);
             using var cancellation = new CancellationTokenSource();
@@ -659,16 +815,28 @@ public sealed partial class PluginManagerTest
             try
             {
                 runtime.Release();
-                if (operation is not null) await operation.WaitAsync(TimeSpan.FromSeconds(5));
+                if (operation is not null)
+                {
+                    await operation.WaitAsync(TimeSpan.FromSeconds(5));
+                }
                 manager?.Disable("example");
             }
             finally
             {
-                try { manager?.Dispose(); }
+                try
+                {
+                    manager?.Dispose();
+                }
                 finally
                 {
-                    try { pages?.Dispose(); }
-                    finally { TryDeleteDirectory(applicationDirectory); }
+                    try
+                    {
+                        pages?.Dispose();
+                    }
+                    finally
+                    {
+                        TryDeleteDirectory(applicationDirectory);
+                    }
                 }
             }
         }
@@ -684,7 +852,9 @@ public sealed partial class PluginManagerTest
             var validDirectory = Path.Combine(paths.PluginsDirectory, "example");
             Directory.CreateDirectory(validDirectory);
             File.WriteAllText(Path.Combine(validDirectory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(validDirectory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(validDirectory, "manifest.json"),
+                """
                 { "id": "example", "name": "Example", "version": "1.0.0", "main": "plugin.dll" }
                 """);
             var dataDirectory = Path.Combine(paths.PluginDataDirectory, "example");
@@ -720,7 +890,9 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "example");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                """
                 { "id": "example", "name": "Example", "version": "1.0.0", "main": "plugin.dll" }
                 """);
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
@@ -729,11 +901,15 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Disabled, manager.GetPlugin("example").State);
             manager.Disable("example");
             Assert.Equal(PluginState.Disabled, manager.GetPlugin("example").State);
-            Assert.Contains("\"enabled\": false", File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.Contains(
+                "\"enabled\": false",
+                File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
             manager.Enable("example");
 
             Assert.Equal(PluginState.Running, manager.GetPlugin("example").State);
-            Assert.Contains("\"enabled\": true", File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
+            Assert.Contains(
+                "\"enabled\": true",
+                File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
         }
         finally
         {
@@ -778,8 +954,9 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Running, manager.GetPlugin("plugin-b").State);
             Assert.Equal(new[] { ("plugin-a", (int?)1) }, configurationRuntime.Reads);
             using (var configuration = JsonDocument.Parse(manager.ReadConfiguration("plugin-a")))
+            {
                 Assert.Equal(1, configuration.RootElement.GetProperty("revision").GetInt32());
-
+            }
             manager.Disable("plugin-a");
             runtime.StartedIds.Clear();
             runtime.DisposedIds.Clear();
@@ -791,7 +968,9 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Disabled, manager.GetPlugin("plugin-a").State);
             Assert.Empty(configurationRuntime.Reads);
             using (var configuration = JsonDocument.Parse(manager.ReadConfiguration("plugin-a")))
+            {
                 Assert.Equal(2, configuration.RootElement.GetProperty("revision").GetInt32());
+            }
         }
         finally
         {
@@ -811,7 +990,9 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "future-plugin");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\", \"winpilot_version\": \"999.0.0\" }");
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\", \"winpilot_version\": \"999.0.0\" }");
             var dataDirectory = Path.Combine(paths.PluginDataDirectory, "future-plugin");
             Directory.CreateDirectory(dataDirectory);
             File.WriteAllText(Path.Combine(dataDirectory, "plugin.json"), JsonSerializer.Serialize(new { enabled }));
@@ -835,15 +1016,19 @@ public sealed partial class PluginManagerTest
             Assert.Equal(PluginState.Invalid, plugin.State);
             Assert.False(plugin.CanChangeEnabled);
             Assert.Contains("需要 WinPilot 999.0.0 或更高版本", plugin.Errors);
-            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "plugin.json")))) Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
-
+            using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "plugin.json"))))
+            {
+                Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+            }
             manager.Scan();
             plugin = Assert.Single(manager.GetPlugins());
             Assert.False(plugin.Enabled);
             Assert.Equal(PluginState.Invalid, plugin.State);
             Assert.Empty(runtime.StartedIds);
 
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\" }");
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                "{ \"id\": \"future-plugin\", \"name\": \"Future Plugin\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\" }");
             manager.Scan();
             Assert.Equal(PluginState.Disabled, manager.GetPlugin("future-plugin").State);
             Assert.True(manager.GetPlugin("future-plugin").CanChangeEnabled);
@@ -867,7 +1052,14 @@ public sealed partial class PluginManagerTest
             var paths = PortableDataPaths.Create(directory);
             WritePlugin(paths, "example", "example", "");
             File.WriteAllText(Path.Combine(paths.PluginsDirectory, "example", "manifest.json"),
-                JsonSerializer.Serialize(new { id = "example", name = "Example", version = "1.0.0", main, features_ui = featuresUi }));
+                JsonSerializer.Serialize(new
+                {
+                    id = "example",
+                    name = "Example",
+                    version = "1.0.0",
+                    main,
+                    features_ui = featuresUi
+                }));
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
@@ -877,14 +1069,23 @@ public sealed partial class PluginManagerTest
             using var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json")));
             Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Theory]
-    [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"plugin.dll\",\"winpilot_version\":\"999.0.0\"}", "需要 WinPilot 999.0.0 或更高版本")]
-    [InlineData("{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"missing.dll\"}", "main 必须是插件目录内存在的 DLL 文件")]
+    [InlineData(
+        "{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"plugin.dll\",\"winpilot_version\":\"999.0.0\"}",
+        "需要 WinPilot 999.0.0 或更高版本")]
+    [InlineData(
+        "{\"id\":\"example\",\"name\":\"新版插件\",\"version\":\"2.0.0\",\"main\":\"missing.dll\"}",
+        "main 必须是插件目录内存在的 DLL 文件")]
     [InlineData("{", "manifest.json 不是有效 JSON")]
-    public void Scan_PreservesRunningPluginAndRestartDisablesItOnValidationFailure(string manifest, string errorMessage)
+    public void Scan_PreservesRunningPluginAndRestartDisablesItOnValidationFailure(
+        string manifest,
+        string errorMessage)
     {
         var directory = Path.Combine(Path.GetTempPath(), "WinPilot.Test", Guid.NewGuid().ToString("N"));
         try
@@ -904,8 +1105,9 @@ public sealed partial class PluginManagerTest
             Assert.Single(runtime.StartedIds);
             Assert.Empty(runtime.DisposedIds);
             using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+            {
                 Assert.True(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
-
+            }
             manager.Restart("example");
 
             var plugin = manager.GetPlugin("example");
@@ -916,9 +1118,14 @@ public sealed partial class PluginManagerTest
             Assert.Single(runtime.DisposedIds);
             Assert.Single(runtime.StartedIds);
             using (var lifecycle = JsonDocument.Parse(File.ReadAllText(Path.Combine(paths.PluginDataDirectory, "example", "plugin.json"))))
+            {
                 Assert.False(lifecycle.RootElement.GetProperty("enabled").GetBoolean());
+            }
         }
-        finally { TryDeleteDirectory(directory); }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -933,8 +1140,12 @@ public sealed partial class PluginManagerTest
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
 
-            using var first = manager.SubscribeState("status-tracker", _ => { });
-            using var second = manager.SubscribeState("status-tracker", _ => { });
+            using var first = manager.SubscribeState("status-tracker", _ =>
+            {
+            });
+            using var second = manager.SubscribeState("status-tracker", _ =>
+            {
+            });
             Assert.Equal([0, 1, 2], runtime.Instances.Single().Counts);
 
             second.Dispose();

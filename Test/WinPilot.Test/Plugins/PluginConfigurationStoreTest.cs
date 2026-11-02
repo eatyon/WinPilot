@@ -37,8 +37,7 @@ public sealed class PluginConfigurationStoreTest : IDisposable
         var path = Path.Combine(root, "config.json");
         Assert.Null(configurationStore.Read(path));
         Assert.False(Directory.Exists(root));
-        await Task.WhenAll(Enumerable.Range(0, 100).Select(_ => Task.Run(() =>
-            configurationStore.Update(path, current =>
+        await Task.WhenAll(Enumerable.Range(0, 100).Select(_ => Task.Run(() => configurationStore.Update(path, current =>
             {
                 current["count"] = (current["count"]?.GetValue<int>() ?? 0) + 1;
                 return current;
@@ -76,6 +75,9 @@ public sealed class PluginConfigurationStoreTest : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

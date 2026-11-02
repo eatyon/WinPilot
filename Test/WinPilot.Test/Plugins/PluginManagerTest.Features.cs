@@ -1,7 +1,7 @@
-using WinPilot.Core;
 using System.Text.Json;
-using WinPilot.Features.Plugins;
 using Microsoft.Extensions.Logging.Abstractions;
+using WinPilot.Core;
+using WinPilot.Features.Plugins;
 
 using static WinPilot.Test.PluginTestSupport;
 
@@ -20,10 +20,14 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "page-plugin");
             Directory.CreateDirectory(Path.Combine(directory, "web"));
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                """
                 { "id": "page-plugin", "name": "Page Plugin", "version": "1.0.0", "main": "plugin.dll", "features_ui": "features.json" }
                 """);
-            File.WriteAllText(Path.Combine(directory, "features.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "features.json"),
+                """
                 { "features": [{ "id": "page", "name": "Page", "mode": "page", "entry": "page.js" }] }
                 """);
             var scriptPath = Path.Combine(directory, "web", "page.js");
@@ -72,17 +76,27 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "features-example");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), "{ \"id\": \"features-example\", \"name\": \"Features Example\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\", \"features_ui\": \"features.json\" }");
-            File.WriteAllText(Path.Combine(directory, "features.json"), "{ \"features\": [{ \"id\": \"refresh\", \"name\": \"刷新\", \"mode\": \"action\", \"confirm\": false }, { \"id\": \"clear-cache\", \"name\": \"清理缓存\", \"mode\": \"action\" }, { \"id\": \"advanced-tools\", \"name\": \"高级功能\", \"mode\": \"action\" }] }");
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                "{ \"id\": \"features-example\", \"name\": \"Features Example\", \"version\": \"1.0.0\", \"main\": \"plugin.dll\", \"features_ui\": \"features.json\" }");
+            File.WriteAllText(
+                Path.Combine(directory, "features.json"),
+                "{ \"features\": [{ \"id\": \"refresh\", \"name\": \"刷新\", \"mode\": \"action\", \"confirm\": false }, { \"id\": \"clear-cache\", \"name\": \"清理缓存\", \"mode\": \"action\" }, { \"id\": \"advanced-tools\", \"name\": \"高级功能\", \"mode\": \"action\" }] }");
 
             var runtime = new RecordingPluginRuntime();
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
             using var manager = CreatePluginManager(paths, runtime, pages);
 
             using var features = JsonDocument.Parse(manager.ReadFeaturesDefinition("features-example"));
-            Assert.Equal(["action", "action", "action"], features.RootElement.GetProperty("features").EnumerateArray().Select(feature => feature.GetProperty("mode").GetString()));
-            Assert.Equal(["refresh", "clear-cache", "advanced-tools"], manager.GetFeatureDisplaySettings("features-example").FeatureIds);
-            var display = manager.WriteFeatureDisplaySettings("features-example", new PluginManager.PluginFeatureDisplaySettings(true, ["refresh", "missing"], "首页功能"));
+            Assert.Equal(
+                ["action", "action", "action"],
+                features.RootElement.GetProperty("features").EnumerateArray().Select(feature => feature.GetProperty("mode").GetString()));
+            Assert.Equal(
+                ["refresh", "clear-cache", "advanced-tools"],
+                manager.GetFeatureDisplaySettings("features-example").FeatureIds);
+            var display = manager.WriteFeatureDisplaySettings(
+                "features-example",
+                new PluginManager.PluginFeatureDisplaySettings(true, ["refresh", "missing"], "首页功能"));
             Assert.Equal("首页功能", display.HomeTitle);
             Assert.Equal(["refresh"], display.FeatureIds);
             var reloadedDisplay = manager.GetFeatureDisplaySettings("features-example");
@@ -107,10 +121,14 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "page-features");
             Directory.CreateDirectory(Path.Combine(directory, "web"));
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                """
                 { "id": "page-features", "name": "Page Features", "version": "1.0.0", "main": "plugin.dll", "features_ui": "features.json" }
                 """);
-            File.WriteAllText(Path.Combine(directory, "features.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "features.json"),
+                """
                 { "features": [
                     { "id": "first-page", "name": "第一个页面", "mode": "page", "entry": "first.js" },
                     { "id": "second-page", "name": "第二个页面", "mode": "page", "entry": "tools/second.js" }

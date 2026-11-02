@@ -2,6 +2,9 @@ using System.Runtime.ExceptionServices;
 
 namespace WinPilot.Features.Plugins;
 
+/// <summary>
+/// 按入队顺序串行投递插件状态回调，将回调中追加的投递归入同一批完成和异常报告。
+/// </summary>
 internal sealed class PluginStatusDelivery
 {
     private readonly object gate = new();
@@ -15,7 +18,9 @@ internal sealed class PluginStatusDelivery
     {
         lock (gate)
         {
-            var root = ownerThread == Environment.CurrentManagedThreadId ? activeRoot
+            // 同线程重入或异步上下文继承的投递共用根节点，批次完成前需等待其追加的回调。
+            var root = ownerThread == Environment.CurrentManagedThreadId
+                ? activeRoot
                 : callbackContext.Value?.Root is { Completed: false } inherited ? inherited : null;
             var delivery = new Delivery(++version, callback, root);
             delivery.Root.Remaining++;
@@ -33,14 +38,22 @@ internal sealed class PluginStatusDelivery
                 requested.Root.ThrowIfFailed();
                 return;
             }
-            if (ownerThread == Environment.CurrentManagedThreadId || ReferenceEquals(requested.Root, callbackContext.Value?.Root))
+            // 回调内部不能等待所属批次完成，否则会与当前回调形成循环等待。
+            if (ownerThread == Environment.CurrentManagedThreadId
+                || ReferenceEquals(requested.Root, callbackContext.Value?.Root))
             {
                 return;
             }
-            if (ownerThread == 0) ownerThread = Environment.CurrentManagedThreadId;
+            if (ownerThread == 0)
+            {
+                ownerThread = Environment.CurrentManagedThreadId;
+            }
             else
             {
-                while (!requested.Root.Completed) Monitor.Wait(gate);
+                while (!requested.Root.Completed)
+                {
+                    Monitor.Wait(gate);
+                }
                 requested.Root.ThrowIfFailed();
                 return;
             }
@@ -61,9 +74,19 @@ internal sealed class PluginStatusDelivery
             var previousContext = callbackContext.Value;
             var context = new CallbackContext(current.Root);
             callbackContext.Value = context;
-            try { current.Callback(current.Version); }
-            catch (Exception exception) { (current.Root.Errors ??= []).Add(exception); }
-            finally { callbackContext.Value = previousContext; }
+            // 外部回调在锁外执行；失败先收集，继续处理队列后再向对应批次的调用方报告。
+            try
+            {
+                current.Callback(current.Version);
+            }
+            catch (Exception exception)
+            {
+                (current.Root.Errors ??= []).Add(exception);
+            }
+            finally
+            {
+                callbackContext.Value = previousContext;
+            }
             lock (gate)
             {
                 context.Root = null;
@@ -90,10 +113,17 @@ internal sealed class PluginStatusDelivery
         public List<Exception>? Errors { get; set; }
         public int Remaining { get; set; }
         public bool Completed { get; set; }
+
         public void ThrowIfFailed()
         {
-            if (Errors is not { Count: > 0 }) return;
-            if (Errors.Count == 1) ExceptionDispatchInfo.Capture(Errors[0]).Throw();
+            if (Errors is not { Count: > 0 })
+            {
+                return;
+            }
+            if (Errors.Count == 1)
+            {
+                ExceptionDispatchInfo.Capture(Errors[0]).Throw();
+            }
             throw new AggregateException(Errors);
         }
     }

@@ -29,17 +29,33 @@ public sealed class PluginEndpointErrorTest
         var handled = false;
         var id = host.Pages.Open("example", "page", session =>
         {
-            session.RegisterMessageHandler((_, _) => { handled = true; return Task.FromResult("{}"); });
-            session.RegisterUploadHandler((_, _) => { handled = true; return Task.FromResult("{}"); });
+            session.RegisterMessageHandler((_, _) =>
+            {
+                handled = true;
+                return Task.FromResult("{}");
+            });
+            session.RegisterUploadHandler((_, _) =>
+            {
+                handled = true;
+                return Task.FromResult("{}");
+            });
         });
         var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         var gate = typeof(PluginPageSessionManager).GetField("gate", flags)!.GetValue(host.Pages)!;
         var sessions = (System.Collections.IDictionary)typeof(PluginPageSessionManager).GetField("sessions", flags)!.GetValue(host.Pages)!;
         object snapshot;
-        lock (gate) snapshot = sessions[id]!;
+        lock (gate)
+        {
+            snapshot = sessions[id]!;
+        }
         await Task.Run(() => host.Pages.Close(id));
         if (capturedBeforeClose)
-            lock (gate) sessions.Add(id, snapshot);
+        {
+            lock (gate)
+            {
+                sessions.Add(id, snapshot);
+            }
+        }
         try
         {
             using var content = new StringContent("{}", System.Text.Encoding.UTF8, upload ? "application/octet-stream" : "application/json");
@@ -50,19 +66,42 @@ public sealed class PluginEndpointErrorTest
             Assert.False(handled);
             Assert.Empty(host.Logs.Errors);
         }
-        finally { host.Pages.Close(id); }
+        finally
+        {
+            host.Pages.Close(id);
+        }
     }
 
     public static IEnumerable<object[]> CallbackFailures()
     {
-        foreach (var operation in new[] { "action", "open", "message", "upload", "status" })
-            foreach (var kind in new[] { "operation", "json", "key", "file", "unknown", "argument", "http" })
+        foreach (var operation in new[] {
+            "action",
+            "open",
+            "message",
+            "upload",
+            "status"
+})
+        {
+            foreach (var kind in new[] {
+                "operation",
+                "json",
+                "key",
+                "file",
+                "unknown",
+                "argument",
+                "http"
+})
+            {
                 yield return [operation, kind];
+            }
+        }
     }
 
     [Theory]
     [MemberData(nameof(CallbackFailures))]
-    public async Task CallbackExceptionsAreServerProblemsWithoutLeakingDetailsOrPretendingSessionExpired(string operation, string kind)
+    public async Task CallbackExceptionsAreServerProblemsWithoutLeakingDetailsOrPretendingSessionExpired(
+        string operation,
+        string kind)
     {
         await using var host = await Host.CreateAsync();
         var failure = CreateFailure(kind, host.Root + " private-secret");
@@ -103,7 +142,8 @@ public sealed class PluginEndpointErrorTest
         await using var host = await Host.CreateAsync();
         File.WriteAllText(Path.Combine(host.PluginDirectory, file), content);
         using var response = await host.Client.GetAsync(file == "settings.json"
-            ? "/api/plugins/example/configuration/schema" : "/api/plugins/example/features");
+            ? "/api/plugins/example/configuration/schema"
+            : "/api/plugins/example/features");
         await AssertServerProblem(response, host.Root);
         Assert.Single(host.Logs.Errors);
     }
@@ -133,7 +173,9 @@ public sealed class PluginEndpointErrorTest
     public async Task MissingPageHandlersAreHostCapabilityFailures(bool upload)
     {
         await using var host = await Host.CreateAsync();
-        var id = host.Pages.Open("example", "page", _ => { });
+        var id = host.Pages.Open("example", "page", _ =>
+        {
+        });
         using var request = new StringContent("{}", System.Text.Encoding.UTF8, upload ? "application/octet-stream" : "application/json");
         using var response = await host.Client.PostAsync($"/api/plugin-page-sessions/{id}/{(upload ? "uploads?command=chunk" : "messages")}", request);
         await AssertServerProblem(response, host.Root);
@@ -166,9 +208,15 @@ public sealed class PluginEndpointErrorTest
         HttpResponseMessage response;
         switch (rule)
         {
-            case "title": response = await host.Client.PutAsJsonAsync("/api/plugins/example/settings/display/status", new { homeTitle = new string('x', 101) }); break;
-            case "source": response = await host.Client.GetAsync("/api/plugins/options/settings/unsupported"); break;
-            case "mode": response = await host.Client.PostAsync("/api/plugins/example/features/page/execute", null); break;
+            case "title":
+                response = await host.Client.PutAsJsonAsync("/api/plugins/example/settings/display/status", new { homeTitle = new string('x', 101) });
+                break;
+            case "source":
+                response = await host.Client.GetAsync("/api/plugins/options/settings/unsupported");
+                break;
+            case "mode":
+                response = await host.Client.PostAsync("/api/plugins/example/features/page/execute", null);
+                break;
             case "disabled":
                 host.Manager.Disable("example");
                 response = await host.Client.PostAsync("/api/plugins/example/features/page/page-sessions", null);
@@ -178,7 +226,9 @@ public sealed class PluginEndpointErrorTest
                 response = await host.Client.GetAsync("/api/plugins/example/readme");
                 break;
             default:
-                File.WriteAllText(Path.Combine(host.PluginDirectory, "settings.json"), """[{"name":"groups","label":"配置组","type":"collection","mode":"dynamic","item":{"fields":[{"name":"path","type":"text"}]}}]""");
+                File.WriteAllText(
+                    Path.Combine(host.PluginDirectory, "settings.json"),
+                    """[{"name":"groups","label":"配置组","type":"collection","mode":"dynamic","item":{"fields":[{"name":"path","type":"text"}]}}]""");
                 response = await host.Client.PutAsJsonAsync("/api/plugins/example/configuration", new { groups = new { path = "x" } });
                 break;
         }
@@ -229,7 +279,10 @@ public sealed class PluginEndpointErrorTest
         File.WriteAllText(host.ConfigurationFile, "{\"count\":1}");
         var original = File.ReadAllText(host.ConfigurationFile);
         var blocked = cleanupAlsoFails ? host.ConfigurationFile + ".tmp" : host.ConfigurationFile;
-        if (cleanupAlsoFails) File.WriteAllText(blocked, "temporary");
+        if (cleanupAlsoFails)
+        {
+            File.WriteAllText(blocked, "temporary");
+        }
         using (var locked = new FileStream(blocked, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             using var response = await host.Client.PutAsJsonAsync("/api/plugins/example/configuration", new { count = 3 });
@@ -255,7 +308,10 @@ public sealed class PluginEndpointErrorTest
             "features" => Path.Combine(host.PluginDirectory, "features.json"),
             _ => Path.Combine(host.PluginDirectory, "README.md")
         };
-        if (!File.Exists(path)) File.WriteAllText(path, source == "configuration" ? "{\"count\":1}" : "说明");
+        if (!File.Exists(path))
+        {
+            File.WriteAllText(path, source == "configuration" ? "{\"count\":1}" : "说明");
+        }
         using var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
         using var response = await host.Client.GetAsync(source switch
         {
@@ -286,7 +342,10 @@ public sealed class PluginEndpointErrorTest
         Assert.Same(plugin, host.Manager.GetPlugin("example"));
     }
 
-    private static async Task AssertServerProblem(HttpResponseMessage response, string root, string? expectedDetail = null)
+    private static async Task AssertServerProblem(
+        HttpResponseMessage response,
+        string root,
+        string? expectedDetail = null)
     {
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
@@ -294,27 +353,34 @@ public sealed class PluginEndpointErrorTest
         using var problem = JsonDocument.Parse(body);
         Assert.Equal(500, problem.RootElement.GetProperty("status").GetInt32());
         Assert.False(string.IsNullOrWhiteSpace(problem.RootElement.GetProperty("detail").GetString()));
-        if (expectedDetail is not null) Assert.Equal(expectedDetail, problem.RootElement.GetProperty("detail").GetString());
+        if (expectedDetail is not null)
+        {
+            Assert.Equal(expectedDetail, problem.RootElement.GetProperty("detail").GetString());
+        }
         Assert.DoesNotContain(root, body);
         Assert.DoesNotContain("private-secret", body);
         Assert.DoesNotContain("Exception", body);
         Assert.False(problem.RootElement.TryGetProperty("stackTrace", out _));
     }
 
-    private static Exception CreateFailure(string kind, string message) => kind switch
-    {
-        "operation" => new InvalidOperationException(message),
-        "json" => new JsonException(message),
-        "key" => new KeyNotFoundException(message),
-        "file" => new FileNotFoundException(message),
-        "argument" => new ArgumentException(message, "id"),
-        "http" => new Microsoft.AspNetCore.Http.BadHttpRequestException(message, 401),
-        _ => new Exception(message)
-    };
+    private static Exception CreateFailure(string kind, string message) =>
+        kind switch
+        {
+            "operation" => new InvalidOperationException(message),
+            "json" => new JsonException(message),
+            "key" => new KeyNotFoundException(message),
+            "file" => new FileNotFoundException(message),
+            "argument" => new ArgumentException(message, "id"),
+            "http" => new Microsoft.AspNetCore.Http.BadHttpRequestException(message, 401),
+            _ => new Exception(message)
+        };
 
-    private static bool ContainsException(Exception exception, Exception expected) => ReferenceEquals(exception, expected)
-        || exception is AggregateException aggregate && aggregate.InnerExceptions.Any(error => ContainsException(error, expected))
-        || exception.InnerException is not null && ContainsException(exception.InnerException, expected);
+    private static bool ContainsException(Exception exception, Exception expected) =>
+        ReferenceEquals(exception, expected)
+        || exception is AggregateException aggregate
+        && aggregate.InnerExceptions.Any(error => ContainsException(error, expected))
+        || exception.InnerException is not null
+        && ContainsException(exception.InnerException, expected);
 
     private sealed class Host : IAsyncDisposable
     {
@@ -325,8 +391,11 @@ public sealed class PluginEndpointErrorTest
         internal Runtime Runtime { get; } = new();
         internal PluginPageSessionManager Pages { get; private set; } = null!;
         internal HttpClient Client { get; private set; } = null!;
+
         private PluginManager? manager;
+
         internal PluginManager Manager => manager!;
+
         private WebApplication? app;
         private ILoggerFactory? loggerFactory;
         private string sessionId = "";
@@ -339,9 +408,15 @@ public sealed class PluginEndpointErrorTest
                 var paths = PortableDataPaths.Create(host.Root);
                 WritePlugin(paths, "example", "example", "");
                 host.ConfigurationFile = Path.Combine(paths.PluginDataDirectory, "example", "config.json");
-                File.WriteAllText(Path.Combine(host.PluginDirectory, "manifest.json"), """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json","features_ui":"features.json"}""");
-                File.WriteAllText(Path.Combine(host.PluginDirectory, "settings.json"), """[{"name":"count","label":"数量","type":"number","required":true,"default":1,"min":1,"max":9,"step":2}]""");
-                File.WriteAllText(Path.Combine(host.PluginDirectory, "features.json"), """{"features":[{"id":"action","name":"Action","mode":"action"},{"id":"page","name":"Page","mode":"page","entry":"page.js"}]}""");
+                File.WriteAllText(
+                    Path.Combine(host.PluginDirectory, "manifest.json"),
+                    """{"id":"example","name":"Example","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json","features_ui":"features.json"}""");
+                File.WriteAllText(
+                    Path.Combine(host.PluginDirectory, "settings.json"),
+                    """[{"name":"count","label":"数量","type":"number","required":true,"default":1,"min":1,"max":9,"step":2}]""");
+                File.WriteAllText(
+                    Path.Combine(host.PluginDirectory, "features.json"),
+                    """{"features":[{"id":"action","name":"Action","mode":"action"},{"id":"page","name":"Page","mode":"page","entry":"page.js"}]}""");
                 Directory.CreateDirectory(Path.Combine(host.PluginDirectory, "web"));
                 File.WriteAllText(Path.Combine(host.PluginDirectory, "web", "page.js"), "export default {};");
                 host.loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(host.Logs));
@@ -364,22 +439,30 @@ public sealed class PluginEndpointErrorTest
                 host.Logs.Errors.Clear();
                 return host;
             }
-            catch { await host.DisposeAsync(); throw; }
+            catch
+            {
+                await host.DisposeAsync();
+                throw;
+            }
         }
 
-        internal Task<HttpResponseMessage> RequestAsync(string operation) => operation switch
-        {
-            "action" => Client.PostAsync("/api/plugins/example/features/action/execute", null),
-            "open" => Client.PostAsync("/api/plugins/example/features/page/page-sessions", null),
-            "status" => Client.GetAsync("/api/plugins/example/status"),
-            "upload" => Client.PostAsync($"/api/plugin-page-sessions/{sessionId}/uploads?command=chunk", new ByteArrayContent([1]) { Headers = { ContentType = new("application/octet-stream") } }),
-            _ => Client.PostAsync($"/api/plugin-page-sessions/{sessionId}/messages", new StringContent("{}"))
-        };
+        internal Task<HttpResponseMessage> RequestAsync(string operation) =>
+            operation switch
+            {
+                "action" => Client.PostAsync("/api/plugins/example/features/action/execute", null),
+                "open" => Client.PostAsync("/api/plugins/example/features/page/page-sessions", null),
+                "status" => Client.GetAsync("/api/plugins/example/status"),
+                "upload" => Client.PostAsync($"/api/plugin-page-sessions/{sessionId}/uploads?command=chunk", new ByteArrayContent([1]) { Headers = { ContentType = new("application/octet-stream") } }),
+                _ => Client.PostAsync($"/api/plugin-page-sessions/{sessionId}/messages", new StringContent("{}"))
+            };
 
         public async ValueTask DisposeAsync()
         {
             Client?.Dispose();
-            if (app is not null) await app.DisposeAsync();
+            if (app is not null)
+            {
+                await app.DisposeAsync();
+            }
             Pages?.Dispose();
             manager?.Dispose();
             loggerFactory?.Dispose();
@@ -392,31 +475,94 @@ public sealed class PluginEndpointErrorTest
         internal Exception? Failure { get; set; }
         internal bool BusinessFailure { get; set; }
         internal int Starts { get; private set; }
-        public IPluginRuntimeInstance Start(PluginInfo plugin) { Starts++; return this; }
-        public string? StatusJson { get { Check(); return "{}"; } }
-        public event Action<string>? StateChanged { add { } remove { } }
-        public PluginFeatureExecutionResult ExecuteFeature(string featureId) { Check(); return new(!BusinessFailure, BusinessFailure ? "业务未完成" : "完成"); }
+
+        public IPluginRuntimeInstance Start(PluginInfo plugin)
+        {
+            Starts++;
+            return this;
+        }
+
+        public string? StatusJson
+        {
+            get
+            {
+                Check();
+                return "{}";
+            }
+        }
+
+        public event Action<string>? StateChanged
+        {
+            add
+            {
+            }
+            remove
+            {
+            }
+        }
+
+        public PluginFeatureExecutionResult ExecuteFeature(string featureId)
+        {
+            Check();
+            return new(!BusinessFailure, BusinessFailure ? "业务未完成" : "完成");
+        }
+
         public void OpenPage(string featureId, IPluginPageSession session)
         {
             Check();
-            session.RegisterMessageHandler((_, _) => { Check(); return Task.FromResult("{}"); });
-            session.RegisterUploadHandler((_, _) => { Check(); return Task.FromResult("{}"); });
+            session.RegisterMessageHandler((_, _) =>
+            {
+                Check();
+                return Task.FromResult("{}");
+            });
+            session.RegisterUploadHandler((_, _) =>
+            {
+                Check();
+                return Task.FromResult("{}");
+            });
         }
-        private void Check() { if (Failure is not null) throw Failure; }
-        public void Dispose() { }
+
+        private void Check()
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+        }
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class ErrorLogs : ILoggerProvider
     {
         internal ConcurrentQueue<Exception> Errors { get; } = new();
+
         public ILogger CreateLogger(string categoryName) => new Logger(Errors);
-        public void Dispose() { }
+
+        public void Dispose()
+        {
+        }
+
         private sealed class Logger(ConcurrentQueue<Exception> errors) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
             public bool IsEnabled(LogLevel level) => true;
-            public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            { if (level == LogLevel.Error && exception is not null) errors.Enqueue(exception); }
+
+            public void Log<TState>(
+                LogLevel level,
+                EventId id,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (level == LogLevel.Error && exception is not null)
+                {
+                    errors.Enqueue(exception);
+                }
+            }
         }
     }
 }

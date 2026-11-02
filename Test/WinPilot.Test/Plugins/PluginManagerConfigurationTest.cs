@@ -23,15 +23,22 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         {
             var directory = Path.Combine(paths.PluginsDirectory, id);
             Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, "manifest.json"),
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
                 $$"""{"id":"{{id}}","name":"{{id}}","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
             File.WriteAllText(Path.Combine(directory, "settings.json"), Definition);
         }
         Directory.CreateDirectory(paths.PluginDataDirectory);
         var brokenData = Path.Combine(paths.PluginDataDirectory, "broken");
-        if (blockDataDirectory) File.WriteAllText(brokenData, "占用目录路径");
-        else Directory.CreateDirectory(Path.Combine(brokenData, "config.json.tmp"));
+        if (blockDataDirectory)
+        {
+            File.WriteAllText(brokenData, "占用目录路径");
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.Combine(brokenData, "config.json.tmp"));
+        }
         using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
         var manager = new PluginManager(paths, NullLogger<PluginManager>.Instance, new Runtime(), pages);
         Assert.Equal(2, manager.GetPlugins().Count);
@@ -52,7 +59,8 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         var paths = PortableDataPaths.Create(root);
         var directory = Path.Combine(paths.PluginsDirectory, "test");
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "manifest.json"),
+        File.WriteAllText(
+            Path.Combine(directory, "manifest.json"),
             """{"id":"test","name":"Test","version":"1.0.0","main":"plugin.dll","settings_ui":"settings.json"}""");
         File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
         File.WriteAllText(Path.Combine(directory, "settings.json"), Definition);
@@ -80,7 +88,11 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         var original = File.ReadAllText(path);
         Assert.Throws<PluginValidationException>(() => manager.WriteConfiguration("test", """{"toggle":"true"}"""));
         Assert.Equal(original, File.ReadAllText(path));
-        foreach (var invalid in new[] { "null", "[]", "1" })
+        foreach (var invalid in new[] {
+            "null",
+            "[]",
+            "1"
+})
         {
             Assert.Throws<PluginValidationException>(() => manager.WriteConfiguration("test", invalid));
             Assert.Equal(original, File.ReadAllText(path));
@@ -93,7 +105,8 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         var paths = PortableDataPaths.Create(root);
         var directory = Path.Combine(paths.PluginsDirectory, "test");
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "manifest.json"),
+        File.WriteAllText(
+            Path.Combine(directory, "manifest.json"),
             """{"id":"test","name":"Test","version":"1.0.0","main":"plugin.dll"}""");
         File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
         using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
@@ -104,10 +117,18 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         {
             switch (index % 4)
             {
-                case 0: manager.WriteStatusDisplaySettings("test", new(false, [], "状态")); break;
-                case 1: manager.WriteFeatureDisplaySettings("test", new(false, [], "功能")); break;
-                case 2: manager.WriteSettingsDisplaySettings("test", new(false)); break;
-                default: manager.Enable("test"); break;
+                case 0:
+                    manager.WriteStatusDisplaySettings("test", new(false, [], "状态"));
+                    break;
+                case 1:
+                    manager.WriteFeatureDisplaySettings("test", new(false, [], "功能"));
+                    break;
+                case 2:
+                    manager.WriteSettingsDisplaySettings("test", new(false));
+                    break;
+                default:
+                    manager.Enable("test");
+                    break;
             }
         })));
         var saved = configurationStore.Read(path)!;
@@ -132,7 +153,8 @@ public sealed class PluginManagerConfigurationTest : IDisposable
         var paths = PortableDataPaths.Create(root);
         var directory = Path.Combine(paths.PluginsDirectory, "test");
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "manifest.json"),
+        File.WriteAllText(
+            Path.Combine(directory, "manifest.json"),
             """{"id":"test","name":"Test","version":"1.0.0","main":"plugin.dll"}""");
         File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
         using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
@@ -145,14 +167,26 @@ public sealed class PluginManagerConfigurationTest : IDisposable
             {
                 switch (index % 4)
                 {
-                    case 0 when index == 0: manager.Delete("test", true); break;
-                    case 0: manager.WriteConfiguration("test", "{}"); break;
-                    case 1: manager.WriteStatusDisplaySettings("test", new(false)); break;
-                    case 2: manager.WriteFeatureDisplaySettings("test", new(false)); break;
-                    default: manager.WriteSettingsDisplaySettings("test", new(false)); break;
+                    case 0 when index == 0:
+                        manager.Delete("test", true);
+                        break;
+                    case 0:
+                        manager.WriteConfiguration("test", "{}");
+                        break;
+                    case 1:
+                        manager.WriteStatusDisplaySettings("test", new(false));
+                        break;
+                    case 2:
+                        manager.WriteFeatureDisplaySettings("test", new(false));
+                        break;
+                    default:
+                        manager.WriteSettingsDisplaySettings("test", new(false));
+                        break;
                 }
             }
-            catch (FileNotFoundException) { }
+            catch (FileNotFoundException)
+            {
+            }
         })).ToArray();
         start.Set();
         await Task.WhenAll(operations).WaitAsync(TimeSpan.FromSeconds(10));
@@ -163,15 +197,21 @@ public sealed class PluginManagerConfigurationTest : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private sealed class Runtime : IPluginRuntime
     {
         public IPluginRuntimeInstance Start(PluginInfo plugin) => new Instance();
+
         private sealed class Instance : IPluginRuntimeInstance
         {
-            public void Dispose() { }
+            public void Dispose()
+            {
+            }
         }
     }
 }

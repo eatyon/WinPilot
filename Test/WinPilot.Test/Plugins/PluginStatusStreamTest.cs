@@ -1,6 +1,6 @@
-using System.Text;
 using System.Buffers;
 using System.IO.Pipelines;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Hosting;
@@ -24,7 +24,8 @@ public sealed class PluginStatusStreamTest : IDisposable
         var paths = PortableDataPaths.Create(root);
         var directory = Path.Combine(paths.PluginsDirectory, "test");
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "manifest.json"),
+        File.WriteAllText(
+            Path.Combine(directory, "manifest.json"),
             """{"id":"test","name":"Test","version":"1.0.0","main":"plugin.dll"}""");
         File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
         manager = new(paths, NullLogger<PluginManager>.Instance, runtime, pages);
@@ -58,10 +59,19 @@ public sealed class PluginStatusStreamTest : IDisposable
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var stream = new ResponseStream(async (count, token) =>
         {
-            if (count != 1) return;
+            if (count != 1)
+            {
+                return;
+            }
             entered.TrySetResult();
             await release.Task.WaitAsync(token);
-        }, count => { if (count == 2) cancellation.Cancel(); });
+        }, count =>
+        {
+            if (count == 2)
+            {
+                cancellation.Cancel();
+            }
+        });
         var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
         context.Response.Body = stream;
         var streaming = PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", context, manager);
@@ -69,7 +79,10 @@ public sealed class PluginStatusStreamTest : IDisposable
         {
             await entered.Task.WaitAsync(cancellation.Token);
             Assert.Equal(1, runtime.Instance.Subscribers);
-            for (var sequence = 1; sequence <= 1000; sequence++) runtime.Instance.Publish(sequence);
+            for (var sequence = 1; sequence <= 1000; sequence++)
+            {
+                runtime.Instance.Publish(sequence);
+            }
             release.TrySetResult();
             await streaming.WaitAsync(TimeSpan.FromSeconds(5));
             var messages = Encoding.UTF8.GetString(stream.ToArray()).Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
@@ -110,8 +123,14 @@ public sealed class PluginStatusStreamTest : IDisposable
         using var stream = new FlushStream((count, token) =>
         {
             Assert.Equal(cancellation.Token, token);
-            if (count == 1) initialFlushed.TrySetResult();
-            else nextFlushed.TrySetResult();
+            if (count == 1)
+            {
+                initialFlushed.TrySetResult();
+            }
+            else
+            {
+                nextFlushed.TrySetResult();
+            }
             return Task.CompletedTask;
         });
         var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
@@ -130,7 +149,11 @@ public sealed class PluginStatusStreamTest : IDisposable
             Assert.Equal(new[] { "data: {\"sequence\":0}", "data: {\"sequence\":1}" },
                 Encoding.UTF8.GetString(body.ReadWrittenBytes()).Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
         }
-        finally { cancellation.Cancel(); await streaming.WaitAsync(TimeSpan.FromSeconds(10)); }
+        finally
+        {
+            cancellation.Cancel();
+            await streaming.WaitAsync(TimeSpan.FromSeconds(10));
+        }
         Assert.Equal(0, runtime.Instance.Subscribers);
     }
 
@@ -142,14 +165,18 @@ public sealed class PluginStatusStreamTest : IDisposable
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var stream = new FlushStream((count, _) =>
         {
-            if (count == failingFlush) throw new IOException("连接已断开");
+            if (count == failingFlush)
+            {
+                throw new IOException("连接已断开");
+            }
             runtime.Instance.Publish(1);
             return Task.CompletedTask;
         });
         var context = new DefaultHttpContext { RequestAborted = cancellation.Token };
         using var body = new FlushBodyFeature(stream);
         context.Features.Set<IHttpResponseBodyFeature>(body);
-        await Assert.ThrowsAsync<IOException>(() => PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", context, manager)
+        await Assert.ThrowsAsync<IOException>(() =>
+            PluginEndpointRouteBuilderExtensions.StreamPluginStatusAsync("test", context, manager)
             .WaitAsync(cancellation.Token));
         Assert.Equal(failingFlush, stream.FlushCount);
         Assert.Equal(0, runtime.Instance.Subscribers);
@@ -158,18 +185,32 @@ public sealed class PluginStatusStreamTest : IDisposable
     private sealed class FlushStream(Func<int, CancellationToken, Task> flush) : MemoryStream
     {
         public int FlushCount { get; private set; }
+
         public override Task FlushAsync(CancellationToken cancellationToken) => flush(++FlushCount, cancellationToken);
     }
 
     private sealed class FlushBodyFeature(Stream stream) : IHttpResponseBodyFeature, IDisposable
     {
         private readonly Pipe pipe = new();
+
         public Stream Stream => stream;
         public PipeWriter Writer => pipe.Writer;
-        public void DisableBuffering() { }
+
+        public void DisableBuffering()
+        {
+        }
+
         public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         public Task CompleteAsync() => Task.CompletedTask;
-        public Task SendFileAsync(string path, long offset, long? count, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SendFileAsync(
+            string path,
+            long offset,
+            long? count,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public byte[] ReadWrittenBytes()
         {
             Assert.True(pipe.Reader.TryRead(out var result));
@@ -177,30 +218,44 @@ public sealed class PluginStatusStreamTest : IDisposable
             pipe.Reader.AdvanceTo(result.Buffer.End);
             return bytes;
         }
-        public void Dispose() { pipe.Writer.Complete(); pipe.Reader.Complete(); }
+
+        public void Dispose()
+        {
+            pipe.Writer.Complete();
+            pipe.Reader.Complete();
+        }
     }
 
     public void Dispose()
     {
         manager.Dispose();
         pages.Dispose();
-        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private sealed class Lifetime : IHostApplicationLifetime, IDisposable
     {
         private readonly CancellationTokenSource stopping = new();
+
         public CancellationToken ApplicationStarted => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public CancellationToken ApplicationStopping => stopping.Token;
+
         public void StopApplication() => stopping.Cancel();
+
         public void Dispose() => stopping.Dispose();
     }
 
     private sealed class ResponseStream(Func<int, CancellationToken, Task> before, Action<int>? after = null) : MemoryStream
     {
         private int count;
-        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
         {
             var current = ++count;
             await before(current, cancellationToken);
@@ -212,6 +267,7 @@ public sealed class PluginStatusStreamTest : IDisposable
     private sealed class Runtime : IPluginRuntime
     {
         public RuntimeInstance Instance { get; } = new();
+
         public IPluginRuntimeInstance Start(PluginInfo plugin) => Instance;
     }
 
@@ -220,9 +276,13 @@ public sealed class PluginStatusStreamTest : IDisposable
         public int Subscribers { get; private set; }
         public bool FailStatusRead { get; set; }
         public string? StatusJson => FailStatusRead ? throw new InvalidOperationException("状态读取失败") : "{\"sequence\":0}";
+
         public event Action<string>? StateChanged;
+
         public void Publish(int sequence) => StateChanged?.Invoke($"{{\"sequence\":{sequence}}}");
+
         public void SetStatusSubscriberCount(int count) => Subscribers = count;
+
         public void Dispose() => StateChanged = null;
     }
 }

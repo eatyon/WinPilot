@@ -31,15 +31,25 @@ public sealed class PluginTaskExtensionScopeTest
                 var checking = new Thread(() =>
                 {
                     scopeAvailable = Monitor.TryEnter(scopeGate);
-                    if (scopeAvailable) Monitor.Exit(scopeGate);
+                    if (scopeAvailable)
+                    {
+                        Monitor.Exit(scopeGate);
+                    }
                     checkedScope.Set();
-                }) { IsBackground = true };
+                })
+                { IsBackground = true };
                 checking.Start();
                 Assert.True(checkedScope.Wait(TimeSpan.FromSeconds(5)));
                 checking.Join();
             }
-            catch (Exception exception) { callbackError = exception; }
-            finally { release.Set(); }
+            catch (Exception exception)
+            {
+                callbackError = exception;
+            }
+            finally
+            {
+                release.Set();
+            }
         };
         var emitting = Task.Run(() => scope.Emit(new("trigger", DateTimeOffset.Now, new Dictionary<string, object?>())));
         try
@@ -82,13 +92,16 @@ public sealed class PluginTaskExtensionScopeTest
     private sealed class RegistrationHandshake(ManualResetEventSlim entered, ManualResetEventSlim release) : IReadOnlyList<PluginActionParameterDefinition>
     {
         public int Count => 0;
+
         public PluginActionParameterDefinition this[int index] => throw new IndexOutOfRangeException();
+
         public IEnumerator<PluginActionParameterDefinition> GetEnumerator()
         {
             entered.Set();
             Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
             yield break;
         }
+
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
@@ -135,8 +148,12 @@ public sealed class PluginTaskExtensionScopeTest
         Assert.Equal([2, 3, 1], order);
         Assert.All(originals, original => Assert.Equal(1, original.DisposeCount));
         Assert.Empty(Tracked(scope).Cast<object>());
-        Assert.All(tracked, handle => Assert.All(handle.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic),
-            field => Assert.Null(field.GetValue(handle))));
+        Assert.All(
+            tracked,
+            handle =>
+                Assert.All(
+                    handle.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic),
+                    field => Assert.Null(field.GetValue(handle))));
     }
 
     [Fact]
@@ -151,7 +168,9 @@ public sealed class PluginTaskExtensionScopeTest
         tracked.Dispose();
         Assert.Equal(1, original.DisposeCount);
         Assert.Empty(Tracked(scope).Cast<object>());
-        Assert.All(tracked.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic), field => Assert.Null(field.GetValue(tracked)));
+        Assert.All(
+            tracked.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic),
+            field => Assert.Null(field.GetValue(tracked)));
     }
 
     [Fact]
@@ -161,11 +180,21 @@ public sealed class PluginTaskExtensionScopeTest
         for (var iteration = 0; iteration < 50; iteration++)
         {
             using var scope = registry.CreateScope("test", "Test");
-            var original = new Registration(() => { });
+            var original = new Registration(() =>
+            {
+            });
             var tracked = Add(scope, original);
             using var start = new Barrier(2);
-            await Task.WhenAll(Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); tracked.Dispose(); }),
-                Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); scope.Dispose(); })).WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(Task.Run(() =>
+            {
+                Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+                tracked.Dispose();
+            }),
+                Task.Run(() =>
+                {
+                    Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+                    scope.Dispose();
+                })).WaitAsync(TimeSpan.FromSeconds(10));
             tracked.Dispose();
             Assert.Equal(1, original.DisposeCount);
             Assert.Empty(Tracked(scope).Cast<object>());
@@ -184,9 +213,19 @@ public sealed class PluginTaskExtensionScopeTest
             await Task.WhenAll(Task.Run(() =>
             {
                 Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
-                try { registration = Register(scope, "action"); }
-                catch (InvalidOperationException exception) { Assert.True(exception is ObjectDisposedException || exception.Message == "插件注册已失效"); }
-            }), Task.Run(() => { Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5))); scope.Dispose(); })).WaitAsync(TimeSpan.FromSeconds(10));
+                try
+                {
+                    registration = Register(scope, "action");
+                }
+                catch (InvalidOperationException exception)
+                {
+                    Assert.True(exception is ObjectDisposedException || exception.Message == "插件注册已失效");
+                }
+            }), Task.Run(() =>
+            {
+                Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+                scope.Dispose();
+            })).WaitAsync(TimeSpan.FromSeconds(10));
             registration?.Dispose();
             Assert.Empty(Tracked(scope).Cast<object>());
             Assert.Empty(registry.GetActions());
@@ -198,7 +237,9 @@ public sealed class PluginTaskExtensionScopeTest
     {
         var registry = new PluginTaskExtensionRegistry(new(), new(), new());
         using var scope = registry.CreateScope("test", "Test");
-        var original = new Registration(() => { });
+        var original = new Registration(() =>
+        {
+        });
         var gate = typeof(PluginTaskExtensionScope).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(scope)!;
         using var entering = new ManualResetEventSlim();
         Task registering;
@@ -237,13 +278,14 @@ public sealed class PluginTaskExtensionScopeTest
         Assert.Equal(kind == "action" ? 1 : 0, registry.GetActions().Count);
     }
 
-    private static IDisposable Register(PluginTaskExtensionScope scope, string kind) => kind switch
-    {
-        "trigger" => scope.Register([new("trigger", "Trigger")]),
-        "variable" => ((IPluginNotificationVariableApi)scope).Register([new("$test.value", "Value")]),
-        "action" => ((IPluginTaskActionApi)scope).Register([new("action", "Action")]),
-        _ => throw new ArgumentOutOfRangeException(nameof(kind))
-    };
+    private static IDisposable Register(PluginTaskExtensionScope scope, string kind) =>
+        kind switch
+        {
+            "trigger" => scope.Register([new("trigger", "Trigger")]),
+            "variable" => ((IPluginNotificationVariableApi)scope).Register([new("$test.value", "Value")]),
+            "action" => ((IPluginTaskActionApi)scope).Register([new("action", "Action")]),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
 
     private static IList Tracked(PluginTaskExtensionScope scope) =>
         (IList)typeof(PluginTaskExtensionScope).GetField("registrations", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(scope)!;
@@ -254,7 +296,13 @@ public sealed class PluginTaskExtensionScopeTest
     private sealed class Registration(Action dispose) : IDisposable
     {
         private int disposeCount;
+
         internal int DisposeCount => Volatile.Read(ref disposeCount);
-        public void Dispose() { Interlocked.Increment(ref disposeCount); dispose(); }
+
+        public void Dispose()
+        {
+            Interlocked.Increment(ref disposeCount);
+            dispose();
+        }
     }
 }

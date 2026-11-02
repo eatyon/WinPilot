@@ -1,5 +1,5 @@
-using WinPilot.Features.Plugins;
 using WinPilot.Core.Plugins;
+using WinPilot.Features.Plugins;
 
 namespace WinPilot.Test;
 
@@ -13,13 +13,17 @@ public sealed partial class PluginManagerTest
         {
             public void OpenPage(string featureId, WinPilot.Features.Plugins.IPluginPageSession session) =>
                 session.RegisterMessageHandler((_, _) => Task.FromResult("reply"));
-            public void Dispose() { }
+
+            public void Dispose()
+            {
+            }
         }
     }
 
     private sealed class StatusSubscriberTrackingRuntime : IPluginRuntime
     {
         public List<Instance> Instances { get; } = [];
+
         public IPluginRuntimeInstance Start(PluginInfo plugin)
         {
             var instance = new Instance();
@@ -30,8 +34,12 @@ public sealed partial class PluginManagerTest
         public sealed class Instance : IPluginRuntimeInstance, IPluginRuntimeStatusSubscriptions
         {
             public List<int> Counts { get; } = [];
+
             public void SetStatusSubscriberCount(int count) => Counts.Add(count);
-            public void Dispose() { }
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

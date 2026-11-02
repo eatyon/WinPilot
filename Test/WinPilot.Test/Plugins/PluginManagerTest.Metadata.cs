@@ -1,6 +1,6 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinPilot.Core;
-using System.Text.Json;
 using WinPilot.Features.Plugins;
 using static WinPilot.Test.PluginTestSupport;
 
@@ -18,7 +18,9 @@ public sealed partial class PluginManagerTest
             var directory = Path.Combine(paths.PluginsDirectory, "readme-plugin");
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(directory, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(directory, "manifest.json"),
+                """
                 { "id": "readme-plugin", "name": "Readme Plugin", "version": "1.0.0", "main": "plugin.dll" }
                 """);
             using var pages = new PluginPageSessionManager(NullLogger<PluginPageSessionManager>.Instance);
@@ -55,7 +57,9 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(current, "custom-features.json"), "{\"features\":[]}");
             File.WriteAllText(Path.Combine(current, "settings.json"), "invalid fixed-name file must not be read");
             File.WriteAllText(Path.Combine(current, "features.json"), "invalid fixed-name file must not be read");
-            File.WriteAllText(Path.Combine(current, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(current, "manifest.json"),
+                """
                 {
                   "id": "current",
                   "name": "Current",
@@ -73,21 +77,27 @@ public sealed partial class PluginManagerTest
             File.WriteAllText(Path.Combine(undeclared, "plugin.dll"), "");
             File.WriteAllText(Path.Combine(undeclared, "settings.json"), "invalid fixed-name file must not be read");
             File.WriteAllText(Path.Combine(undeclared, "features.json"), "invalid fixed-name file must not be read");
-            File.WriteAllText(Path.Combine(undeclared, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(undeclared, "manifest.json"),
+                """
                 { "id": "undeclared", "name": "Undeclared", "version": "1.0.0", "main": "plugin.dll" }
                 """);
 
             var legacy = Path.Combine(paths.PluginsDirectory, "legacy");
             Directory.CreateDirectory(legacy);
             File.WriteAllText(Path.Combine(legacy, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(legacy, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(legacy, "manifest.json"),
+                """
                 { "id": "legacy", "name": "Legacy", "version": "1.0.0", "entry": "plugin.dll", "minWinPilotVersion": "0.0.0", "capabilities": { "status": true } }
                 """);
 
             var ignoredLegacyFields = Path.Combine(paths.PluginsDirectory, "ignored-legacy-fields");
             Directory.CreateDirectory(ignoredLegacyFields);
             File.WriteAllText(Path.Combine(ignoredLegacyFields, "plugin.dll"), "");
-            File.WriteAllText(Path.Combine(ignoredLegacyFields, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(ignoredLegacyFields, "manifest.json"),
+                """
                 { "id": "ignored-legacy-fields", "name": "Ignored Legacy Fields", "version": "1.0.0", "main": "plugin.dll", "minWinPilotVersion": "999.0.0", "capabilities": { "status": true } }
                 """);
 
@@ -95,7 +105,9 @@ public sealed partial class PluginManagerTest
             Directory.CreateDirectory(legacyStatusFile);
             File.WriteAllText(Path.Combine(legacyStatusFile, "plugin.dll"), "");
             File.WriteAllText(Path.Combine(legacyStatusFile, "status.json"), "{}");
-            File.WriteAllText(Path.Combine(legacyStatusFile, "manifest.json"), """
+            File.WriteAllText(
+                Path.Combine(legacyStatusFile, "manifest.json"),
+                """
                 { "id": "legacy-status-file", "name": "Legacy Status File", "version": "1.0.0", "main": "plugin.dll", "status_ui": "status.json" }
                 """);
 
@@ -103,7 +115,9 @@ public sealed partial class PluginManagerTest
 
             using var manager = CreatePluginManager(paths, new RecordingPluginRuntime(), pages);
 
-            Assert.Equal(["current", "ignored-legacy-fields", "undeclared"], manager.GetPlugins().Select(plugin => plugin.Id).Order().ToArray());
+            Assert.Equal(
+                ["current", "ignored-legacy-fields", "undeclared"],
+                manager.GetPlugins().Select(plugin => plugin.Id).Order().ToArray());
             Assert.Equal("[]", manager.ReadSettingsDefinition("current"));
             Assert.Equal("{\"features\":[]}", manager.ReadFeaturesDefinition("current"));
             Assert.Equal("[]", manager.ReadSettingsDefinition("undeclared"));

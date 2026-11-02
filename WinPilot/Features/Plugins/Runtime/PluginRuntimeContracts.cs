@@ -14,6 +14,7 @@ public interface IPluginRuntimeInstance : IDisposable
 public interface IPluginRuntimeStatus
 {
     string? StatusJson { get; }
+
     event Action<string>? StateChanged;
 }
 

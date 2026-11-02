@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
-using WinPilot.Core;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using WinPilot.Core;
 
 namespace WinPilot.Features.Plugins;
 
+/// <summary>
+/// 按配置所在目录串行读写插件 JSON 配置，通过临时文件替换完成保存。
+/// </summary>
 internal sealed class PluginConfigurationStore
 {
     private readonly ConcurrentDictionary<string, object> gates = new(StringComparer.OrdinalIgnoreCase);
@@ -19,9 +22,14 @@ internal sealed class PluginConfigurationStore
     {
         path = Path.GetFullPath(path);
         lock (gates.GetOrAdd(Path.GetDirectoryName(path)!, _ => new object()))
+        {
             return ReadCore(path);
+        }
     }
 
+    /// <summary>
+    /// 在同一锁内读取最新配置并应用修改，避免并发更新覆盖彼此的结果。
+    /// </summary>
     public void Update(string path, Func<JsonObject, JsonObject> update)
     {
         path = Path.GetFullPath(path);
@@ -35,7 +43,12 @@ internal sealed class PluginConfigurationStore
     {
         path = Path.GetFullPath(path);
         lock (gates.GetOrAdd(Path.GetDirectoryName(path)!, _ => new object()))
-            if (!File.Exists(path)) WriteCore(path, createDefaults());
+        {
+            if (!File.Exists(path))
+            {
+                WriteCore(path, createDefaults());
+            }
+        }
     }
 
     private static void WriteCore(string path, JsonObject configuration)
@@ -47,12 +60,21 @@ internal sealed class PluginConfigurationStore
         {
             File.WriteAllText(temporaryFile, content);
             File.Move(temporaryFile, path, overwrite: true);
-        }, () => { if (File.Exists(temporaryFile)) File.Delete(temporaryFile); });
+        }, () =>
+        {
+            if (File.Exists(temporaryFile))
+            {
+                File.Delete(temporaryFile);
+            }
+        });
     }
 
     private static JsonObject? ReadCore(string path)
     {
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
         try
         {
             return JsonNode.Parse(File.ReadAllText(path)) as JsonObject

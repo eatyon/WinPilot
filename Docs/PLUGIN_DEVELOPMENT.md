@@ -575,7 +575,7 @@ modal = host.openModal({
 
 重新挂载会重置前端输入和弹窗状态，重要数据由插件保存到数据目录。不要把 sessionId 或 host 存入模块级变量供后续挂载复用
 
-完整页面类型见 [PluginPageTypes.ts](../WinPilot.Web/src/features/plugins/page/PluginPageTypes.ts)，消息与上传的 C# 接口见 [PluginContracts.cs](../WinPilot.PluginContract/PluginContracts.cs)
+完整页面类型见 [PluginPageTypes.ts](../WinPilot.Web/src/features/plugins/page/PluginPageTypes.ts)，消息与上传的 C# 接口见 [PluginPageContracts.cs](../WinPilot.PluginContract/PluginPageContracts.cs)
 
 ## 任务扩展
 
@@ -817,4 +817,4 @@ Host.Actions 和 Host.Processes 为可空接口，调用前检查是否可用。
 | 上传失败 | command、参数对象、单块大小、上传处理器与分块清理 |
 | 返回前台后页面状态重置 | 会话是否已重建，重要状态是否持久化，业务操作是否重复启动 |
 
-接口定义见 [PluginContracts.cs](../WinPilot.PluginContract/PluginContracts.cs) 和 [PluginCommandContracts.cs](../WinPilot.PluginContract/PluginCommandContracts.cs)，加载行为见 [CSharpPluginRuntime.cs](../WinPilot/Features/Plugins/Runtime/CSharpPluginRuntime.cs)
+接口定义见 [WinPilot.PluginContract](../WinPilot.PluginContract/) 中按能力分类的契约文件，加载行为见 [CSharpPluginRuntime.cs](../WinPilot/Features/Plugins/Runtime/CSharpPluginRuntime.cs)

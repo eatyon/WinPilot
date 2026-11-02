@@ -20,7 +20,13 @@ public sealed class PluginLifecycleConcurrencyTest
             var directory = Path.Combine(paths.PluginsDirectory, id);
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "manifest.json"),
-                System.Text.Json.JsonSerializer.Serialize(new { id, name = id, version = "1.0.0", main = "plugin.dll" }));
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    id,
+                    name = id,
+                    version = "1.0.0",
+                    main = "plugin.dll"
+                }));
             File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
             var data = Path.Combine(paths.PluginDataDirectory, id);
             Directory.CreateDirectory(data);
@@ -38,23 +44,42 @@ public sealed class PluginLifecycleConcurrencyTest
             if (plugin.Id == "first" && Interlocked.Exchange(ref blocked, 1) == 0)
             {
                 entered.TrySetResult();
-                if (!release.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException();
+                if (!release.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException();
+                }
             }
-            if (plugin.Id == "second") secondEntered.TrySetResult();
+            if (plugin.Id == "second")
+            {
+                secondEntered.TrySetResult();
+            }
         };
         var first = Task.Run(() => manager.Start("first"));
         Task? other = null;
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            other = Task.Run(() => { if (scan) manager.Scan(); else manager.Start("second"); });
+            other = Task.Run(() =>
+            {
+                if (scan)
+                {
+                    manager.Scan();
+                }
+                else
+                {
+                    manager.Start("second");
+                }
+            });
             if (scan)
             {
                 await Task.Delay(100);
                 Assert.False(secondEntered.Task.IsCompleted);
                 Assert.False(other.IsCompleted);
             }
-            else await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            else
+            {
+                await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            }
             release.Set();
             await Task.WhenAll(first, other).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(2, runtime.Active);
@@ -64,7 +89,10 @@ public sealed class PluginLifecycleConcurrencyTest
         {
             release.Set();
             await first;
-            if (other is not null) await other;
+            if (other is not null)
+            {
+                await other;
+            }
             manager.Stop("first");
             manager.Stop("second");
             Directory.Delete(paths.ApplicationDirectory, true);
@@ -78,7 +106,8 @@ public sealed class PluginLifecycleConcurrencyTest
         paths.EnsurePluginsDirectory();
         var directory = Path.Combine(paths.PluginsDirectory, "test");
         Directory.CreateDirectory(directory);
-        File.WriteAllText(Path.Combine(directory, "manifest.json"),
+        File.WriteAllText(
+            Path.Combine(directory, "manifest.json"),
             """{"id":"test","name":"Test","version":"1.0.0","main":"plugin.dll"}""");
         File.WriteAllText(Path.Combine(directory, "plugin.dll"), "");
         var dataDirectory = Path.Combine(paths.PluginDataDirectory, "test");
@@ -94,11 +123,21 @@ public sealed class PluginLifecycleConcurrencyTest
             {
                 switch (index % 5)
                 {
-                    case 0: manager.Enable("test"); break;
-                    case 1: manager.Disable("test"); break;
-                    case 2: manager.Restart("test"); break;
-                    case 3: manager.Scan(); break;
-                    default: manager.Stop("test"); break;
+                    case 0:
+                        manager.Enable("test");
+                        break;
+                    case 1:
+                        manager.Disable("test");
+                        break;
+                    case 2:
+                        manager.Restart("test");
+                        break;
+                    case 3:
+                        manager.Scan();
+                        break;
+                    default:
+                        manager.Stop("test");
+                        break;
                 }
             }));
             await Task.WhenAll(operations).WaitAsync(TimeSpan.FromSeconds(15));
@@ -121,6 +160,7 @@ public sealed class PluginLifecycleConcurrencyTest
     private sealed class RecordingRuntime : IPluginRuntime
     {
         internal PluginCommandRegistry Registry { get; } = new(_ => false);
+
         internal int Active;
         internal int MaximumActive;
         internal Action<PluginInfo>? BeforeStart;
@@ -137,15 +177,23 @@ public sealed class PluginLifecycleConcurrencyTest
                 MaximumActive = Math.Max(MaximumActive, active);
                 return new Instance(this, scope);
             }
-            catch { scope.Dispose(); throw; }
+            catch
+            {
+                scope.Dispose();
+                throw;
+            }
         }
 
         private sealed class Instance(RecordingRuntime owner, PluginCommandRegistry.Scope scope) : IPluginRuntimeInstance
         {
             private int disposed;
+
             public void Dispose()
             {
-                if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+                if (Interlocked.Exchange(ref disposed, 1) != 0)
+                {
+                    return;
+                }
                 Thread.Sleep(5);
                 scope.Dispose();
                 Interlocked.Decrement(ref owner.Active);
