@@ -32,7 +32,7 @@
     <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="all" />
     <PackageReference Include="System.Management" Version="10.0.0" />
     <PackageReference Include="TaskScheduler" Version="2.12.2" />
-    <EmbeddedResource Include="Assets\WinPilotIcon.png" />
+    <EmbeddedResource Include="Assets\WinPilot.ico" />
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

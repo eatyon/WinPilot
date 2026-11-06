@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using WinPilot.Core;
 using WinPilot.Features.Security;
@@ -93,30 +92,11 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private static Icon CreateTrayIcon()
     {
-        using var bitmap = new Bitmap(32, 32);
-        using var graphics = Graphics.FromImage(bitmap);
-        using var iconStream = typeof(TrayApplicationContext).Assembly.GetManifestResourceStream("WinPilot.Assets.WinPilotIcon.png")
+        using var iconStream = typeof(TrayApplicationContext).Assembly.GetManifestResourceStream("WinPilot.Assets.WinPilot.ico")
             ?? throw new InvalidOperationException("无法加载系统托盘图标资源");
-        using var source = Image.FromStream(iconStream);
-
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        graphics.DrawImage(source, new Rectangle(0, 0, 32, 32));
-
-        var iconHandle = bitmap.GetHicon();
-        try
-        {
-            using var icon = Icon.FromHandle(iconHandle);
-            return (Icon)icon.Clone();
-        }
-        finally
-        {
-            DestroyIcon(iconHandle);
-        }
+        using var icon = new Icon(iconStream, SystemInformation.SmallIconSize);
+        return (Icon)icon.Clone();
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr hIcon);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("uxtheme.dll", EntryPoint = "#135")]

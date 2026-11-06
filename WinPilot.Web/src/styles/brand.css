@@ -1,8 +1,4 @@
-.login-brand-symbol, .product-symbol { position: relative; display: block; color: transparent; font-size: 0; }
-.login-brand-symbol::before, .product-symbol::before, .login-brand-symbol::after, .product-symbol::after { position: absolute; inset: 0; content: ''; }
-.login-brand-symbol::before, .product-symbol::before { background: var(--accent-solid); mask: url('/favicon-background-mask.png') center / contain no-repeat; -webkit-mask: url('/favicon-background-mask.png') center / contain no-repeat; }
-.login-brand-symbol::after, .product-symbol::after { background: #fff; mask: url('/favicon-foreground-mask.png') center / contain no-repeat; -webkit-mask: url('/favicon-foreground-mask.png') center / contain no-repeat; }
-.login-brand-symbol, .product-symbol, .about-product-mark { transition: background-color .3s cubic-bezier(.4, 0, .2, 1); }
+.login-brand-symbol, .product-symbol, .about-product-mark { display: block; background: var(--accent-text); color: transparent; font-size: 0; mask: url('/logo.svg') center / contain no-repeat; -webkit-mask: url('/logo.svg') center / contain no-repeat; transition: background-color .3s cubic-bezier(.4, 0, .2, 1); }
 
 @property --brand-surface { syntax: '<color>'; inherits: true; initial-value: transparent; }
 @property --brand-canvas { syntax: '<color>'; inherits: true; initial-value: transparent; }

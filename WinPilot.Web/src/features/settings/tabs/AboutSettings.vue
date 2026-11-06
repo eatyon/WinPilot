@@ -347,14 +347,7 @@ onBeforeUnmount(() => {
       class="about-product-section"
       :content-style="{ display: 'flex', alignItems: 'center', gap: '18px' }"
     >
-      <div class="about-product-mark" aria-hidden="true">
-        <img
-          class="about-product-foreground"
-          src="/favicon-foreground-mask.png"
-          alt=""
-          draggable="false"
-        />
-      </div>
+      <div class="about-product-mark" aria-hidden="true"></div>
       <div class="about-product-copy">
         <p class="section-kicker">设备管理与自动化</p>
         <h3>WinPilot</h3>
@@ -559,8 +552,7 @@ onBeforeUnmount(() => {
 <style>
 .section-kicker { margin: 0 0 5px; color: var(--accent-text); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
 .n-card.about-product-section { min-height: 172px; background: linear-gradient(135deg, color-mix(in srgb, var(--brand-accent) 12%, var(--brand-surface)), var(--brand-surface) 65%); }
-.about-product-mark { position: relative; width: 64px; height: 64px; flex: 0 0 64px; overflow: hidden; border-radius: 15px; background: var(--accent-solid); user-select: none; }
-.about-product-foreground { position: absolute; inset: -2.56px; display: block; width: calc(100% + 5.12px); height: calc(100% + 5.12px); pointer-events: none; user-select: none; }
+.about-product-mark { width: 64px; height: 64px; flex: 0 0 64px; user-select: none; }
 .about-product-copy h3 { margin: 0; font-size: 24px; letter-spacing: -0.025em; font-weight: 600; }
 .about-product-copy > p:last-child { margin: 8px 0 0; color: var(--text-muted); font-size: 14px; }
 .about-product-copy strong { color: var(--text); font-family: var(--font-mono); font-weight: 500; }
