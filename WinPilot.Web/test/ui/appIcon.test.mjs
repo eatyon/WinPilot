@@ -10,7 +10,7 @@ test('business icon names resolve to statically imported Lucide components', () 
   const context = { exports: {}, defineProps: () => ({}), require: () => lucide };
   runInNewContext(loadScriptModule(file, 'icons'), context);
   const names = [
-    'menu', 'menu-expand', 'menu-collapse', 'palette', 'alert-circle', 'close',
+    'menu', 'menu-expand', 'menu-collapse', 'palette', 'account', 'alert-circle', 'close',
     'rotate-cw', 'list', 'bot', 'home', 'desktop', 'apps', 'clock', 'schedule',
     'terminal', 'files', 'logs', 'plugins', 'settings', 'more', 'arrow', 'server',
     'shield', 'eye', 'eye-off', 'info', 'copy', 'lock', 'check-circle',

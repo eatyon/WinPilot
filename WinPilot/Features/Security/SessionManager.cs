@@ -75,6 +75,23 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
     }
 
     /// <summary>
+    /// 撤销指定会话，并通知该会话关联的长连接和请求结束。
+    /// </summary>
+    public void Revoke(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        SessionState? revoked = null;
+        lock (sessionGate)
+        {
+            if (sessions.TryRemove(id, out var state) && state.TryRevoke())
+            {
+                revoked = state;
+            }
+        }
+        EndSession(revoked);
+    }
+
+    /// <summary>
     /// 撤销当前所有会话，并通知关联的长连接和请求结束。
     /// </summary>
     public void RevokeAll()

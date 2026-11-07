@@ -6,6 +6,17 @@ internal static class SessionCookie
 {
     public const string Name = "WinPilot.Session";
 
+    public static void Delete(HttpContext context)
+    {
+        context.Response.Cookies.Delete(Name, new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            Secure = context.Request.IsHttps,
+            Path = "/"
+        });
+    }
+
     public static void Append(HttpContext context, string session)
     {
         context.Response.Cookies.Append(Name, session, new CookieOptions

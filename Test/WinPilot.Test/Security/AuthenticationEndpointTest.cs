@@ -34,6 +34,48 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     private RollingFileLoggerProvider? logProvider;
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task LogoutClearsCookieAndRevokesOnlyTheCurrentSession(bool https, bool safeMode)
+    {
+        app.Services.GetRequiredService<AuthStore>().SetInitialPassword("test-password");
+        var sessions = app.Services.GetRequiredService<SessionManager>();
+        var current = sessions.Create();
+        var other = sessions.Create();
+        if (safeMode) app.Services.GetRequiredService<SafeModeService>().SetEnabled(true);
+        Assert.True(sessions.TryValidate(current, out var invalidated));
+        using var request = new HttpRequestMessage(HttpMethod.Post, https ? "https://localhost/api/logout" : "/api/logout");
+        request.Headers.Add("Cookie", $"WinPilot.Session={current}");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
+        Assert.StartsWith("WinPilot.Session=;", cookie);
+        Assert.Contains("expires=", cookie);
+        Assert.Contains("path=/", cookie);
+        Assert.Contains("httponly", cookie);
+        Assert.Contains("samesite=strict", cookie);
+        Assert.Equal(https, cookie.Contains("secure", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(current, cookie);
+        Assert.True(invalidated.IsCancellationRequested);
+        Assert.False(sessions.Validate(current));
+        Assert.True(sessions.Validate(other));
+        using var oldSessionRequest = new HttpRequestMessage(HttpMethod.Get, "/api/protected");
+        oldSessionRequest.Headers.Add("Cookie", $"WinPilot.Session={current}");
+        using var oldSessionResponse = await client.SendAsync(oldSessionRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, oldSessionResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task LogoutWithoutPasswordClearsAnObsoleteCookie()
+    {
+        using var response = await client.PostAsync("/api/logout", null);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.StartsWith("WinPilot.Session=;", Assert.Single(response.Headers.GetValues("Set-Cookie")));
+    }
+
+    [Theory]
     [InlineData("127.0.0.1", true)]
     [InlineData("::1", true)]
     [InlineData("192.168.1.10", true)]

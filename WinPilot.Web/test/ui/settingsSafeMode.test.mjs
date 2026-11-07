@@ -8,12 +8,12 @@ import ts from 'typescript';
 import * as vue from 'vue';
 import { elements, attribute, event } from '../support/template.mjs';
 
-test('safe mode uses header indicators and library disabled buttons without a duplicate notice', () => {
+test('safe mode uses the user menu and library disabled buttons without a duplicate notice', () => {
   const read = file => readFileSync(new URL(`../../src/${file}`, import.meta.url), 'utf8');
   const app = read('App.vue');
   assert.doesNotMatch(app, /safe-mode-notice|safeModeNoticeDismissed|safeModeMessage/);
-  assert.equal((app.match(/class="safe-mode-indicator" role="img" aria-label="安全模式已开启"/g) ?? []).length, 2);
-  assert.equal((app.match(/<AppTooltip v-if="safeModeEnabled" text="安全模式已开启[^"\n]*">/g) ?? []).length, 2);
+  assert.doesNotMatch(app, /safe-mode-indicator/);
+  assert.match(app, /<UserMenu\s*\/>/);
   assert.match(app, /<span class="app-brand">/);
   assert.doesNotMatch(app, /RouterLink|to="\/settings\?tab=about"/);
   for (const file of ['features/desktop/DesktopView.vue', 'features/programs/ProgramsView.vue', 'features/tasks/TasksView.vue', 'features/plugins/PluginDetailView.vue', 'features/plugins/PluginInfoView.vue']) {

@@ -6,16 +6,13 @@ import { NBackTop, NButton, NLayout, NLayoutHeader, NLayoutSider, NScrollbar } f
 import { readSidebarCollapsed, saveSidebarCollapsed } from './ui/navigationLayout';
 import AppearanceSettingsDrawer from './components/AppearanceSettingsDrawer.vue';
 import AppPageView from './components/AppPageView.vue';
+import UserMenu from './features/auth/UserMenu.vue';
 import AppTheme from './components/AppTheme.vue';
 import AppNavigation from './components/AppNavigation.vue';
 import AppIcon from './components/AppIcon.vue';
 import { getPageScroller } from './ui/scrollLock';
 import { createBackTopVisibility } from './ui/backTopVisibility';
-import {
-  safeModeEnabled,
-  startSafeModeSync,
-  stopSafeModeSync,
-} from './features/security/safeMode';
+import { startSafeModeSync, stopSafeModeSync } from './features/security/safeMode';
 const route = useRoute();
 function handleBackTopClick(event: MouseEvent) {
   if (!document.documentElement.classList.contains('interaction-animations-disabled')) return;
@@ -87,28 +84,19 @@ onUnmounted(() => {
         <AppNavigation v-else mobile :collapsed="false" />
         <h1 v-if="!isDesktop" class="mobile-page-title">
           <span class="mobile-page-title-text">{{ pageTitle }}</span>
-          <AppTooltip v-if="safeModeEnabled" text="安全模式已开启，部分功能不可用">
-            <span class="safe-mode-indicator" role="img" aria-label="安全模式已开启">
-              <AppIcon name="lock" />
-            </span>
-          </AppTooltip>
         </h1>
         <div v-if="isDesktop" class="app-brand-group">
           <span class="app-brand">
             <span class="product-symbol" aria-hidden="true"></span>
             WinPilot
           </span>
-          <AppTooltip v-if="safeModeEnabled" text="安全模式已开启，部分功能不可用">
-            <span class="safe-mode-indicator" role="img" aria-label="安全模式已开启">
-              <AppIcon name="lock" />
-            </span>
-          </AppTooltip>
         </div>
         <AppTooltip text="外观设置">
           <NButton quaternary class="app-icon-button appearance-settings-trigger" aria-label="外观设置" @click="appearanceSettingsOpen = true">
             <template #icon><AppIcon name="palette" /></template>
           </NButton>
         </AppTooltip>
+        <UserMenu />
       </NLayoutHeader>
       <AppearanceSettingsDrawer v-model:show="appearanceSettingsOpen" />
       <NLayout has-sider class="app-sidebar-layout">
@@ -153,8 +141,6 @@ onUnmounted(() => {
 
 <style>
 .product-symbol { width: 28px; height: 28px; flex: 0 0 28px; }
-.safe-mode-indicator { display: inline-flex; flex: none; align-items: center; margin-inline-start: 6px; color: var(--text-muted); vertical-align: middle; transition: color .3s cubic-bezier(.4, 0, .2, 1); }
-.safe-mode-indicator .app-icon { width: 15px; height: 15px; }
 
 .n-back-top:focus-visible { outline: 2px solid var(--accent-focus-ring); outline-offset: 2px; }
 </style>

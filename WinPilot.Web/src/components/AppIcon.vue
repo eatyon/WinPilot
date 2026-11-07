@@ -3,7 +3,7 @@ import {
   ArrowRight, Bot, CalendarDays, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clock,
   Copy, Ellipsis, Eye, EyeOff, FileText, Folder, House, Info, LayoutGrid, List, Lock,
   Menu, Monitor, Palette, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, RotateCw,
-  Server, Settings, ShieldCheck, Terminal, X,
+  Server, Settings, ShieldCheck, Terminal, UserRound, X,
 } from '@lucide/vue';
 import type { Component } from 'vue';
 import { NIcon } from 'naive-ui';
@@ -15,6 +15,7 @@ const icons: Record<string, Component> = {
   'menu-expand': PanelLeftOpen,
   'menu-collapse': PanelLeftClose,
   palette: Palette,
+  account: UserRound,
   'alert-circle': CircleAlert,
   close: X,
   'rotate-cw': RotateCw,

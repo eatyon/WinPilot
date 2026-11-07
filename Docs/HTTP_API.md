@@ -39,6 +39,7 @@ SSE 使用 `text/event-stream`，事件正文见各端点说明；WebSocket 握�
 | GET | `/health` | 不要求会话 | 200 `{ status: "ok" }` | — |
 | GET | `/api/about` | `version` 为显示版本字符串 | 200 `{ version }` | — |
 | POST | `/login` | JSON `{ password }`；成功设置会话 Cookie；未配置密码 404，来源锁定 429；伪装页模式无管理入口凭据时可能提前返回 302/404 | 204 | 401、404、429 |
+| POST | `/api/logout` | 无请求体；撤销当前会话并清除会话 Cookie，不影响其他会话 | 204 | 401 |
 | POST | `/_manage` | 无请求体；伪装页开启且已设密码时，使用访客 Cookie 获取管理入口凭据 | 204 | 404 |
 
 ## 安全设置

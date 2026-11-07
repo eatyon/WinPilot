@@ -35,7 +35,7 @@ public sealed class SessionManagerTest
             catch (ObjectDisposedException) { return true; }
         }, TimeSpan.FromSeconds(5)));
         Assert.False(timer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan));
-        sessions.RevokeAll();
+        sessions.Revoke(id);
         Assert.Equal(1, callbacks);
     }
 
@@ -55,8 +55,59 @@ public sealed class SessionManagerTest
         Assert.True(sessions.Validate(id));
     }
 
+    [Fact]
+    public async Task ConcurrentExpirationExitAndDisposalReleaseTheSessionOnce()
+    {
+        using var sessions = new SessionManager();
+        var id = sessions.Create();
+        Assert.True(sessions.TryValidate(id, out var token));
+        var state = States(sessions)[id]!;
+        Expire(sessions, id);
+        var callbacks = 0;
+        using var registration = token.Register(() => Interlocked.Increment(ref callbacks));
+        using var start = new Barrier(4);
+        Action[] operations = [
+            () => typeof(SessionManager).GetMethod("Expire", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(sessions, [id, state]),
+            () => sessions.Revoke(id),
+            sessions.Dispose,
+        ];
+        var tasks = operations.Select(operation => Task.Run(() =>
+        {
+            Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+            operation();
+        })).ToArray();
+
+        Assert.True(start.SignalAndWait(TimeSpan.FromSeconds(5)));
+        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(States(sessions).Contains(id));
+        Assert.Equal(1, callbacks);
+        Assert.Throws<ObjectDisposedException>(() => token.WaitHandle);
+    }
+
+    [Fact]
+    public void RevokeInvalidatesOnlyTheSelectedSession()
+    {
+        using var sessions = new SessionManager();
+        var current = sessions.Create();
+        var other = sessions.Create();
+        Assert.True(sessions.TryValidate(current, out var invalidated));
+        Assert.True(sessions.TryValidate(other, out var otherInvalidated));
+
+        sessions.Revoke(current);
+        sessions.Revoke(current);
+        sessions.Revoke(null);
+
+        Assert.True(invalidated.IsCancellationRequested);
+        Assert.False(sessions.Validate(current));
+        Assert.True(sessions.Validate(other));
+        Assert.False(otherInvalidated.IsCancellationRequested);
+    }
+
     [Theory]
     [InlineData("revoke")]
+    [InlineData("revoke-current")]
     [InlineData("dispose")]
     [InlineData("create")]
     [InlineData("validate")]
@@ -85,6 +136,9 @@ public sealed class SessionManagerTest
                     {
                         case "revoke":
                             sessions.RevokeAll();
+                            break;
+                        case "revoke-current":
+                            sessions.Revoke(id);
                             break;
                         case "dispose":
                             sessions.Dispose();

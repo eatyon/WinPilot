@@ -7,6 +7,12 @@ public static class AuthenticationEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapAuthenticationEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapPost("/api/logout", (HttpContext context, SessionManager sessions) =>
+        {
+            SessionCookie.Delete(context);
+            sessions.Revoke(context.Request.Cookies[SessionCookie.Name]);
+            return Results.NoContent();
+        });
         endpoints.MapPost("/login", (
             LoginRequest request,
             HttpContext context,
