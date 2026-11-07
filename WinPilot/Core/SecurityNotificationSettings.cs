@@ -9,7 +9,8 @@ public enum SecurityEventType
     LoginSourceLocked,
     AuthConfigurationInvalid,
     LanAccessChanged,
-    SecurityNotificationSettingsChanged
+    SecurityNotificationSettingsChanged,
+    SessionInvalidated
 }
 
 public sealed record SecurityNotificationSettings

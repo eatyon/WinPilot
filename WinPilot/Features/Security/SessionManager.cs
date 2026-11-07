@@ -1,23 +1,24 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using WinPilot.Core;
 
 namespace WinPilot.Features.Security;
 
 /// <summary>
 /// 管理内存中的登录会话；有效访问会续期，过期或撤销会通过取消令牌通知正在执行的请求。
 /// </summary>
-public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDisposable
+public sealed class SessionManager(ILogger<SessionManager>? logger = null, SecurityEventNotifier? securityEvents = null) : IDisposable
 {
     internal static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
     private readonly ConcurrentDictionary<string, SessionState> sessions = new(StringComparer.Ordinal);
     private readonly object sessionGate = new();
     private bool disposed;
 
-    public string Create() => CreateCore(null, 0)!;
+    public string Create(string? sourceIp = null) => CreateCore(null, 0, sourceIp)!;
 
-    internal string? Create(AuthStore auth, long authenticationVersion) => CreateCore(auth, authenticationVersion);
+    internal string? Create(AuthStore auth, long authenticationVersion, string? sourceIp = null) => CreateCore(auth, authenticationVersion, sourceIp);
 
-    private string? CreateCore(AuthStore? auth, long authenticationVersion)
+    private string? CreateCore(AuthStore? auth, long authenticationVersion, string? sourceIp)
     {
         var id = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         List<SessionState> revoked = [];
@@ -32,7 +33,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                 {
                     return null;
                 }
-                var state = new SessionState(Lifetime, expired => Expire(id, expired));
+                var state = new SessionState(Lifetime, sourceIp, expired => Expire(id, expired));
                 sessions[id] = state;
                 state.Start();
             }
@@ -65,7 +66,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                 invalidated = state.Invalidated;
                 return true;
             }
-            if (sessions.TryRemove(id, out var removed) && removed.TryRevoke())
+            if (sessions.TryRemove(id, out var removed) && removed.TryRevoke(SessionEndReason.TimedOut))
             {
                 revoked = removed;
             }
@@ -83,7 +84,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         SessionState? revoked = null;
         lock (sessionGate)
         {
-            if (sessions.TryRemove(id, out var state) && state.TryRevoke())
+            if (sessions.TryRemove(id, out var state) && state.TryRevoke(SessionEndReason.LoggedOut))
             {
                 revoked = state;
             }
@@ -130,7 +131,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         {
             if ((!expiredOnly || item.Value.IsExpired)
                 && ((ICollection<KeyValuePair<string, SessionState>>)sessions).Remove(item)
-                && item.Value.TryRevoke())
+                && item.Value.TryRevoke(expiredOnly ? SessionEndReason.TimedOut : null))
             {
                 revoked.Add(item.Value);
             }
@@ -150,7 +151,14 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
     {
         if (state is null) return;
         state.CancelAndDispose(logger);
+        if (state.EndReason is { } reason)
+        {
+            securityEvents?.Record(SecurityEventType.SessionInvalidated, state.SourceIp,
+                reason: reason == SessionEndReason.TimedOut ? "无操作超时" : "主动退出");
+        }
     }
+
+    private enum SessionEndReason { TimedOut, LoggedOut }
 
     private void Expire(string id, SessionState state)
     {
@@ -176,9 +184,10 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         private DateTimeOffset expiresAt;
         private bool revoked;
 
-        public SessionState(TimeSpan lifetime, Action<SessionState> expire)
+        public SessionState(TimeSpan lifetime, string? sourceIp, Action<SessionState> expire)
         {
             this.lifetime = lifetime;
+            SourceIp = sourceIp;
             invalidated = invalidation.Token;
             expiresAt = DateTimeOffset.UtcNow.Add(lifetime);
             expiryTimer = new System.Threading.Timer(_ => expire(this), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -187,6 +196,8 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         public void Start() => expiryTimer.Change(lifetime, Timeout.InfiniteTimeSpan);
 
         public CancellationToken Invalidated => invalidated;
+        public string? SourceIp { get; }
+        public SessionEndReason? EndReason { get; private set; }
 
         public bool IsExpired
         {
@@ -226,11 +237,12 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                     return false;
                 }
                 revoked = true;
+                EndReason = SessionEndReason.TimedOut;
                 return true;
             }
         }
 
-        public bool TryRevoke()
+        public bool TryRevoke(SessionEndReason? reason = null)
         {
             lock (gate)
             {
@@ -239,6 +251,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                     return false;
                 }
                 revoked = true;
+                EndReason = reason is not null && expiresAt <= DateTimeOffset.UtcNow ? SessionEndReason.TimedOut : reason;
                 return true;
             }
         }

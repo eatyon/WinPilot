@@ -15,6 +15,7 @@ public sealed class SecurityEventNotifierTest
         var settings = new SecurityNotificationSettings();
         Assert.Equal("", settings.Channel);
         Assert.Equal(SecurityEventDefaults.Notified, settings.Events);
+        Assert.DoesNotContain(SecurityEventType.SessionInvalidated, settings.Events);
         Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = "unknown" }));
         Assert.Equal("", SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = " " }).Channel);
         Assert.Throws<InvalidOperationException>(() => SecurityEventNotifier.Validate(new SecurityNotificationSettings { Channel = "all-enabled" }));
@@ -109,6 +110,7 @@ public sealed class SecurityEventNotifierTest
                 "登录成功",
                 "登录失败",
                 "登录来源已锁定",
+                "登录会话已失效",
                 "密码配置缺失或损坏",
                 "局域网访问设置已变更",
                 "安全事件通知配置已修改",

@@ -585,6 +585,11 @@ test('security event display shares the selection count without changing passwor
     assert.equal(s.eventsLabel.value, '1 个事件');
     s.toggleEvent('LoginFailed', false);
     assert.equal(s.eventsLabel.value, '请选择事件');
+    s.toggleEvent('SessionInvalidated', true);
+    assert.deepEqual(Array.from(s.selectedEvents.value), ['SessionInvalidated']);
+    assert.equal(s.eventsLabel.value, '1 个事件');
+    s.toggleEvent('SessionInvalidated', false);
+    assert.deepEqual(Array.from(s.notifications.events), []);
   } finally { f.dispose(); }
 });
 

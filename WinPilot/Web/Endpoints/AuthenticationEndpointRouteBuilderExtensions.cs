@@ -43,7 +43,7 @@ public static class AuthenticationEndpointRouteBuilderExtensions
                 return Results.Unauthorized();
             }
             // 创建会话前再次核对密码版本，拒绝与密码修改并发的旧登录结果。
-            var session = sessions.Create(auth, authenticationVersion);
+            var session = sessions.Create(auth, authenticationVersion, source);
             if (session is null)
             {
                 return Results.Unauthorized();

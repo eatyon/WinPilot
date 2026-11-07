@@ -34,6 +34,108 @@ public sealed class AuthenticationEndpointTest : IAsyncLifetime
     private RollingFileLoggerProvider? logProvider;
 
     [Theory]
+    [InlineData(false, "timer")]
+    [InlineData(true, "timer")]
+    [InlineData(true, "validate")]
+    [InlineData(true, "create")]
+    public async Task SessionInvalidationLogsBothReasonsAndNotifiesEachSessionFromTheSameIp(bool selected, string expirationPath)
+    {
+        var paths = app.Services.GetRequiredService<PortableDataPaths>();
+        app.Services.GetRequiredService<AuthStore>().SetInitialPassword("test-password");
+        WinPilotSettings.Update(paths.ConfigurationFile, settings => settings with
+        {
+            SecurityNotifications = new SecurityNotificationSettings
+            {
+                Channel = "telegram",
+                Events = selected ? [SecurityEventType.SessionInvalidated] : [],
+            }
+        });
+        var sessions = app.Services.GetRequiredService<SessionManager>();
+        var sender = (TestNotificationService)app.Services.GetRequiredService<INotificationService>();
+        var cookies = new List<string>();
+        for (var index = 0; index < 2; index++)
+        {
+            using var login = await client.PostAsJsonAsync("/login", new { password = "test-password" });
+            Assert.Equal(HttpStatusCode.NoContent, login.StatusCode);
+            cookies.Add(Assert.Single(login.Headers.GetValues("Set-Cookie")).Split(';', 2)[0]);
+        }
+        var ids = cookies.Select(cookie => cookie.Split('=', 2)[1]).ToArray();
+        using var logout = new HttpRequestMessage(HttpMethod.Post, "/api/logout");
+        logout.Headers.Add("Cookie", cookies[0]);
+        using var response = await client.SendAsync(logout);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.True(sessions.Validate(ids[1]));
+
+        var states = (IDictionary)typeof(SessionManager).GetField("sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(sessions)!;
+        var state = states[ids[1]]!;
+        state.GetType().GetField("expiresAt", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(state, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var timer = (System.Threading.Timer)state.GetType().GetField("expiryTimer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(state)!;
+        switch (expirationPath)
+        {
+            case "timer":
+                timer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+                break;
+            case "validate":
+                Assert.False(sessions.Validate(ids[1]));
+                break;
+            case "create":
+                Assert.True(sessions.Validate(sessions.Create("192.168.1.10")));
+                break;
+        }
+        const string expired = "[安全事件] 登录会话已失效，原因：无操作超时，来源 IP：192.168.1.10";
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!ReadActiveLog(paths.LogsDirectory).Contains(expired)
+            || selected && sender.Messages.Count(message => message.Event == "Security.SessionInvalidated") < 2)
+        {
+            await Task.Delay(25, timeout.Token);
+        }
+        sessions.Revoke(ids[0]);
+        sessions.Revoke(ids[1]);
+        Assert.False(sessions.Validate(ids[1]));
+        var log = ReadActiveLog(paths.LogsDirectory);
+        Assert.Equal(1, log.Split("[安全事件] 登录会话已失效，原因：主动退出，来源 IP：192.168.1.10", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, log.Split(expired, StringSplitOptions.None).Length - 1);
+        var messages = sender.Messages.Where(message => message.Event == "Security.SessionInvalidated").ToArray();
+        Assert.Equal(selected ? 2 : 0, messages.Length);
+        if (selected)
+        {
+            Assert.Contains(messages, message => message.Content.Contains("原因：主动退出"));
+            Assert.Contains(messages, message => message.Content.Contains("原因：无操作超时"));
+        }
+        Assert.All(messages, message =>
+        {
+            Assert.Contains("事件：登录会话已失效", message.Content);
+            Assert.Contains("来源：192.168.1.10", message.Content);
+        });
+        foreach (var id in ids)
+        {
+            Assert.DoesNotContain(id, log);
+            Assert.All(messages, message => Assert.DoesNotContain(id, message.Content));
+        }
+    }
+
+    [Fact]
+    public void BulkSessionRevocationDoesNotEmitDuplicateSessionInvalidationEvents()
+    {
+        var paths = app.Services.GetRequiredService<PortableDataPaths>();
+        WinPilotSettings.Update(paths.ConfigurationFile, settings => settings with
+        {
+            SecurityNotifications = new SecurityNotificationSettings
+            {
+                Channel = "telegram",
+                Events = [SecurityEventType.SessionInvalidated],
+            }
+        });
+        var sessions = app.Services.GetRequiredService<SessionManager>();
+        sessions.Create("192.168.1.10");
+        sessions.RevokeAll();
+        sessions.Create("192.168.1.10");
+        sessions.Dispose();
+        var sender = (TestNotificationService)app.Services.GetRequiredService<INotificationService>();
+        Assert.Empty(sender.Messages);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]
     public async Task LogoutClearsCookieAndRevokesOnlyTheCurrentSession(bool https, bool safeMode)

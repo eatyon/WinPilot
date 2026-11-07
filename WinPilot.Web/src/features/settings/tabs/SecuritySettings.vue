@@ -52,9 +52,10 @@ const eventOptions = [
   ['PasswordSet', '管理员密码已设置/修改'],
   ['LanAccessChanged', '局域网访问已开启/关闭'],
   ['AuthConfigurationInvalid', '密码配置缺失或损坏'],
-  ['LoginSourceLocked', '登录来源已锁定'],
   ['LoginSucceeded', '登录成功'],
   ['LoginFailed', '登录失败'],
+  ['LoginSourceLocked', '登录来源已锁定'],
+  ['SessionInvalidated', '登录会话已失效'],
   ['SecurityNotificationSettingsChanged', '安全事件通知配置已修改'],
 ] as const;
 const eventSelectOptions = eventOptions.map(([value, label]) => ({ value, label }));

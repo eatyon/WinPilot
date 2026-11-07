@@ -65,17 +65,18 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
         SecurityEventType type,
         string? sourceIp = null,
         bool? enabled = null,
-        SecurityNotificationSettings? notificationSettings = null)
+        SecurityNotificationSettings? notificationSettings = null,
+        string? reason = null)
     {
         var occurredAt = DateTimeOffset.Now;
-        logger.LogInformation("[安全事件] {Description}", FormatLogMessage(type, sourceIp, enabled));
+        logger.LogInformation("[安全事件] {Description}", FormatLogMessage(type, sourceIp, enabled, reason));
         try
         {
             var settings = notificationSettings ?? LoadSettings();
             if (ShouldNotify(type, settings))
             {
                 var message = new NotificationMessage(
-                    FormatNotificationMessage(type, sourceIp, enabled, occurredAt),
+                    FormatNotificationMessage(type, sourceIp, enabled, occurredAt, reason),
                     Event: $"Security.{type}",
                     Timestamp: occurredAt.ToString("O"));
                 TaskCompletionSource completion;
@@ -265,9 +266,11 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
         SecurityEventType type,
         string? sourceIp,
         bool? enabled,
-        DateTimeOffset occurredAt)
+        DateTimeOffset occurredAt,
+        string? reason)
     {
         var lines = new List<string> { "WinPilot 安全事件", $"事件：{EventName(type, enabled)}" };
+        if (!string.IsNullOrWhiteSpace(reason)) lines.Add($"原因：{reason}");
         if (!string.IsNullOrWhiteSpace(sourceIp))
         {
             lines.Add($"来源：{sourceIp}");
@@ -284,15 +287,17 @@ public sealed class SecurityEventNotifier : IDisposable, IAsyncDisposable
             SecurityEventType.LoginSucceeded => "登录成功",
             SecurityEventType.LoginFailed => "登录失败",
             SecurityEventType.LoginSourceLocked => "登录来源已锁定",
+            SecurityEventType.SessionInvalidated => "登录会话已失效",
             SecurityEventType.AuthConfigurationInvalid => "密码配置缺失或损坏",
             SecurityEventType.LanAccessChanged => enabled switch { true => "局域网访问已开启", false => "局域网访问已关闭", null => "局域网访问设置已变更" },
             SecurityEventType.SecurityNotificationSettingsChanged => "安全事件通知配置已修改",
             _ => "未知安全事件"
         };
 
-    private static string FormatLogMessage(SecurityEventType type, string? sourceIp, bool? enabled)
+    private static string FormatLogMessage(SecurityEventType type, string? sourceIp, bool? enabled, string? reason)
     {
         var details = new List<string> { EventName(type, enabled) };
+        if (!string.IsNullOrWhiteSpace(reason)) details.Add($"原因：{reason}");
         if (!string.IsNullOrWhiteSpace(sourceIp))
         {
             details.Add($"来源 IP：{sourceIp}");
