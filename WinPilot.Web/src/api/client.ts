@@ -1,10 +1,18 @@
 const connectionErrorMessage = '无法连接到 WinPilot';
 let redirectingToLogin = false;
 
+function navigateToLoginWhenVisible(): void {
+  if (document.visibilityState !== 'visible') return;
+  document.removeEventListener('visibilitychange', navigateToLoginWhenVisible);
+  if (window.location.pathname !== '/login') window.location.assign('/login');
+}
+
 export function redirectToLogin(): void {
   if (redirectingToLogin || window.location.pathname === '/login') return;
   redirectingToLogin = true;
-  window.location.assign('/login');
+  // 页面隐藏时暂缓导航，恢复可见后再跳转。
+  document.addEventListener('visibilitychange', navigateToLoginWhenVisible);
+  navigateToLoginWhenVisible();
 }
 
 export class WinPilotConnectionError extends Error {

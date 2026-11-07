@@ -228,6 +228,7 @@ test('an unauthorized plugin heartbeat uses the shared login redirect without re
   const client = {
     exports: {}, URL, DOMException,
     window: { location },
+    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     fetch: async (url, options) => {
       requests.push({ url, options });
       return new Response(null, { status: 401 });

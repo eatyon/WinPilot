@@ -6,11 +6,61 @@ namespace WinPilot.Test;
 
 public sealed class SessionManagerTest
 {
+    [Fact]
+    public async Task ExpirationRemovesIdleSessionsAndDisposesTheirResourcesWithoutAnotherRequest()
+    {
+        using var sessions = new SessionManager();
+        var id = sessions.Create();
+        var other = sessions.Create();
+        Assert.True(sessions.TryValidate(id, out var token));
+        var state = States(sessions)[id]!;
+        var timer = (System.Threading.Timer)state.GetType().GetField("expiryTimer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(state)!;
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbacks = 0;
+        using var registration = token.Register(() =>
+        {
+            Interlocked.Increment(ref callbacks);
+            cancelled.TrySetResult();
+        });
+
+        Expire(sessions, id);
+        timer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(States(sessions).Contains(id));
+        Assert.True(sessions.Validate(other));
+        Assert.True(SpinWait.SpinUntil(() =>
+        {
+            try { _ = token.WaitHandle; return false; }
+            catch (ObjectDisposedException) { return true; }
+        }, TimeSpan.FromSeconds(5)));
+        Assert.False(timer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan));
+        sessions.RevokeAll();
+        Assert.Equal(1, callbacks);
+    }
+
+    [Fact]
+    public void QueuedExpirationCannotRemoveARefreshedSession()
+    {
+        using var sessions = new SessionManager();
+        var id = sessions.Create();
+        var state = States(sessions)[id]!;
+        Assert.True(sessions.TryValidate(id, out var token));
+
+        typeof(SessionManager).GetMethod("Expire", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(sessions, [id, state]);
+
+        Assert.Same(state, States(sessions)[id]);
+        Assert.False(token.IsCancellationRequested);
+        Assert.True(sessions.Validate(id));
+    }
+
     [Theory]
     [InlineData("revoke")]
     [InlineData("dispose")]
     [InlineData("create")]
     [InlineData("validate")]
+    [InlineData("expire")]
     public async Task RevocationCallbacksDoNotHoldSessionCreationOrValidationLock(string operation)
     {
         using var sessions = new SessionManager();
@@ -25,7 +75,7 @@ public sealed class SessionManagerTest
             entered.TrySetResult();
             Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
         });
-        if (operation is "create" or "validate")
+        if (operation is "create" or "validate" or "expire")
         {
             Expire(sessions, id);
         }
@@ -44,6 +94,10 @@ public sealed class SessionManagerTest
                             break;
                         case "validate":
                             Assert.False(sessions.Validate(id));
+                            break;
+                        case "expire":
+                            typeof(SessionManager).GetMethod("Expire", BindingFlags.NonPublic | BindingFlags.Instance)!
+                                .Invoke(sessions, [id, States(sessions)[id]!]);
                             break;
                     }
                 });
@@ -122,8 +176,10 @@ public sealed class SessionManagerTest
 
     private static void Expire(SessionManager manager, string id)
     {
-        var states = (IDictionary)typeof(SessionManager).GetField("sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(manager)!;
-        var state = states[id]!;
+        var state = States(manager)[id]!;
         state.GetType().GetField("expiresAt", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(state, DateTimeOffset.UtcNow.AddMinutes(-1));
     }
+
+    private static IDictionary States(SessionManager manager) =>
+        (IDictionary)typeof(SessionManager).GetField("sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(manager)!;
 }

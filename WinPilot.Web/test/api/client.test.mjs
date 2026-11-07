@@ -17,18 +17,57 @@ test('network failures stay local to each request', async () => {
   await assert.rejects(failure);
 });
 
-function authenticationFixture(path = '/files') {
+function authenticationFixture(path = '/files', visibilityState = 'visible') {
   const calls = [], navigations = [];
+  const visibilityListeners = new Set();
+  const document = {
+    visibilityState,
+    addEventListener(name, listener) { if (name === 'visibilitychange') visibilityListeners.add(listener); },
+    removeEventListener(name, listener) { if (name === 'visibilitychange') visibilityListeners.delete(listener); },
+  };
   const location = new URL(path, 'http://127.0.0.1:5186');
   location.assign = url => navigations.push(url);
   const context = {
     exports: {}, DOMException, URL,
-    window: { location },
+    window: { location }, document,
     fetch: (input, init) => new Promise((resolve, reject) => calls.push({ input, init, resolve, reject })),
   };
   runInNewContext(loadScriptModule(new URL('../../src/api/client.ts', import.meta.url)), context);
-  return { api: context.exports, calls, navigations, location };
+  return {
+    api: context.exports, calls, navigations, location, document, visibilityListeners,
+    changeVisibility(value) {
+      document.visibilityState = value;
+      for (const listener of [...visibilityListeners]) listener();
+    },
+  };
 }
+
+test('background expiry defers navigation until visible and coalesces API and SSE failures', async () => {
+  const f = authenticationFixture('/files', 'hidden');
+  const pending = f.api.apiFetch('/api/files/roots');
+  f.api.redirectToLogin();
+  f.calls[0].resolve(new Response(null, { status: 401 }));
+  assert.equal((await pending).status, 401);
+  assert.deepEqual(f.navigations, []);
+  assert.equal(f.visibilityListeners.size, 1);
+  f.changeVisibility('hidden');
+  assert.deepEqual(f.navigations, []);
+  f.changeVisibility('visible');
+  assert.deepEqual(f.navigations, ['/login']);
+  assert.equal(f.visibilityListeners.size, 0);
+  f.changeVisibility('visible');
+  f.api.redirectToLogin();
+  assert.deepEqual(f.navigations, ['/login']);
+});
+
+test('a pending redirect is discarded when the login page is already reached', () => {
+  const f = authenticationFixture('/files', 'hidden');
+  f.api.redirectToLogin();
+  f.location.pathname = '/login';
+  f.changeVisibility('visible');
+  assert.deepEqual(f.navigations, []);
+  assert.equal(f.visibilityListeners.size, 0);
+});
 
 test('expired API requests redirect without waiting for an SSE disconnect and preserve the response', async () => {
   const inputs = [

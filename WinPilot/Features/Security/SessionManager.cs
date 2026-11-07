@@ -32,14 +32,16 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                 {
                     return null;
                 }
-                sessions[id] = new SessionState(Lifetime);
+                var state = new SessionState(Lifetime, expired => Expire(id, expired));
+                sessions[id] = state;
+                state.Start();
             }
             return id;
         }
         // 取消回调可能执行外部逻辑，离开会话锁后再触发。
         finally
         {
-            CancelSessions(revoked);
+            EndSessions(revoked);
         }
     }
 
@@ -68,7 +70,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                 revoked = removed;
             }
         }
-        revoked?.CancelAndDispose(logger);
+        EndSession(revoked);
         return false;
     }
 
@@ -82,7 +84,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         {
             revoked = RemoveSessions(expiredOnly: false);
         }
-        CancelSessions(revoked);
+        EndSessions(revoked);
         if (revoked.Count > 0)
         {
             logger?.LogDebug("登录会话已撤销，数量：{Count}", revoked.Count);
@@ -101,7 +103,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
             disposed = true;
             revoked = RemoveSessions(expiredOnly: false);
         }
-        CancelSessions(revoked);
+        EndSessions(revoked);
     }
 
     private List<SessionState> RemoveSessions(bool expiredOnly)
@@ -119,12 +121,31 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
         return revoked;
     }
 
-    private void CancelSessions(List<SessionState> revoked)
+    private void EndSessions(List<SessionState> revoked)
     {
         foreach (var state in revoked)
         {
-            state.CancelAndDispose(logger);
+            EndSession(state);
         }
+    }
+
+    private void EndSession(SessionState? state)
+    {
+        if (state is null) return;
+        state.CancelAndDispose(logger);
+    }
+
+    private void Expire(string id, SessionState state)
+    {
+        SessionState? expired = null;
+        lock (sessionGate)
+        {
+            if (sessions.TryGetValue(id, out var current) && ReferenceEquals(current, state) && state.TryExpire())
+            {
+                sessions.TryRemove(id, out expired);
+            }
+        }
+        EndSession(expired);
     }
 
     // 单个会话的续期与撤销共用同一把锁，避免已失效的会话被并发请求重新激活。
@@ -132,18 +153,21 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
     {
         private readonly object gate = new();
         private readonly CancellationTokenSource invalidation = new();
+        private readonly System.Threading.Timer expiryTimer;
         private readonly TimeSpan lifetime;
         private readonly CancellationToken invalidated;
         private DateTimeOffset expiresAt;
         private bool revoked;
 
-        public SessionState(TimeSpan lifetime)
+        public SessionState(TimeSpan lifetime, Action<SessionState> expire)
         {
             this.lifetime = lifetime;
             invalidated = invalidation.Token;
             expiresAt = DateTimeOffset.UtcNow.Add(lifetime);
-            invalidation.CancelAfter(lifetime);
+            expiryTimer = new System.Threading.Timer(_ => expire(this), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         }
+
+        public void Start() => expiryTimer.Change(lifetime, Timeout.InfiniteTimeSpan);
 
         public CancellationToken Invalidated => invalidated;
 
@@ -167,7 +191,24 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
                     return false;
                 }
                 expiresAt = DateTimeOffset.UtcNow.Add(lifetime);
-                invalidation.CancelAfter(lifetime);
+                expiryTimer.Change(lifetime, Timeout.InfiniteTimeSpan);
+                return true;
+            }
+        }
+
+        public bool TryExpire()
+        {
+            lock (gate)
+            {
+                if (revoked) return false;
+                var remaining = expiresAt - DateTimeOffset.UtcNow;
+                // 已排队的旧回调可能在续期后执行；重新核对期限，不能误删有效会话。
+                if (remaining > TimeSpan.Zero && !invalidated.IsCancellationRequested)
+                {
+                    expiryTimer.Change(remaining, Timeout.InfiniteTimeSpan);
+                    return false;
+                }
+                revoked = true;
                 return true;
             }
         }
@@ -187,6 +228,7 @@ public sealed class SessionManager(ILogger<SessionManager>? logger = null) : IDi
 
         public void CancelAndDispose(ILogger<SessionManager>? logger)
         {
+            expiryTimer.Dispose();
             try
             {
                 if (!invalidated.IsCancellationRequested)
