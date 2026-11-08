@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { loadScriptModule } from '../support/scriptModule.mjs';
 import { computed, ref } from 'vue';
 import { darkTheme, lightTheme } from 'naive-ui';
 import { accentOptions, getAccentTokens } from '../../src/ui/themeColors.ts';
@@ -96,10 +96,6 @@ function contrast(first, second) {
 }
 
 function fixture(saved = {}, dark = false) {
-  const source = readFileSync(new URL('../../src/ui/theme.ts', import.meta.url), 'utf8');
-  const code = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
   const values = new Map();
   const storage = new Map(Object.entries(saved));
   const listeners = [];
@@ -112,7 +108,7 @@ function fixture(saved = {}, dark = false) {
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     window: { matchMedia: () => media },
   };
-  runInNewContext(code, context);
+  runInNewContext(loadScriptModule(new URL('../../src/ui/theme.ts', import.meta.url)), context);
   return { subject: context.exports, root, values, storage, media, listeners };
 }
 

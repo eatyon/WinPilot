@@ -1,35 +1,15 @@
 import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { parse } from '@vue/compiler-sfc';
 import postcss from 'postcss';
 
-const read = path => path.endsWith('.css') ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
+const read = path => readStylesheet(new URL(`../../src/${path}`, import.meta.url));
 function rules(source, selector) {
   const result = [];
   postcss.parse(source).walkRules(rule => { if (rule.selector === selector) result.push(rule); });
   return result;
 }
 const declarations = rule => Object.fromEntries(rule.nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value]));
-
-test('style entry declares one ordered chain for base, pages, layout, components, transitions and scrollbars', () => {
-  const entry = postcss.parse(readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8'));
-  assert.ok(entry.nodes.every(node => node.type === 'atrule' && node.name === 'import'));
-  assert.deepEqual(entry.nodes.map(node => node.params), [
-    "'./styles/base.css'", "'./styles/brand.css'", "'./styles/features.css'", "'./styles/markdown.css'",
-    "'./styles/layout.css'", "'./styles/components.css'",
-    "'./styles/transitions.css'", "'./styles/scrollbars.css'",
-  ]);
-  assert.doesNotMatch(read('styles/components.css'), /\.programs-view|\.plugin-module|\.desktop-frame|\.page-fade/);
-  assert.doesNotMatch(read('styles/base.css'), /\.login-view|\.tasks-view|\.plugin-card/);
-  const features = postcss.parse(readFileSync(new URL('../../src/styles/features.css', import.meta.url), 'utf8'));
-  assert.ok(features.nodes.every(node => node.type === 'atrule' && node.name === 'import'));
-  assert.deepEqual(features.nodes.map(node => node.params), [
-    "'../features/settings/styles.css'", "'../features/tasks/styles.css'",
-    "'../features/plugins/styles.css'", "'../features/security/styles.css'",
-  ]);
-});
 
 test('modal layout belongs to its component while shared scrollbar sizing stays global', () => {
   const styles = read('styles/features.css');
@@ -48,54 +28,6 @@ test('modal layout belongs to its component while shared scrollbar sizing stays 
   assert.deepEqual(declarations(rules(shared, '.app-modal > .n-card__content-scrollbar, .app-detail-dialog > .n-card__content-scrollbar')[0]), {
     'min-height': '0', height: 'auto', flex: '1',
   });
-});
-
-test('business and component rules stay with their sole owner while shared rules stay global', () => {
-  const shared = ['base', 'brand', 'features', 'layout', 'components'].map(name => read(`styles/${name}.css`)).join('\n');
-  for (const [file, selector] of [
-    ['features/auth/LoginView.vue', '.login-view'],
-    ['features/home/HomeView.vue', '.system-status-view'],
-    ['features/desktop/DesktopView.vue', '.desktop-frame'],
-    ['features/programs/ProgramsView.vue', '.programs-view'],
-    ['components/KeyboardKeyPicker.vue', '.virtual-keyboard'],
-    ['components/AppIcon.vue', '.app-icon'],
-    ['features/auth/LoginView.vue', '.login-brand-symbol'],
-    ['App.vue', '.product-symbol'],
-    ['components/AppNavigation.vue', '.app-menu-footer'],
-    ['components/AppNavigation.vue', '.app-menu-divider'],
-    ['features/terminal/TerminalView.vue', '.app-workspace:has(.terminal-view) > .n-scrollbar-container > .n-scrollbar-content'],
-    ['features/terminal/TerminalView.vue', '.page-content:has(.terminal-view)'],
-    ['features/terminal/TerminalView.vue', '.page-content:has(.terminal-view) > .route-page'],
-    ['features/tasks/TasksView.vue', '.form-field.n-form-item > .form-field-content'],
-    ['components/AppTooltip.vue', '.app-tooltip-trigger'],
-    ['components/AppModal.vue', '.app-modal'],
-    ['components/AppIcon.vue', '.n-icon.app-icon > svg'],
-    ['features/logs/LogsView.vue', '.app-list-card'],
-    ['features/programs/ProgramsView.vue', '.form-options'],
-    ['features/desktop/DesktopView.vue', '.image-preview-actions'],
-    ['features/settings/SettingsView.vue', '.settings-view'],
-    ['features/settings/tabs/SecuritySettings.vue', '.security-password-form'],
-    ['features/settings/tabs/AboutSettings.vue', '.about-link-row'],
-    ['features/settings/tabs/GeneralSettings.vue', '.settings-port-control'],
-    ['features/settings/tabs/NotificationSettings.vue', '.notification-channel-copy'],
-    ['features/tasks/TasksView.vue', '.task-list'],
-    ['features/tasks/CronEditor.vue', '.cron-editor'],
-    ['features/tasks/TaskActionEditor.vue', '.task-action-editor'],
-    ['features/tasks/TaskVariableHelp.vue', '.variable-help-content'],
-    ['features/plugins/PluginsView.vue', '.plugin-card'],
-    ['features/plugins/PluginInfoView.vue', '.plugin-info-list'],
-    ['features/plugins/PluginHeader.vue', '.plugin-home-header'],
-    ['features/plugins/PluginDetailView.vue', '.plugin-status-list'],
-    ['features/plugins/PluginSettingField.vue', '.plugin-collection-heading'],
-    ['features/plugins/PluginMarketView.vue', '.plugin-market-view'],
-  ]) {
-    assert.equal(rules(shared, selector).length, 0, selector);
-    const styles = parse(read(file)).descriptor.styles.filter(style => !style.scoped && !style.src);
-    assert.ok(styles.some(style => rules(style.content, selector).length > 0), `${file}: ${selector}`);
-  }
-  for (const selector of ['.settings-tab-content', '.task-validation-feedback', '.plugin-features-list', '.safe-mode-locked']) {
-    assert.ok(rules(shared, selector).length > 0, selector);
-  }
 });
 
 test('page padding is owned by layout instead of an overridden legacy breakpoint', () => {

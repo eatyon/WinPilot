@@ -1,3 +1,4 @@
+import { loadScriptModule } from '../support/scriptModule.mjs';
 import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -22,25 +23,27 @@ test('hover hints delegate appearance and lifecycle to the library popover', () 
 });
 
 test('hover capability follows the input device, clears sticky hints and releases its listener', () => {
-  const source = readFileSync(new URL('../../src/components/AppTooltip.vue', import.meta.url), 'utf8');
-  const code = source.slice(source.indexOf('const hoverMedia'), source.indexOf('</script>'));
   let listener;
   let cleanup;
   const media = { matches: false, addEventListener: (type, fn) => { assert.equal(type, 'change'); listener = fn; }, removeEventListener: (type, fn) => { assert.equal(type, 'change'); assert.equal(fn, listener); listener = undefined; } };
-  const context = { window: { matchMedia: query => { assert.equal(query, '(hover: hover) and (pointer: fine)'); return media; } }, ref: value => ({ value }), onScopeDispose: fn => { cleanup = fn; } };
-  runInNewContext(code.replace('value: boolean', 'value') + '\nthis.state = { canHover, shown };', context);
-  context.updateShow(true);
-  assert.equal(context.state.shown.value, false);
+  const context = {
+    exports: {}, defineProps: () => ({}),
+    window: { matchMedia: query => { assert.equal(query, '(hover: hover) and (pointer: fine)'); return media; } },
+    require: name => name === 'vue' ? { ref: value => ({ value }), onScopeDispose: fn => { cleanup = fn; } } : {},
+  };
+  runInNewContext(loadScriptModule(new URL('../../src/components/AppTooltip.vue', import.meta.url), 'canHover, shown, updateShow'), context);
+  context.exports.updateShow(true);
+  assert.equal(context.exports.shown.value, false);
   media.matches = true;
   listener();
-  context.updateShow(true);
-  assert.equal(context.state.shown.value, true);
+  context.exports.updateShow(true);
+  assert.equal(context.exports.shown.value, true);
   media.matches = false;
   listener();
-  assert.equal(context.state.shown.value, false);
+  assert.equal(context.exports.shown.value, false);
   media.matches = true;
   listener();
-  assert.equal(context.state.shown.value, false);
+  assert.equal(context.exports.shown.value, false);
   cleanup();
   assert.equal(listener, undefined);
 });

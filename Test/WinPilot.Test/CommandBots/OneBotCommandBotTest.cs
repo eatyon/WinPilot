@@ -245,7 +245,7 @@ public sealed class OneBotCommandBotTest
         fixture.Receive!(Command("group", "id", "帮助"));
         Assert.True((await test) > 0);
         await fixture.Bot.SaveAsync(new(true, "ws://127.0.0.1:6701/event", "new-ws-token"), CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         Assert.Equal("new-ws-token", fixture.Options!.Token);
         var saved = fixture.Bot.GetOptions();
         await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Bot.SaveAsync(new(true, "http://invalid/", ""), CancellationToken.None));
@@ -262,7 +262,7 @@ public sealed class OneBotCommandBotTest
             OneBotUserId = "another-user",
             OneBotGroupId = "another-group"
         }, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         Assert.Equal("ws-only", fixture.Options!.Token);
         var received = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         fixture.Receive!(Command("group", "old-scope", "帮助"));
@@ -307,8 +307,8 @@ public sealed class OneBotCommandBotTest
         fixture.Receive!(Command("private", "valid", "帮助"));
         Assert.True((await test) > 0);
         fixture.Disconnect!.TrySetException(new IOException());
-        await WaitUntil(() => fixture.Bot.Status.State == "reconnecting");
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "reconnecting");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
     }
 
     [Fact]
@@ -317,10 +317,10 @@ public sealed class OneBotCommandBotTest
         await using var fixture = new Fixture();
         fixture.HoldConnection = true;
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 1);
+        await TestWait.UntilAsync(() => fixture.Attempts == 1);
         Assert.Equal("connecting", fixture.Bot.Status.State);
         fixture.ReleaseConnection.TrySetResult();
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
     }
 
     [Theory]
@@ -364,7 +364,7 @@ public sealed class OneBotCommandBotTest
         fixture.Receive!(Command("group", "same", "帮助"));
         await first;
         fixture.Disconnect!.TrySetException(new IOException());
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         var second = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         fixture.Receive!(Command("group", "same", "帮助"));
         Assert.False(second.IsCompleted);
@@ -381,12 +381,12 @@ public sealed class OneBotCommandBotTest
         await using var fixture = new Fixture();
         fixture.Failure = new OneBotConnectionException("OneBot 拒绝认证，请检查 WebSocket Token 后重新连接", true);
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
         Assert.Equal(1, fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
         fixture.Failure = null;
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
         Assert.Equal("connected", fixture.Bot.Status.State);
     }
 
@@ -548,15 +548,6 @@ public sealed class OneBotCommandBotTest
             status = new { online, good = online }
         });
 
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition())
-        {
-            await Task.Delay(10, timeout.Token);
-        }
-    }
-
     private sealed class Fixture : IAsyncDisposable
     {
         public CommandBotConfiguration Configuration { get; } = new();
@@ -635,7 +626,7 @@ public sealed class OneBotCommandBotTest
         public async Task Enable()
         {
             await Bot.SetEnabledAsync(true, CancellationToken.None);
-            await WaitUntil(() => Bot.Status.State == "connected");
+            await TestWait.UntilAsync(() => Bot.Status.State == "connected");
         }
 
         public async ValueTask DisposeAsync()

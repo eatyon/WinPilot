@@ -36,19 +36,19 @@ public sealed class TelegramCommandBotTest
     {
         await using var fixture = await Fixture.CreateAsync();
         await fixture.Bot.StartAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.ActivePolls == 0);
+        await TestWait.UntilAsync(() => fixture.ActivePolls == 0, pollMilliseconds: 20);
         Assert.Empty(fixture.Methods);
         await using var watcher = fixture.Bot.WatchAsync(CancellationToken.None).GetAsyncEnumerator();
         Assert.True(await watcher.MoveNextAsync());
         Assert.Equal("disabled", watcher.Current.State);
-        await WaitUntil(() => fixture.ActivePolls == 0);
+        await TestWait.UntilAsync(() => fixture.ActivePolls == 0, pollMilliseconds: 20);
         for (var attempt = 0; attempt < 2; attempt++)
         {
             await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
             await fixture.WaitForState("connected");
             Assert.Contains("getMe", fixture.Methods);
             await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
-            await WaitUntil(() => fixture.ActivePolls == 0);
+            await TestWait.UntilAsync(() => fixture.ActivePolls == 0, pollMilliseconds: 20);
             Assert.Equal("disabled", fixture.Bot.Status.State);
         }
     }
@@ -253,7 +253,7 @@ public sealed class TelegramCommandBotTest
         await restarted.StartAsync(CancellationToken.None);
         try
         {
-            await WaitUntil(() => restarted.Status.State == "connected");
+            await TestWait.UntilAsync(() => restarted.Status.State == "connected", pollMilliseconds: 20);
             Assert.True(restarted.Status.Enabled);
         }
         finally
@@ -307,15 +307,6 @@ public sealed class TelegramCommandBotTest
                 text
             }
         };
-
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition())
-        {
-            await Task.Delay(20, timeout.Token);
-        }
-    }
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -402,7 +393,7 @@ public sealed class TelegramCommandBotTest
             return fixture;
         }
 
-        public Task WaitForState(string state) => WaitUntil(() => Bot.Status.State == state);
+        public Task WaitForState(string state) => TestWait.UntilAsync(() => Bot.Status.State == state, pollMilliseconds: 20);
 
         public async ValueTask DisposeAsync()
         {

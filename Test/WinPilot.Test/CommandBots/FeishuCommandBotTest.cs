@@ -61,7 +61,7 @@ public sealed class FeishuCommandBotTest
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-            await WaitUntil(() => fixture.Bot.Status.State == "connected");
+            await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
             Assert.True(fixture.Attempts > fixture.Cleanups);
             Assert.Equal(attempt, fixture.Attempts);
             await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
@@ -75,7 +75,7 @@ public sealed class FeishuCommandBotTest
         await using var fixture = new Fixture();
         var before = JsonDocument.Parse(File.ReadAllText(fixture.Paths.ConfigurationFile));
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         using var after = JsonDocument.Parse(File.ReadAllText(fixture.Paths.ConfigurationFile));
         Assert.Equal(
             before.RootElement.GetProperty("notifications").GetRawText(),
@@ -97,7 +97,7 @@ public sealed class FeishuCommandBotTest
     {
         await using var fixture = new Fixture();
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 1);
+        await TestWait.UntilAsync(() => fixture.Attempts == 1, pollMilliseconds: 20);
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with { FeishuWebhookUrl = "https://example.test/hook" }, CancellationToken.None);
         Assert.Equal(1, fixture.Attempts);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -107,7 +107,7 @@ public sealed class FeishuCommandBotTest
             "test-secret",
             WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile).Notifications!.FeishuAppSecret);
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, settings => settings with { FeishuAppSecret = "new-secret" }, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 2);
+        await TestWait.UntilAsync(() => fixture.Attempts == 2, pollMilliseconds: 20);
         Assert.Equal("new-secret", fixture.ConnectionSettings!.FeishuAppSecret);
     }
 
@@ -117,13 +117,13 @@ public sealed class FeishuCommandBotTest
         await using var fixture = new Fixture();
         fixture.PermanentError = true;
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "failed");
-        await WaitUntil(() => fixture.Cleanups == fixture.Attempts);
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "failed", pollMilliseconds: 20);
+        await TestWait.UntilAsync(() => fixture.Cleanups == fixture.Attempts, pollMilliseconds: 20);
         Assert.True(fixture.Bot.Status.Enabled);
         Assert.Equal(1, fixture.Attempts);
         fixture.PermanentError = false;
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         Assert.Equal(2, fixture.Attempts);
     }
 
@@ -133,8 +133,8 @@ public sealed class FeishuCommandBotTest
         await using var fixture = new Fixture();
         fixture.TransientError = true;
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "reconnecting");
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "reconnecting", pollMilliseconds: 20);
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         Assert.Equal("connected", fixture.Bot.Status.State);
     }
 
@@ -145,7 +145,7 @@ public sealed class FeishuCommandBotTest
         WinPilotSettings.Update(fixture.Paths.ConfigurationFile, settings => settings with
         { CommandBots = settings.CommandBots with { FeishuEnabled = true } });
         await fixture.Bot.StartAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         await fixture.Bot.StopAsync(CancellationToken.None);
         WinPilotSettings.Update(fixture.Paths.ConfigurationFile, settings =>
             settings with
@@ -166,7 +166,7 @@ public sealed class FeishuCommandBotTest
     {
         await using var fixture = new Fixture();
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(fixture.Paths);
@@ -412,12 +412,12 @@ public sealed class FeishuCommandBotTest
         fixture.ServerConfig = new(ReconnectCount: 0);
         fixture.TransientError = true;
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "failed");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "failed", pollMilliseconds: 20);
         Assert.Equal(1, fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
         Assert.Contains("上限", fixture.Bot.Status.Error!);
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected", pollMilliseconds: 20);
         Assert.Equal(2, fixture.Attempts);
     }
 
@@ -428,7 +428,7 @@ public sealed class FeishuCommandBotTest
         fixture.ServerConfig = new(ReconnectNonce: 3600);
         fixture.TransientError = true;
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "reconnecting");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "reconnecting", pollMilliseconds: 20);
         await fixture.Bot.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal("disabled", fixture.Bot.Status.State);
         Assert.Equal(1, fixture.Attempts);
@@ -468,15 +468,6 @@ public sealed class FeishuCommandBotTest
         using var stream = new MemoryStream();
         Serializer.Serialize(stream, frame);
         return stream.ToArray();
-    }
-
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition())
-        {
-            await Task.Delay(20, timeout.Token);
-        }
     }
 
     private sealed class Fixture : IAsyncDisposable

@@ -21,7 +21,10 @@ export function readStylesheet(url, ancestors = new Set()) {
   return sheet.toString();
 }
 
+let featureStyles;
+
 export function readFeatureStyles() {
+  if (featureStyles !== undefined) return featureStyles;
   const files = [
     'styles/features.css',
     'features/auth/LoginView.vue',
@@ -50,5 +53,6 @@ export function readFeatureStyles() {
     'features/plugins/PluginSettingField.vue',
     'features/plugins/PluginMarketView.vue',
   ];
-  return files.map(file => readStylesheet(new URL(`../../src/${file}`, import.meta.url))).join('\n');
+  featureStyles = files.map(file => readStylesheet(new URL(`../../src/${file}`, import.meta.url))).join('\n');
+  return featureStyles;
 }

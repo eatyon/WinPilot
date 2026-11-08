@@ -1,10 +1,10 @@
+import { createTestRenderer } from '../support/renderer.mjs';
+import { loadComponentModule } from '../support/scriptModule.mjs';
 import assert from 'node:assert/strict';
 import { modalStateModule } from '../support/modalState.mjs';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { compileScript, parse } from '@vue/compiler-sfc';
-import ts from 'typescript';
 import * as vue from 'vue';
 import { elements, attribute, event } from '../support/template.mjs';
 
@@ -56,11 +56,7 @@ test('safe mode keeps notification content inert and recreates it on protection 
     inheritAttrs: false,
     setup: (_, { attrs, slots }) => () => vue.h('div', attrs, slots.default?.()),
   });
-  const { descriptor } = parse(readFileSync(new URL('../../src/features/settings/SettingsView.vue', import.meta.url), 'utf8'));
-  const script = compileScript(descriptor, { id: 'settings-safe-mode', inlineTemplate: true });
-  const code = ts.transpileModule(script.content, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
+  const code = loadComponentModule(new URL('../../src/features/settings/SettingsView.vue', import.meta.url));
   const context = { exports: {}, require(name) {
     if (name.endsWith('/useModalState')) return modalStateModule;
     if (name.endsWith('/panelEffects')) return { usePanelEffects: () => ({ pageTransitionEnabled: vue.ref(false) }) };
@@ -80,30 +76,11 @@ test('safe mode keeps notification content inert and recreates it on protection 
     throw new Error('Unexpected import: ' + name);
   } };
   runInNewContext(code, context);
-  const node = (text = '') => ({ children: [], parent: null, text, props: {}, style: {} });
-  const remove = child => {
-    if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1);
-    child.parent = null;
-  };
-  const renderer = vue.createRenderer({
-    createElement: () => node(), createText: node, createComment: node,
-    setText: (node, text) => { node.text = text; },
-    setElementText: (node, text) => { node.text = text; },
-    patchProp(node, key, previous, value) { node.props[key] = value; },
-    insert(child, parent, anchor) {
-      remove(child);
-      parent.children.splice(anchor ? parent.children.indexOf(anchor) : parent.children.length, 0, child);
-      child.parent = parent;
-    },
-    remove, parentNode: node => node.parent,
-    nextSibling: node => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null,
-  });
+  const { renderer, root, find } = createTestRenderer();
   const app = renderer.createApp(context.exports.default);
-  const root = node();
-  const find = (node, predicate) => predicate(node) ? node : node.children.map(child => find(child, predicate)).find(Boolean);
   const assertVisibleAndLocked = locked => {
-    assert.ok(find(root, node => node.props['data-test'] === 'notification'));
-    assert.equal(Boolean(find(root, node => node.props.inert === true)), locked);
+    assert.ok(find(node => node.props['data-test'] === 'notification'));
+    assert.equal(Boolean(find(node => node.props.inert === true)), locked);
   };
   app.mount(root);
   try {

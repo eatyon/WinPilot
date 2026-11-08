@@ -152,7 +152,7 @@ public sealed class QQBotCommandBotTest
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-            await WaitUntil(() => fixture.Bot.Status.State == "connected");
+            await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
             Assert.Equal(attempt, fixture.Attempts);
             Assert.True(fixture.Attempts > fixture.Cleanups);
             var settings = WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile);
@@ -174,7 +174,7 @@ public sealed class QQBotCommandBotTest
         var previous = WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile);
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile,
             settings => settings with { QQBotMessageFormat = "markdown" }, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         Assert.Equal("markdown", fixture.Settings!.QQBotMessageFormat);
         var current = WinPilotSettings.LoadAndInitialize(fixture.Paths.ConfigurationFile);
         Assert.Equal(previous.Notifications! with { QQBotMessageFormat = "markdown" }, current.Notifications);
@@ -187,7 +187,7 @@ public sealed class QQBotCommandBotTest
         await using var fixture = new Fixture();
         await fixture.Enable();
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotOpenId = "another-user", QQBotGroupOpenId = "another-group" }, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         var test = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         fixture.Receive!(Message("GROUP_MESSAGE_CREATE", "id", "/帮助"));
         Assert.False(test.IsCompleted);
@@ -207,7 +207,7 @@ public sealed class QQBotCommandBotTest
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotClientSecret = "" }, CancellationToken.None));
         await fixture.Configuration.SaveNotificationsAsync(fixture.Paths.ConfigurationFile, s => s with { QQBotClientSecret = "new-secret" }, CancellationToken.None);
-        await WaitUntil(() => fixture.Attempts == 3 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 3 && fixture.Bot.Status.State == "connected");
         Assert.Equal("new-secret", fixture.Settings!.QQBotClientSecret);
     }
 
@@ -244,7 +244,7 @@ public sealed class QQBotCommandBotTest
         fixture.Receive!(Message("GROUP_AT_MESSAGE_CREATE", "same", "/帮助"));
         await first;
         fixture.Disconnect!.TrySetException(new IOException());
-        await WaitUntil(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
         var second = CommandBotTestObserver.NextCommandAsync(fixture.Logger);
         fixture.Receive!(Message("GROUP_MESSAGE_CREATE", "same", "/帮助"));
         Assert.False(second.IsCompleted);
@@ -319,7 +319,7 @@ public sealed class QQBotCommandBotTest
         fixture.ReleaseTemporaryCleanup.TrySetResult();
         var cancelled = await Assert.ThrowsAsync<QQBotBindingValidationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Contains("本次获取已取消", cancelled.Message);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
         Assert.Equal(1, fixture.TemporaryCleanups);
         Assert.Equal(1, fixture.Attempts);
         Assert.Equal("user", await fixture.Bot.BindAsync(settings, false, (code, _) =>
@@ -343,7 +343,7 @@ public sealed class QQBotCommandBotTest
         {
             await fixture.TemporaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-            await WaitUntil(() => !fixture.Logger.Diagnostics.IsEmpty);
+            await TestWait.UntilAsync(() => !fixture.Logger.Diagnostics.IsEmpty);
             var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
             Assert.Contains(nameof(AggregateException), diagnostic);
             Assert.Contains("inner-binding", diagnostic);
@@ -356,7 +356,7 @@ public sealed class QQBotCommandBotTest
             fixture.ReleaseTemporaryCleanup.TrySetResult();
         }
         await Assert.ThrowsAsync<QQBotBindingValidationException>(() => pending.WaitAsync(TimeSpan.FromSeconds(3)));
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
         Assert.Equal(1, fixture.TemporaryCleanups);
     }
 
@@ -366,13 +366,13 @@ public sealed class QQBotCommandBotTest
         await using var fixture = new Fixture();
         fixture.Failure = new HttpRequestException("secret must not appear", new IOException("inner-known-receiver"), HttpStatusCode.Unauthorized);
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
         Assert.DoesNotContain("secret must not appear", fixture.Bot.Status.Error!);
         await Assert.ThrowsAsync<QQBotBindingValidationException>(() => fixture.Bot.BindAsync(new(), false, (_, _) => Task.CompletedTask, CancellationToken.None));
         fixture.Failure = null;
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "connected");
         var diagnostic = Assert.Single(fixture.Logger.Diagnostics);
         Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
         Assert.Contains("inner-known-receiver", diagnostic);
@@ -432,7 +432,7 @@ public sealed class QQBotCommandBotTest
         await using var fixture = new Fixture();
         fixture.Failure = new QQBotGatewayClosedException(4004);
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "failed" && fixture.Cleanups == fixture.Attempts);
         Assert.Equal(2, fixture.Attempts);
         Assert.True(fixture.Bot.Status.Enabled);
     }
@@ -523,15 +523,6 @@ public sealed class QQBotCommandBotTest
                 author = type == "C2C_MESSAGE_CREATE" ? (object)new { user_openid = "user" } : new { member_openid = "user" }
             }
         });
-
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!condition())
-        {
-            await Task.Delay(10, timeout.Token);
-        }
-    }
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -634,7 +625,7 @@ public sealed class QQBotCommandBotTest
         public async Task Enable()
         {
             await Bot.SetEnabledAsync(true, CancellationToken.None);
-            await WaitUntil(() => Bot.Status.State == "connected");
+            await TestWait.UntilAsync(() => Bot.Status.State == "connected");
         }
 
         public async ValueTask DisposeAsync()

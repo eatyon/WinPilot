@@ -31,7 +31,7 @@ public sealed class CommandBotLifecycleTest
         await replied.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.True(fixture.Logger.Count > 0);
         Assert.Contains(fixture.Logger.Entries, entry => entry.Message == "Test 命令机器人收到消息：帮助");
-        await WaitUntil(() => fixture.Logger.Entries.Any(entry => entry.Message == "Test 命令已处理：帮助"));
+        await TestWait.UntilAsync(() => fixture.Logger.Entries.Any(entry => entry.Message == "Test 命令已处理：帮助"), timeoutSeconds: 3);
         Assert.False(next.IsCompleted);
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
         Assert.True(await next);
@@ -225,9 +225,9 @@ public sealed class CommandBotLifecycleTest
         fixture.Bot.ReceiverFailure = new InvalidOperationException($"receive {secret}", new IOException("inner-receiver"));
         await fixture.Bot.SetEnabledAsync(true, CancellationToken.None);
         await fixture.Bot.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        await WaitUntil(() => fixture.Bot.Cleaned == fixture.Bot.Created);
+        await TestWait.UntilAsync(() => fixture.Bot.Cleaned == fixture.Bot.Created, timeoutSeconds: 3);
         await fixture.Bot.ReconnectAsync(CancellationToken.None);
-        await WaitUntil(() => fixture.Bot.Created == 2 && fixture.Bot.Status.State == "connected");
+        await TestWait.UntilAsync(() => fixture.Bot.Created == 2 && fixture.Bot.Status.State == "connected", timeoutSeconds: 3);
         Assert.True(fixture.Bot.Created > fixture.Bot.Cleaned);
         await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
         Assert.Equal(fixture.Bot.Created, fixture.Bot.Cleaned);
@@ -294,15 +294,6 @@ public sealed class CommandBotLifecycleTest
         Assert.Contains(nameof(InvalidOperationException), diagnostic);
         Assert.Contains("inner-cancel", diagnostic);
         Assert.DoesNotContain(secret, diagnostic);
-    }
-
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        while (!condition())
-        {
-            await Task.Delay(10, timeout.Token);
-        }
     }
 
     private sealed class Fixture : IAsyncDisposable

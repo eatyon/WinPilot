@@ -2,33 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
-import { parse } from '@vue/compiler-sfc';
 import { ref, shallowRef, computed } from 'vue';
 import { createPluginPageLifetime } from '../../src/features/plugins/page/pluginPageLifetime.ts';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 
 function setup(file, bindings, exposed) {
-  const source = readFileSync(new URL(`../../src/features/plugins/${file === 'PluginPageView.vue' ? '' : 'page/'}${file}`, import.meta.url), 'utf8');
-  const { descriptor } = parse(source);
-  const code = ts.transpileModule(descriptor.scriptSetup.content, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-    transformers: { before: [context => node => ts.visitNode(node, function visit(child) {
-      if (ts.isImportDeclaration(child)) return undefined;
-      return ts.visitEachChild(child, visit, context);
-    })] },
-  }).outputText.replace(/^export \{\};\s*$/m, '');
+  const url = new URL(`../../src/features/plugins/${file === 'PluginPageView.vue' ? '' : 'page/'}${file}`, import.meta.url);
+  const code = loadScriptModule(url, exposed.join(', '));
   const mounted = [];
   const unmounted = [];
   const context = {
+    exports: {}, require: () => context,
     ref, shallowRef, computed,
     onMounted: callback => mounted.push(callback),
     onBeforeUnmount: callback => unmounted.push(callback),
     watch() {}, nextTick: async () => {}, onErrorCaptured() {},
     ...bindings,
   };
-  runInNewContext(code + `\nglobalThis.subject = { ${exposed.join(', ')} };`, context);
-  return { subject: context.subject, mounted, unmounted };
+  runInNewContext(code, context);
+  return { subject: context.exports, mounted, unmounted };
 }
 
 test('page readiness rejects stale sessions and failure resets readiness and releases the current session', async () => {

@@ -472,6 +472,7 @@ public sealed partial class TaskServiceTest
         var notifications = new RecordingNotifications();
         await using var fixture = new TaskServiceFixture(notifications);
         var image = new byte[length];
+        new Random(42).NextBytes(image);
         using var scope = RegisterNotificationImage(fixture, new(image, contentType));
 
         await RunNotificationAsync(
@@ -482,7 +483,7 @@ public sealed partial class TaskServiceTest
         var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("", sent.Message.Content);
         Assert.Equal(extension, Path.GetExtension(sent.Message.ImagePath));
-        Assert.Equal(image, notifications.ImageBytes);
+        Assert.True(image.AsSpan().SequenceEqual(notifications.ImageBytes), "发送的图片内容与原始数据不一致");
         AssertTemporaryNotificationImageRemoved(notifications);
     }
 

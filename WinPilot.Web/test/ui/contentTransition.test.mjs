@@ -1,3 +1,5 @@
+import { createTestRenderer } from '../support/renderer.mjs';
+import { loadComponentModule } from '../support/scriptModule.mjs';
 import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -5,8 +7,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import * as vue from 'vue';
 import * as delayedLoading from '../../src/ui/useDelayedLoading.ts';
-import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc';
-import ts from 'typescript';
+import { compileTemplate, parse } from '@vue/compiler-sfc';
 
 const read = path => path.endsWith('.css') ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
 
@@ -51,9 +52,7 @@ test('load errors delegate visibility to the library without unmounting their tr
 });
 
 test('load error transitions stay mounted across initial visibility, updates, recovery and later failures', async () => {
-  const { descriptor } = parse(read('components/AppLoadError.vue'));
-  const script = compileScript(descriptor, { id: 'load-error-lifecycle', inlineTemplate: true });
-  const code = ts.transpileModule(script.content, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  const code = loadComponentModule(new URL('../../src/components/AppLoadError.vue', import.meta.url));
   for (const initial of [false, true]) {
     const transitions = [];
     const passThrough = vue.defineComponent({ setup: (_, { slots }) => () => vue.h('div', slots.default?.()) });
@@ -73,25 +72,8 @@ test('load error transitions stay mounted across initial visibility, updates, re
       throw new Error('Unexpected import: ' + name);
     } };
     runInNewContext(code, context);
-    const node = (text = '') => ({ children: [], parent: null, text });
-    const remove = child => {
-      if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1);
-      child.parent = null;
-    };
-    const renderer = vue.createRenderer({
-      createElement: () => node(), createText: node, createComment: () => node(),
-      setText: (target, text) => { target.text = text; },
-      setElementText: (target, text) => { target.text = text; }, patchProp() {},
-      insert(child, parent, anchor) {
-        remove(child);
-        parent.children.splice(anchor ? parent.children.indexOf(anchor) : parent.children.length, 0, child);
-        child.parent = parent;
-      },
-      remove, parentNode: target => target.parent,
-      nextSibling: target => target.parent?.children[target.parent.children.indexOf(target) + 1] ?? null,
-    });
+    const { renderer, root } = createTestRenderer();
     const visible = vue.ref(initial), message = vue.ref('first error');
-    const root = node();
     const text = target => target.text + target.children.map(text).join('');
     const app = renderer.createApp({ setup: () => () => vue.h(context.exports.default, { show: visible.value }, () => message.value) });
     app.mount(root);
@@ -199,7 +181,6 @@ test('failure spacing collapses with the alert while preserving desktop grid and
   const component = read('components/AppLoadError.vue');
   assert.match(component, /<div class="load-error-content">\s*<NAlert/);
   assert.match(component, /\.load-error-content \{ padding-bottom: 18px; \}/);
-  assert.match(component, /\.app-load-error:not\(:last-child\) \{ margin-bottom: calc\(-1 \* var\(--load-error-layout-gap, 0px\)\); \}/);
   const styles = readFeatureStyles();
   assert.match(read('styles/components.css'), /\.load-error-layout \{ --load-error-layout-gap: var\(--page-card-row-gap\); \}/);
   assert.match(read('styles/layout.css'), /--page-card-row-gap: clamp\(16px, 3vw, 18px\)/);

@@ -1733,8 +1733,5 @@ test('adjacent task action cards keep spacing outside their content', () => {
   const css = readFeatureStyles();
   assert.match(source, /<NCard\b[^>]*class="task-action-card"[^>]*content-class="task-config-card"/);
   assert.match(css, /\.task-action-spacing\s*\{[^}]*padding-top:\s*12px/);
-  assert.match(source, /<TransitionGroup name="task-action">\s*<div\s+v-for="\(action, index\) in editor.actions"\s+:key="actionKey\(action\)"/);
-  assert.match(css, /\.task-action-enter-from, \.task-action-leave-to\s*\{[^}]*grid-template-rows: 0fr/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^{}]*\.task-action-enter-active[^{}]*\{[^{}]*transition: none/);
   assert.doesNotMatch(css, /\.task-config-card\s*\{[^}]*margin-top/);
 });

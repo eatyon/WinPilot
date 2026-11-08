@@ -1,3 +1,5 @@
+import { createTestRenderer } from '../support/renderer.mjs';
+import { loadComponentModule } from '../support/scriptModule.mjs';
 import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -5,9 +7,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { startNavigation, finishNavigation, navigationStatus } from '../../src/ui/navigationProgress.ts';
-import { compileScript, parse } from '@vue/compiler-sfc';
 import * as vue from 'vue';
-import ts from 'typescript';
 import { binding, elements, event } from '../support/template.mjs';
 
 test('back-to-top reuses the library and listens to the shared content scroller', () => {
@@ -122,8 +122,6 @@ test('changing page animation preferences preserves the mounted page and its sta
   const routerView = vue.defineComponent({ setup(_, { slots }) {
     return () => slots.default({ Component: page, route });
   } });
-  const { descriptor } = parse(readFileSync(new URL('../../src/components/AppPageView.vue', import.meta.url), 'utf8'));
-  const script = compileScript(descriptor, { id: 'page-state', inlineTemplate: true });
   const context = { exports: {}, require(name) {
     if (name === 'vue') return { ...vue, Transition: vue.BaseTransition };
     if (name === 'vue-router') return { RouterView: routerView };
@@ -131,26 +129,10 @@ test('changing page animation preferences preserves the mounted page and its sta
     if (name.endsWith('/scrollLock')) return { getPageScroller: () => scroller };
     throw new Error(`Unexpected import: ${name}`);
   } };
-  runInNewContext(ts.transpileModule(script.content, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
-  const node = (text = '') => ({ children: [], parent: null, text });
-  const remove = child => {
-    if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1);
-    child.parent = null;
-  };
-  const renderer = vue.createRenderer({
-    createElement: () => node(), createText: node, createComment: node,
-    setText: (target, text) => { target.text = text; },
-    setElementText: (target, text) => { target.text = text; }, patchProp() {},
-    insert(child, parent, anchor) {
-      remove(child);
-      parent.children.splice(anchor ? parent.children.indexOf(anchor) : parent.children.length, 0, child);
-      child.parent = parent;
-    },
-    remove, parentNode: target => target.parent,
-    nextSibling: target => target.parent?.children[target.parent.children.indexOf(target) + 1] ?? null,
-  });
+  runInNewContext(loadComponentModule(new URL('../../src/components/AppPageView.vue', import.meta.url)), context);
+  const { renderer, root } = createTestRenderer();
   const app = renderer.createApp(context.exports.default);
-  app.mount(node());
+  app.mount(root);
   try {
     draft.value = 'unsaved';
     scroller.scrollTop = 150;

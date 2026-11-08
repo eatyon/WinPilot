@@ -3,8 +3,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { compileStyle, parse } from '@vue/compiler-sfc';
+import postcss from 'postcss';
 
 const read = path => path.endsWith('.css') ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
+
+function mobileStyles(path) {
+  const css = path ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFeatureStyles();
+  const media = [];
+  postcss.parse(css).walkAtRules('media', rule => {
+    if (rule.params === '(max-width: 767px)') media.push(rule.toString());
+  });
+  assert.ok(media.length > 0, `Missing mobile rules: ${path ?? 'features'}`);
+  return media.join('\n');
+}
 
 test('shared page padding adapts to narrow screens without changing desktop spacing', () => {
   assert.match(read('styles/layout.css'), /\.page-content\s*\{[^}]*padding: clamp\(16px, 3vw, 24px\)/);
@@ -22,8 +33,7 @@ test('mobile task creation button fills the available row after wrapping', () =>
 });
 
 test('mobile layouts rearrange existing program, task and plugin containers', () => {
-  const css = readFeatureStyles();
-  const mobile = css.slice(css.indexOf('@media (max-width: 767px)'));
+  const mobile = mobileStyles();
   assert.match(mobile, /\.programs-view \.content-section-header\s*\{[^}]*flex-direction: column/);
   assert.match(mobile, /\.process-query-actions \.user-select\s*\{[^}]*width: 100%/);
   const programs = read('features/programs/ProgramsView.vue');
@@ -60,8 +70,7 @@ test('file panel retains the library content padding on both desktop and mobile'
 });
 
 test('mobile file metadata aligns right and reserves the full timestamp width', () => {
-  const source = read('features/files/FilesView.vue');
-  const mobile = source.slice(source.indexOf('@media (max-width: 767px)'));
+  const mobile = mobileStyles('features/files/FilesView.vue');
   assert.match(mobile, /--file-list-columns: 30px minmax\(0, 1fr\) max-content/);
   assert.match(mobile, /\.file-list-head, \.file-row\s*\{[^}]*padding-right: 8px/);
   assert.doesNotMatch(mobile, /padding: (?:8|12)px 0;/);
@@ -90,7 +99,7 @@ test('terminal shares a growing viewport layout and keeps the mobile send button
   const inputRules = [...source.matchAll(/\.terminal-input\s*\{([^}]+)\}/g)];
   assert.match(inputRules[0][1], /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   for (const rule of inputRules.slice(1)) assert.doesNotMatch(rule[1], /grid-template-columns/);
-  const mobile = source.slice(source.indexOf('@media (max-width: 767px)'));
+  const mobile = mobileStyles('features/terminal/TerminalView.vue');
   assert.doesNotMatch(mobile.split('.terminal-toolbar .form-field')[0], /padding:/);
   assert.doesNotMatch(read('features/plugins/PluginsView.vue'), /:content-style="\{ paddingTop: '14px', paddingBottom: '14px' \}"/);
 });

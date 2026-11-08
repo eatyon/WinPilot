@@ -209,6 +209,7 @@ public sealed class PluginHostActionApiTest
         await using var terminals = new TerminalSessionManager(NullLogger<TerminalSessionManager>.Instance);
         var api = CreateApi(terminals, notifications);
         var image = new byte[length];
+        new Random(42).NextBytes(image);
 
         var result = await api.ExecuteAsync(new(PluginHostActionType.SendNotification, new Dictionary<string, object?>
         {
@@ -221,7 +222,7 @@ public sealed class PluginHostActionApiTest
         Assert.NotNull(notifications.Message);
         Assert.Equal("", notifications.Message.Content);
         Assert.Equal(extension, Path.GetExtension(notifications.Message.ImagePath));
-        Assert.Equal(image, notifications.ImageBytes);
+        Assert.True(image.AsSpan().SequenceEqual(notifications.ImageBytes), "发送的图片内容与原始数据不一致");
         AssertTemporaryImageRemoved(notifications);
     }
 

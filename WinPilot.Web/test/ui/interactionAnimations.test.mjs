@@ -2,8 +2,7 @@ import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { createAppShell } from '../support/appShell.mjs';
 import postcss from 'postcss';
 
 const read = path => path.endsWith('.css') ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
@@ -29,24 +28,21 @@ test('interaction switch disables transitions globally while exempting page tran
 test('back to top follows the effective animation state shared by system and user preferences', () => {
   const source = read('App.vue');
   assert.match(source, /@click.capture="handleBackTopClick"/);
-  const handler = source.match(/function handleBackTopClick\(event: MouseEvent\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(handler);
   const calls = [];
   const classes = new Set();
-  const context = {
-    exports: {}, document: { documentElement: { classList: { contains: name => classes.has(name) } } },
+  const subject = createAppShell({
+    document: { documentElement: { classList: { contains: name => classes.has(name) } } },
     getPageScroller: () => ({ scrollTo: options => calls.push(options) }),
-  };
-  runInNewContext(ts.transpileModule(`${handler}\nexport { handleBackTopClick };`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+  });
   const event = { stopImmediatePropagation: () => calls.push('stop') };
-  context.exports.handleBackTopClick(event);
+  subject.handleBackTopClick(event);
   assert.equal(calls.length, 0);
   classes.add('interaction-animations-disabled');
-  context.exports.handleBackTopClick(event);
+  subject.handleBackTopClick(event);
   assert.equal(calls[0], 'stop');
   assert.equal(calls[1].top, 0);
   assert.equal(calls[1].behavior, 'instant');
   classes.clear();
-  context.exports.handleBackTopClick(event);
+  subject.handleBackTopClick(event);
   assert.equal(calls.length, 2);
 });

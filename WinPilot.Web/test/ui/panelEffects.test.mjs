@@ -1,9 +1,8 @@
 import { readStylesheet } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
-import ts from 'typescript';
+import { loadScriptModule } from '../support/scriptModule.mjs';
 
 test('image preview shares the opt-in mask blur without blurring the image or toolbar', () => {
   const css = readStylesheet(new URL('../../src/styles/components.css', import.meta.url));
@@ -29,8 +28,7 @@ test('panel effects preserve existing interaction animations and persist indepen
       setItem: (_, value) => { if (unavailable) throw new Error('blocked'); stored = value; },
     },
   };
-  const source = readFileSync(new URL('../../src/ui/panelEffects.ts', import.meta.url), 'utf8');
-  runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+  runInNewContext(loadScriptModule(new URL('../../src/ui/panelEffects.ts', import.meta.url)), context);
   const { initializePanelEffects, usePanelEffects } = context.exports;
   initializePanelEffects();
   const effects = usePanelEffects();

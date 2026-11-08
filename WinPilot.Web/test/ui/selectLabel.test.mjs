@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { h } from 'vue';
 import { loadScriptModule } from '../support/scriptModule.mjs';
 import { textPopoverStyle } from '../../src/ui/textPopoverStyle.ts';
+import { binding, elements } from '../support/template.mjs';
 
 function renderer(canHover = true) {
   const context = {
@@ -70,11 +71,11 @@ test('every host select shares function labels and fallback labels', () => {
     'features/programs/ProgramsView.vue',
   ]) {
     const source = readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
-    const controls = [...source.matchAll(/<NSelect\b[^>]*>/g)];
+    const controls = elements(source, node => node.tag === 'NSelect');
     assert.ok(controls.length > 0, path);
-    for (const [tag] of controls) {
-      assert.ok(tag.includes(':fallback-option="selectFallbackOption"'), path);
-      assert.ok(tag.includes(':options="withSelectLabels('), path);
+    for (const control of controls) {
+      assert.equal(binding(control, 'fallback-option'), 'selectFallbackOption', path);
+      assert.match(binding(control, 'options'), /^withSelectLabels\(/, path);
     }
   }
 });

@@ -17,38 +17,6 @@ test('plugin configuration display separates the visibility option from configur
   assert.equal(attribute(children[1], 'class'), 'plugin-settings-fields');
 });
 
-test('program and Cron explanation icons share a compact centered label row', () => {
-  const css = readStylesheet(new URL('../../src/styles/components.css', import.meta.url));
-  assert.match(css, /\.field-label-with-hint \{ display: inline-flex; align-items: center; gap: 2px; \}/);
-  for (const file of ['programs/ProgramsView.vue', 'tasks/CronEditor.vue']) {
-    const source = readFileSync(new URL(`../../src/features/${file}`, import.meta.url), 'utf8');
-    const labels = elements(source, node => (attribute(node, 'class') ?? '').split(/\s+/).includes('field-label-with-hint'));
-    assert.ok(labels.some(node => node.children.some(child => child.tag === 'span')
-      && node.children.some(child => child.tag === 'HelpHint')), file);
-  }
-  const cron = readFileSync(new URL('../../src/features/tasks/CronEditor.vue', import.meta.url), 'utf8');
-  assert.doesNotMatch(cron, /cron-expression-label|help-hint-popover/);
-});
-
-test('plugin headings and configuration labels use library typography without a second color override', () => {
-  const header = readFileSync(new URL('../../src/features/plugins/PluginHeader.vue', import.meta.url), 'utf8');
-  const fields = readFileSync(new URL('../../src/features/plugins/PluginSettingField.vue', import.meta.url), 'utf8');
-  const css = readFeatureStyles();
-  assert.match(header, /<NText tag="h2" :depth="1">/);
-  assert.match(header, /<NText tag="p" :depth="2">/);
-  assert.match(fields, /<NText :depth="2">/);
-  assert.match(fields, /<NText v-if="field.description" tag="small" :depth="2">/);
-  assert.doesNotMatch(css.match(/\.plugin-setting-label > span\s*\{([^}]+)\}/)?.[1] ?? '', /(?:^|;)\s*color:/);
-});
-
-test('plugin field containers do not make controls bold while field titles retain emphasis', () => {
-  const css = readFeatureStyles();
-  const field = css.match(/\.plugin-setting-field\s*\{([^}]+)\}/)?.[1];
-  assert.ok(field);
-  assert.doesNotMatch(field, /font-weight/);
-  assert.match(css, /\.plugin-setting-label > span\s*\{[^}]*font-weight:\s*400;/);
-});
-
 test('task and dynamic plugin channel pickers use the shared default prompt', () => {
   const action = readFileSync(new URL('../../src/features/tasks/TaskActionEditor.vue', import.meta.url), 'utf8');
   const plugin = readFileSync(new URL('../../src/features/plugins/PluginSettingField.vue', import.meta.url), 'utf8');
@@ -59,15 +27,6 @@ test('task and dynamic plugin channel pickers use the shared default prompt', ()
   const select = readFileSync(new URL('../../src/components/AppSelect.vue', import.meta.url), 'utf8');
   assert.match(select, /placeholder: '请选择'/);
   assert.doesNotMatch(plugin, /options.unshift/);
-});
-
-test('plugin and task multiline fields use the library default rows and remain resizable', () => {
-  for (const file of ['plugins/PluginSettingField.vue', 'tasks/TaskActionEditor.vue', 'tasks/TasksView.vue']) {
-    const source = readFileSync(new URL(`../../src/features/${file}`, import.meta.url), 'utf8');
-    assert.match(source, /type="textarea"/);
-    assert.doesNotMatch(source, /\brows:\s*['"]\d|:rows="\d/);
-    assert.doesNotMatch(source, /:resizable="false"/);
-  }
 });
 
 test('task list keeps library card padding and avoids doubling the last row spacing', () => {

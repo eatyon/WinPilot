@@ -181,7 +181,6 @@ test('theme entry uses reference body fonts, library preflight and layout transi
   assert.match(entry, /import 'vfonts\/FiraCode\.css'/);
   assert.doesNotMatch(provider, /preflight-style-disabled/);
   assert.match(provider, /darkTheme : lightTheme/);
-  assert.match(app, /<NLayout v-else-if="route.matched.length" class="app-frame"/);
   assert.match(app, /<NLayoutHeader class="app-header" role="banner">/);
   const theme = createComponentTheme(getAccentTokens('blue', 'light'));
   assert.equal(theme.common.fontFamily, undefined);

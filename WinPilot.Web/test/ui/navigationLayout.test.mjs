@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import { loadScriptModule } from '../support/scriptModule.mjs';
+import { createAppShell } from '../support/appShell.mjs';
 import { elements, attribute } from '../support/template.mjs';
 
 test('sidebar preference defaults expanded, persists and tolerates unavailable storage', () => {
@@ -77,32 +78,27 @@ test('mobile shell uses the shared dropdown navigation and a single content scro
 });
 
 test('width changes collapse automatically without overwriting manual preference', () => {
-  const source = readFileSync(new URL('../../src/App.vue', import.meta.url), 'utf8');
-  const code = source.slice(source.indexOf('const sidebarMedia ='), source.indexOf('function updateViewport'));
   const media = { matches: false };
   const writes = [];
-  const context = {
+  const subject = createAppShell({
     window: { matchMedia: () => media },
-    ref: value => ({ value }),
-    readSidebarCollapsed: () => false,
     saveSidebarCollapsed: value => writes.push(value),
-  };
-  runInNewContext(code.replace(/collapsed: boolean/g, 'collapsed') + '\nthis.state = sidebarCollapsed;', context);
-  assert.equal(context.state.value, false);
+  });
+  assert.equal(subject.sidebarCollapsed.value, false);
   media.matches = true;
-  context.updateSidebarWidth();
-  assert.equal(context.state.value, true);
+  subject.updateSidebarWidth();
+  assert.equal(subject.sidebarCollapsed.value, true);
   assert.deepEqual(writes, []);
-  context.setSidebarCollapsed(false);
-  assert.equal(context.state.value, false);
+  subject.setSidebarCollapsed(false);
+  assert.equal(subject.sidebarCollapsed.value, false);
   media.matches = false;
-  context.updateSidebarWidth();
-  assert.equal(context.state.value, false);
-  context.setSidebarCollapsed(true);
+  subject.updateSidebarWidth();
+  assert.equal(subject.sidebarCollapsed.value, false);
+  subject.setSidebarCollapsed(true);
   media.matches = true;
-  context.updateSidebarWidth();
+  subject.updateSidebarWidth();
   media.matches = false;
-  context.updateSidebarWidth();
-  assert.equal(context.state.value, true);
+  subject.updateSidebarWidth();
+  assert.equal(subject.sidebarCollapsed.value, true);
   assert.deepEqual(writes, [false, true]);
 });

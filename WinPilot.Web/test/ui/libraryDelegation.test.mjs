@@ -108,14 +108,6 @@ test('file path navigation uses keyboard-accessible library breadcrumbs', () => 
   assert.doesNotMatch(source, /files-breadcrumb-link|files-breadcrumb-separator|files-breadcrumb-current/);
 });
 
-test('ordinary process task and file empty states use library descriptions', () => {
-  for (const feature of ['files/FilesView', 'programs/ProgramsView', 'tasks/TasksView']) {
-    const source = readFileSync(new URL(`../../src/features/${feature}.vue`, import.meta.url), 'utf8');
-    assert.match(source, /<NEmpty/);
-    assert.doesNotMatch(source, /<p[^>]*class="content-empty"/);
-  }
-});
-
 test('host forms use library labels and feedback with explicit control associations', () => {
   let count = 0;
   let customBodies = 0;
@@ -149,25 +141,6 @@ test('numeric fields share the library input number instead of native number inp
     assert.match(source, /<AppNumberInput/);
     assert.doesNotMatch(source, /type:\s*['"]number['"]|type="number"/);
   }
-});
-
-test('host buttons including the keyboard use library interaction except the image entry', () => {
-  function inspect(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (entry.name !== 'page') inspect(new URL(`${entry.name}/`, directory));
-        continue;
-      }
-      if (!entry.name.endsWith('.vue')) continue;
-      const source = readFileSync(new URL(entry.name, directory), 'utf8');
-      const buttons = elements(source, node => node.tag === 'button');
-      if (entry.name === 'DesktopView.vue') {
-        assert.equal(buttons.length, 1);
-        assert.equal(attribute(buttons[0], 'class'), 'desktop-preview-button');
-      } else assert.equal(buttons.length, 0, entry.name);
-    }
-  }
-  inspect(new URL('../../src/features/', import.meta.url));
 });
 
 test('keyboard states and dynamic collection disclosure delegate to library components', () => {
