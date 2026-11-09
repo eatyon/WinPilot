@@ -15,12 +15,15 @@ const properties = {
   bg: '--accent-bg', border: '--accent-border', focusRing: '--accent-focus-ring',
 };
 
-test('theme switching delegates component colors to the provider without changing native color-scheme', () => {
+test('browser color-scheme stays light while the provider controls page themes', () => {
   const theme = readFileSync(new URL('../../src/ui/theme.ts', import.meta.url), 'utf8');
   const css = readFeatureStyles();
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(theme, /style\.colorScheme|setProperty\(['"]color-scheme/);
-  assert.doesNotMatch(css + html, /(?:^|[;{\s])color-scheme\s*:/);
+  assert.doesNotMatch(css, /(?:^|[;{\s])color-scheme\s*:/);
+  assert.match(html, /<meta name="color-scheme" content="only light"\s*\/>/);
+  assert.match(html, /html\s*\{[^}]*color-scheme:\s*only light/);
+  assert.equal((html.match(/(?:^|[;{\s])color-scheme\s*:/g) ?? []).length, 1);
   assert.match(theme, /window\.matchMedia\('\(prefers-color-scheme: dark\)'\)/);
   assert.match(html, /@media \(prefers-color-scheme: dark\)[\s\S]*html:not\(\[data-theme="light"\]\)/);
 });
