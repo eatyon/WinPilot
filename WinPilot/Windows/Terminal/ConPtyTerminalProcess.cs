@@ -161,13 +161,17 @@ internal sealed class ConPtyTerminalProcess : ITerminalProcess
 
     internal static void KillProcess(SafeHandle processHandle)
     {
+        const int errorAccessDenied = 5;
+        const uint stillActive = 259;
+
         if (processHandle.IsInvalid || TerminateProcess(processHandle, 1))
         {
             return;
         }
-        // 终止与自然退出可能同时发生；只有确认进程已退出才能忽略终止失败，不能只看错误码。
+        // 退出码可能先于句柄信号就绪，终止被拒绝时仍需确认是否已退出。
         var error = Marshal.GetLastWin32Error();
-        if (WaitForSingleObject(processHandle, 0) == 0)
+        if (WaitForSingleObject(processHandle, 0) == 0 ||
+            (error == errorAccessDenied && GetExitCodeProcess(processHandle, out var exitCode) && exitCode != stillActive))
         {
             return;
         }

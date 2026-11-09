@@ -13,18 +13,22 @@ public sealed class ConPtyTerminalProcessTest
     private const uint QueryLimitedInformationAccess = 0x00001000;
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task KillProcessAcceptsBothRunningAndAlreadyExitedProcess(bool exitBeforeKill)
+    [InlineData(false, 0, false)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 259, false)]
+    [InlineData(true, 0, true)]
+    public async Task KillProcessAcceptsBothRunningAndAlreadyExitedProcess(bool exitBeforeKill, int exitCode, bool queryOnly)
     {
         using var process = StartWaitingProcess();
-        var handle = process.SafeHandle;
+        using var queryHandle = queryOnly ? OpenProcess(QueryLimitedInformationAccess, false, process.Id) : null;
+        var handle = (SafeHandle?)queryHandle ?? process.SafeHandle;
         try
         {
+            Assert.False(handle.IsInvalid);
             Assert.False(process.HasExited);
             if (exitBeforeKill)
             {
-                await process.StandardInput.WriteLineAsync("exit");
+                await process.StandardInput.WriteLineAsync($"exit {exitCode}");
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             }
             ConPtyTerminalProcess.KillProcess(handle);
