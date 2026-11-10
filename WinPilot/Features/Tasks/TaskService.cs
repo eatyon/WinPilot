@@ -1533,6 +1533,17 @@ public sealed class TaskService : BackgroundService
             }
         }
 
+        // 已注册文字变量无值时清空占位符，未知变量仍保留原文。
+        foreach (var variable in variableCatalog.GetAll())
+        {
+            if (variable.Type == PluginVariableType.Text
+                && contentNames.Contains(variable.Name, StringComparer.OrdinalIgnoreCase)
+                && (!variables.TryGetValue(variable.Name, out var value) || value is null))
+            {
+                variables[variable.Name] = string.Empty;
+            }
+        }
+
         var resolvedContext = context with
         {
             Variables = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(variables)

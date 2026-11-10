@@ -642,6 +642,38 @@ public sealed partial class TaskServiceTest
     }
 
     [Fact]
+    public async Task NotificationClearsOnlyRegisteredTextVariablesWithoutValues()
+    {
+        var notifications = new RecordingNotifications();
+        await using var fixture = new TaskServiceFixture(notifications);
+        using var scope = fixture.Extensions.CreateScope("test", "测试插件");
+        var variables = (IPluginNotificationVariableApi)scope;
+        variables.Register([new("$test.context", "触发上下文")]);
+        variables.Register([
+            new("$test.null", "空值"), new("$test.missing", "未返回"),
+            new("$test.empty", "空字符串"), new("$test.number", "数字"), new("$test.flag", "布尔值")
+        ], (_, _, _) => Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?>
+        {
+            ["$test.null"] = null,
+            ["$test.empty"] = "",
+            ["$test.number"] = 0,
+            ["$test.flag"] = false
+        }));
+        using (var stopped = fixture.Extensions.CreateScope("stopped", "已停止插件"))
+        {
+            ((IPluginNotificationVariableApi)stopped).Register([new("$stopped.value", "已失效")]);
+        }
+
+        await RunNotificationAsync(fixture, new(
+            TaskActionType.SendNotification,
+            NotificationChannel: "QQBot",
+            NotificationContent: "[$test.context][$test.null][$test.missing][$test.empty][$test.number][$test.flag][$unknown][$stopped.value]"), true);
+
+        var sent = await notifications.Sent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("[][][][][0][False][$unknown][$stopped.value]", sent.Message.Content);
+    }
+
+    [Fact]
     public async Task NotificationResolvesRequestedVariablesAndSendTime()
     {
         var notifications = new RecordingNotifications();
