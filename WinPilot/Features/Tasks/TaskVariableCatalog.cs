@@ -53,7 +53,7 @@ public sealed class TaskVariableCatalog(PluginTaskExtensionRegistry extensions)
 
     public bool IsRegisteredImage(string name) => MatchRegisteredImage(name) is not null;
 
-    // 带路径的本地图片语法由任务服务完整解析，这里只匹配具名图片变量。
+    // 带路径的本地图片语法由任务通知发送器完整解析，这里只匹配具名图片变量。
     public string? MatchRegisteredImage(string token) =>
         GetAll()
             .Where(variable => variable.Type == PluginVariableType.Image && variable.Name != "&image=\"\"")

@@ -58,7 +58,7 @@ public sealed partial class TaskServiceTest
             });
 
         var before = DateTimeOffset.Now.AddSeconds(-1);
-        var result = TaskService.ResolveNotificationContent("$time\n$test.logtime", context).Split(Environment.NewLine);
+        var result = TaskNotificationSender.ResolveNotificationContent("$time\n$test.logtime", context).Split(Environment.NewLine);
         var after = DateTimeOffset.Now.AddSeconds(1);
 
         Assert.True(DateTimeOffset.TryParseExact(
@@ -83,7 +83,7 @@ public sealed partial class TaskServiceTest
         ]);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
-            TaskService.ValidateImageVariables(content, new TaskVariableCatalog(registry)));
+            TaskNotificationSender.ValidateImageVariables(content, new TaskVariableCatalog(registry)));
 
         Assert.Equal("图片仅允许一个", exception.Message);
     }
@@ -105,7 +105,7 @@ public sealed partial class TaskServiceTest
         ]);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
-            TaskService.ValidateNotificationImages(content, new TaskVariableCatalog(registry)));
+            TaskNotificationSender.ValidateNotificationImages(content, new TaskVariableCatalog(registry)));
 
         Assert.Equal("图片仅允许一个", exception.Message);
     }
@@ -121,7 +121,7 @@ public sealed partial class TaskServiceTest
 
         Assert.Equal(
             name,
-            Assert.Single(TaskService.ValidateImageVariables(content, new TaskVariableCatalog(registry))));
+            Assert.Single(TaskNotificationSender.ValidateImageVariables(content, new TaskVariableCatalog(registry))));
         Assert.Equal(content.Replace(name, string.Empty), VariableResolver.Remove(content, name));
     }
 
@@ -294,7 +294,7 @@ public sealed partial class TaskServiceTest
         try
         {
             var input = string.Format(template, $"&image=\"{path}\"");
-            var (content, imagePath) = TaskService.ExtractDirectImagePath(input);
+            var (content, imagePath) = TaskNotificationSender.ExtractDirectImagePath(input);
             Assert.Equal(expected, content);
             Assert.Equal(path, imagePath);
             await RunNotificationAsync(

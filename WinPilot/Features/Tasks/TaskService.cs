@@ -1,9 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
-using System.Text.Encodings.Web;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using Cronos;
 using Microsoft.Win32;
 using WinPilot.Core;
@@ -26,26 +23,15 @@ namespace WinPilot.Features.Tasks;
 /// </summary>
 public sealed class TaskService : BackgroundService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
-    private readonly PortableDataPaths paths;
+    private readonly TaskDefinitionStore store;
     private readonly IProgramManager programs;
     private readonly ProgramTagService tags;
     private readonly KeyboardInputService keyboard;
     private readonly TerminalSessionManager terminals;
-    private readonly DesktopScreenshotService screenshots;
-    private readonly INotificationService notifications;
+    private readonly TaskNotificationSender notificationSender;
     private readonly WindowsProcessEventListener processEvents;
     private readonly WindowsKeyboardEventListener? keyboardEvents;
     private readonly PluginTaskExtensionRegistry extensions;
-    private readonly TaskVariableCatalog variableCatalog;
     private readonly ILogger<TaskService> logger;
     private readonly TimeProvider clock;
 
@@ -87,13 +73,11 @@ public sealed class TaskService : BackgroundService
         TimeProvider? clock = null,
         WindowsKeyboardEventListener? keyboardEvents = null)
     {
-        this.paths = paths;
+        store = new(paths);
         this.programs = programs;
         this.tags = tags;
         this.keyboard = keyboard;
         this.terminals = terminals;
-        this.screenshots = screenshots;
-        this.notifications = notifications;
         this.processEvents = processEvents;
         this.keyboardEvents = keyboardEvents;
         if (keyboardEvents is not null)
@@ -101,7 +85,7 @@ public sealed class TaskService : BackgroundService
             keyboardEvents.Triggered += KeyboardTriggered;
         }
         this.extensions = extensions ?? new(new(), new(), new());
-        this.variableCatalog = variableCatalog ?? new(this.extensions);
+        notificationSender = new(screenshots, notifications, this.extensions, variableCatalog ?? new(this.extensions), logger);
         this.logger = logger;
         this.clock = clock ?? TimeProvider.System;
         cronTimeZone = this.clock.LocalTimeZone;
@@ -156,21 +140,21 @@ public sealed class TaskService : BackgroundService
 
     public WinPilotTask Create(WinPilotTask task)
     {
-        task = Normalize(task);
-        var cron = Validate(task);
-        ValidateProgramConfigurations(task);
-        ValidateNotificationActions(task);
+        task = TaskDefinitionValidator.Normalize(task);
+        var cron = TaskDefinitionValidator.Validate(task);
+        TaskDefinitionValidator.ValidateProgramConfigurations(task);
+        notificationSender.ValidateActions(task);
         lock (gate)
         {
             if (tasks.ContainsKey(task.Name))
             {
                 throw new ResourceNameConflictException("同名任务已存在");
             }
-            if (File.Exists(GetTaskFilePath(task.Name)))
+            if (File.Exists(store.GetFilePath(task.Name)))
             {
                 throw new ResourceNameConflictException("同名任务文件已存在");
             }
-            Save(task, false);
+            store.Save(task, false);
             tasks[task.Name] = task;
             ClearCronState(task.Name);
             if (cron is not null)
@@ -186,10 +170,10 @@ public sealed class TaskService : BackgroundService
 
     public WinPilotTask Update(string name, WinPilotTask task)
     {
-        task = Normalize(task);
-        var cron = Validate(task);
-        ValidateProgramConfigurations(task);
-        ValidateNotificationActions(task);
+        task = TaskDefinitionValidator.Normalize(task);
+        var cron = TaskDefinitionValidator.Validate(task);
+        TaskDefinitionValidator.ValidateProgramConfigurations(task);
+        notificationSender.ValidateActions(task);
         TaskExecution? cancellation = null;
         try
         {
@@ -203,11 +187,11 @@ public sealed class TaskService : BackgroundService
                 {
                     throw new ResourceNameConflictException("同名任务已存在");
                 }
-                var originalFile = GetTaskFilePath(name);
-                var nextFile = GetTaskFilePath(task.Name);
+                var originalFile = store.GetFilePath(name);
+                var nextFile = store.GetFilePath(task.Name);
                 if (string.Equals(originalFile, nextFile, StringComparison.OrdinalIgnoreCase))
                 {
-                    Save(task);
+                    store.Save(task);
                 }
                 else
                 {
@@ -216,7 +200,7 @@ public sealed class TaskService : BackgroundService
                         throw new ResourceNameConflictException("同名任务文件已存在");
                     }
                     File.Move(originalFile, nextFile);
-                    FileOperationRecovery.WithRollback(() => Save(task),
+                    FileOperationRecovery.WithRollback(() => store.Save(task),
                         () => File.Move(nextFile, originalFile));
                 }
 
@@ -263,7 +247,7 @@ public sealed class TaskService : BackgroundService
             {
                 Enabled = nextEnabled
             };
-            Save(task);
+            store.Save(task);
             tasks[name] = task;
             ClearCronState(name);
             if (cron is not null)
@@ -288,7 +272,7 @@ public sealed class TaskService : BackgroundService
                 {
                     throw new FileNotFoundException("任务不存在");
                 }
-                var file = GetTaskFilePath(name);
+                var file = store.GetFilePath(name);
                 File.Delete(file);
                 tasks.Remove(name);
                 cancellation = RequestTaskCancellation(name);
@@ -1225,7 +1209,7 @@ public sealed class TaskService : BackgroundService
                 logger.LogInformation("终端命令{Result}，终端类型：{Shell}", result.ReceivedOutput ? "已收到输出" : "等待输出超时，暂未确认执行结果", result.Shell);
                 break;
             case TaskActionType.SendNotification:
-                await SendConfiguredNotification(action, context);
+                await notificationSender.SendAsync(action, context);
                 break;
             case TaskActionType.Extension:
                 await ExecuteExtension(action, context);
@@ -1408,7 +1392,7 @@ public sealed class TaskService : BackgroundService
         var (action, image) = PluginHostActionConverter.Convert(step with { Parameters = values }, defaultSilent: false, defaultShell: null);
         if (step.Type == PluginHostActionType.SendNotification)
         {
-            await SendConfiguredNotification(action, context, image);
+            await notificationSender.SendAsync(action, context, image);
             return;
         }
 
@@ -1497,520 +1481,33 @@ public sealed class TaskService : BackgroundService
             : [];
     }
 
-    /// <summary>
-    /// 先提取图片语法并解析所需插件变量，再生成正文和单张图片，最后统一投递。
-    /// </summary>
-    private async Task SendConfiguredNotification(
-        TaskAction action,
-        PluginTaskRunContext context,
-        PluginImageContent? pluginImage = null)
-    {
-        var channel = action.NotificationChannel;
-        NotificationChannelCatalog.RequireChannel(channel);
-        var (contentTemplate, directImagePath) = ExtractDirectImagePath(action.NotificationContent);
-        var contentNames = VariableResolver.ExtractNames(contentTemplate);
-        var contentImageNames = ValidateImageVariables(contentTemplate, variableCatalog);
-        if ((directImagePath is not null && contentImageNames.Length > 0)
-            || (pluginImage is not null && (directImagePath is not null || contentImageNames.Length > 0)))
-        {
-            throw new InvalidOperationException("图片仅允许一个");
-        }
-        var requested = contentNames
-            .Where(name =>
-                !name.Equals("$time", StringComparison.OrdinalIgnoreCase)
-                && !name.Equals("&screenshot", StringComparison.OrdinalIgnoreCase)
-                && !context.Variables.ContainsKey(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var variables = new Dictionary<string, object?>(context.Variables, StringComparer.OrdinalIgnoreCase);
-        // 只向插件请求正文实际引用且上下文尚未提供的变量，避免无关变量产生额外开销。
-        if (requested.Length > 0)
-        {
-            var resolved = await extensions.ResolveVariablesAsync(requested, context, context.CancellationToken);
-            foreach (var (name, value) in resolved)
-            {
-                variables[name] = value;
-            }
-        }
-
-        // 已注册文字变量无值时清空占位符，未知变量仍保留原文。
-        foreach (var variable in variableCatalog.GetAll())
-        {
-            if (variable.Type == PluginVariableType.Text
-                && contentNames.Contains(variable.Name, StringComparer.OrdinalIgnoreCase)
-                && (!variables.TryGetValue(variable.Name, out var value) || value is null))
-            {
-                variables[variable.Name] = string.Empty;
-            }
-        }
-
-        var resolvedContext = context with
-        {
-            Variables = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(variables)
-        };
-        // 截图在发送阶段按需采集，不在任务保存或变量列表查询时生成。
-        if (contentImageNames.Contains("&screenshot", StringComparer.OrdinalIgnoreCase))
-        {
-            var screenshot = screenshots.Capture();
-            variables["&screenshot"] = new PluginImageContent(screenshot.Content, screenshot.ContentType);
-        }
-
-        var textTemplate = contentImageNames.Length == 0
-            ? contentTemplate
-            : VariableResolver.Remove(contentTemplate, contentImageNames[0]);
-        var content = ResolveNotificationContent(textTemplate, resolvedContext);
-        if (directImagePath is not null)
-        {
-            ValidateImagePath(directImagePath);
-        }
-        var image = pluginImage ?? ResolveNotificationImage(contentImageNames.FirstOrDefault(), resolvedContext);
-        if (pluginImage is not null)
-        {
-            PluginNotificationImageValidator.ValidateImageSize(pluginImage);
-        }
-        await NotificationDelivery.SendAsync(
-            notifications,
-            new NotificationMessage(content, directImagePath),
-            channel,
-            context.CancellationToken,
-            imageContent: image?.Content,
-            imageContentType: image?.ContentType,
-            logger: logger);
-    }
-
-    private static PluginImageContent? ResolveNotificationImage(string? name, PluginTaskRunContext context)
-    {
-        if (name is null)
-        {
-            return null;
-        }
-        if (context.Variables.TryGetValue(name, out var value) && value is PluginImageContent image)
-        {
-            return image.Content.Length == 0 ? null : image;
-        }
-        throw new InvalidOperationException($"图片变量 {name} 不可用");
-    }
-
-    /// <summary>
-    /// 仅识别带成对双引号的本地图片变量并从正文移除；不完整的写法按普通文字保留。
-    /// </summary>
-    internal static (string? Content, string? ImagePath) ExtractDirectImagePath(string? template)
-    {
-        if (string.IsNullOrEmpty(template))
-        {
-            return (template, null);
-        }
-        string? imagePath = null;
-        var content = Regex.Replace(template, "&image=\"(?<path>[^\"\\r\\n]*)\"", image =>
-        {
-            if (imagePath is not null)
-            {
-                throw new InvalidOperationException("图片仅允许一个");
-            }
-            var value = image.Groups["path"].Value;
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException("图片路径不能为空");
-            }
-            imagePath = value;
-            return string.Empty;
-        }, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-
-        return (content, imagePath);
-    }
-
-    private static void ValidateImagePath(string path)
-    {
-        ValidateImagePathFormat(path);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException("通知图片不存在", path);
-        }
-        if (new FileInfo(path).Length > NotificationDelivery.MaxImageSizeBytes)
-        {
-            throw new InvalidOperationException("通知图片不能超过 10 MB");
-        }
-    }
-
-    private static void ValidateImagePathFormat(string path)
-    {
-        if (!Path.IsPathFullyQualified(path))
-        {
-            throw new InvalidOperationException("图片路径必须是绝对路径");
-        }
-        var extension = Path.GetExtension(path);
-        if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("通知图片仅支持 PNG 或 JPEG");
-        }
-    }
-
-    internal static string ResolveNotificationContent(string? template, PluginTaskRunContext context)
-    {
-        var variables = new Dictionary<string, object?>(context.Variables, StringComparer.Ordinal)
-        {
-            ["$time"] = $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}]"
-        };
-        var notificationContext = context with
-        {
-            Variables = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(variables)
-        };
-        return VariableResolver.Resolve(template, notificationContext);
-    }
-
-    private static void ValidateProgramConfigurations(WinPilotTask task)
-    {
-        if (IsProcessTrigger(task.Trigger))
-        {
-            foreach (var path in task.Trigger.ProcessPaths ?? [])
-            {
-                if (!Path.GetExtension(path).Equals(".exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new TaskValidationException("trigger.processPaths", "程序事件仅支持 EXE 文件");
-                }
-                try
-                {
-                    ProgramLaunchValidator.ValidateProgramPath(path);
-                }
-                catch (InvalidOperationException exception)
-                {
-                    throw new TaskValidationException("trigger.processPaths", exception.Message, exception);
-                }
-            }
-        }
-
-        for (var index = 0; index < task.Actions.Count; index++)
-        {
-            var action = task.Actions[index];
-            if (action.Type != TaskActionType.StartProgram)
-            {
-                continue;
-            }
-            try
-            {
-                ProgramLaunchValidator.ValidateProgramPath(action.ProgramPath);
-            }
-            catch (InvalidOperationException exception)
-            {
-                throw new TaskValidationException($"actions[{index}].programPath", exception.Message, exception);
-            }
-            try
-            {
-                ProgramLaunchValidator.ValidateWorkingDirectory(action.WorkingDirectory);
-            }
-            catch (InvalidOperationException exception)
-            {
-                throw new TaskValidationException($"actions[{index}].workingDirectory", exception.Message, exception);
-            }
-        }
-    }
-
-    private void ValidateNotificationActions(WinPilotTask task)
-    {
-        for (var index = 0; index < task.Actions.Count; index++)
-        {
-            var action = task.Actions[index];
-            if (action.Type != TaskActionType.SendNotification)
-            {
-                continue;
-            }
-            try
-            {
-                ValidateNotificationImages(action.NotificationContent, variableCatalog);
-            }
-            catch (InvalidOperationException exception)
-            {
-                throw new TaskValidationException($"actions[{index}].notificationContent", exception.Message, exception);
-            }
-        }
-    }
-
-    /// <summary>
-    /// 保存时检查图片数量、完整语法中的空路径与路径格式；文件存在性和大小留到发送时检查。
-    /// </summary>
-    internal static void ValidateNotificationImages(string? content, TaskVariableCatalog variableCatalog)
-    {
-        var (text, imagePath) = ExtractDirectImagePath(content);
-        var images = ValidateImageVariables(text, variableCatalog);
-        if (imagePath is not null && images.Length > 0)
-        {
-            throw new InvalidOperationException("图片仅允许一个");
-        }
-        if (imagePath is not null)
-        {
-            ValidateImagePathFormat(imagePath);
-        }
-    }
-
-    internal static string[] ValidateImageVariables(string? content, TaskVariableCatalog variableCatalog)
-    {
-        var images = VariableResolver
-            .ExtractOccurrences(content)
-            .Select(variableCatalog.MatchRegisteredImage)
-            .Where(name => name is not null)
-            .Cast<string>()
-            .ToArray();
-        if (images.Length > 1)
-        {
-            throw new InvalidOperationException("图片仅允许一个");
-        }
-        return images;
-    }
-
     private void Load()
     {
-        if (Directory.Exists(paths.TasksDirectory))
+        foreach (var file in store.EnumerateFiles())
         {
-            foreach (var file in Directory.EnumerateFiles(paths.TasksDirectory, "*.json"))
+            try
             {
-                try
+                var task = TaskDefinitionValidator.Normalize(store.Read(file));
+                var cron = TaskDefinitionValidator.Validate(task);
+                if (!string.Equals(Path.GetFileNameWithoutExtension(file), task.Name, StringComparison.OrdinalIgnoreCase))
                 {
-                    var stored = JsonSerializer.Deserialize<TaskPersistenceFile>(File.ReadAllText(file), JsonOptions);
-                    if (stored is null)
-                    {
-                        throw new InvalidDataException("任务文件内容无效");
-                    }
-                    var task = Normalize(stored.ToTask());
-                    var cron = Validate(task);
-                    if (!string.Equals(Path.GetFileNameWithoutExtension(file), task.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidDataException("任务名称与文件名不一致");
-                    }
-                    if (!tasks.TryAdd(task.Name, task))
-                    {
-                        throw new InvalidDataException("任务名称重复");
-                    }
-                    if (cron is not null)
-                    {
-                        cronExpressions[task.Name] = (task, cron);
-                    }
+                    throw new InvalidDataException("任务名称与文件名不一致");
                 }
-                catch (Exception exception)
+                if (!tasks.TryAdd(task.Name, task))
                 {
-                    logger.LogError(exception, "无法读取任务文件 {File}", file);
+                    throw new InvalidDataException("任务名称重复");
                 }
+                if (cron is not null)
+                {
+                    cronExpressions[task.Name] = (task, cron);
+                }
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "无法读取任务文件 {File}", file);
             }
         }
         UpdateProcessDetectionState();
-    }
-
-    private static WinPilotTask Normalize(WinPilotTask task) =>
-        task with
-        {
-            Trigger = task.Trigger with
-            {
-                Cron = task.Trigger.Cron ?? "",
-                Keys = KeyboardInputService.OrderKeyNames(task.Trigger.Keys),
-                ProcessPaths = (task.Trigger.ProcessPaths ?? [])
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Select(path => path.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
-            },
-            Actions = task.Actions
-                .Select(action =>
-                    action with
-                    {
-                        ProgramPath = action.ProgramPath ?? "",
-                        Arguments = action.Arguments ?? "",
-                        WorkingDirectory = action.WorkingDirectory ?? "",
-                        TagName = action.TagName ?? "",
-                        ProcessName = action.ProcessName ?? "",
-                        Keys = action.Type == TaskActionType.Keyboard
-                            ? KeyboardInputService.OrderKeyNames(action.Keys) ?? []
-                            : action.Keys ?? [],
-                        Shell = action.Shell ?? "",
-                        Command = action.Command ?? "",
-                        NotificationContent = action.NotificationContent ?? "",
-                        NotificationChannel = action.NotificationChannel ?? ""
-                    })
-                .ToArray()
-        };
-
-    private void Save(WinPilotTask task, bool overwrite = true)
-    {
-        Directory.CreateDirectory(paths.TasksDirectory);
-        var file = GetTaskFilePath(task.Name);
-        var temporaryFile = file + $".{Guid.NewGuid():N}.tmp";
-        FileOperationRecovery.WithCleanup(() =>
-        {
-            File.WriteAllText(temporaryFile, JsonSerializer.Serialize(TaskPersistenceFile.From(task), JsonOptions));
-            File.Move(temporaryFile, file, overwrite);
-        }, () =>
-        {
-            if (File.Exists(temporaryFile))
-            {
-                File.Delete(temporaryFile);
-            }
-        });
-    }
-
-    private string GetTaskFilePath(string name)
-    {
-        ValidateName(name);
-        return Path.Combine(paths.TasksDirectory, name + ".json");
-    }
-
-    private static CronExpression? Validate(WinPilotTask task)
-    {
-        CronExpression? cron = null;
-        ValidateName(task.Name);
-        if (!Enum.IsDefined(task.Trigger.Type))
-        {
-            throw new TaskValidationException("trigger.type", "任务类型无效");
-        }
-        for (var index = 0; index < task.Actions.Count; index++)
-        {
-            if (!Enum.IsDefined(task.Actions[index].Type))
-            {
-                throw new TaskValidationException($"actions[{index}].type", "任务类型无效");
-            }
-        }
-        if (task.Actions.Count == 0)
-        {
-            throw new TaskValidationException("actions", "至少需要一个动作");
-        }
-        if (task.Trigger.Type == TaskTriggerType.Cron)
-        {
-            if (string.IsNullOrWhiteSpace(task.Trigger.Cron))
-            {
-                throw new TaskValidationException("trigger.cron", "请输入 Cron 表达式");
-            }
-            try
-            {
-                cron = TaskCronExpression.Parse(task.Trigger.Cron);
-            }
-            catch (Exception exception) when (exception is FormatException or ArgumentException)
-            {
-                throw new TaskValidationException("trigger.cron", "Cron 表达式格式无效", exception);
-            }
-        }
-        else if (task.Trigger.Type == TaskTriggerType.Keyboard)
-        {
-            ValidateKeys(task.Trigger.Keys, "trigger.keys");
-        }
-        else if (task.Trigger.Type == TaskTriggerType.Extension)
-        {
-            if (string.IsNullOrWhiteSpace(task.Trigger.PluginId))
-            {
-                throw new TaskValidationException("trigger.pluginId", "请选择插件和触发条件");
-            }
-            if (string.IsNullOrWhiteSpace(task.Trigger.TriggerId))
-            {
-                throw new TaskValidationException("trigger.triggerId", "请选择插件和触发条件");
-            }
-        }
-        else if (IsProcessTrigger(task.Trigger))
-        {
-            if (task.Trigger.Event is null)
-            {
-                throw new TaskValidationException("trigger.event", "请选择事件");
-            }
-            if (!Enum.IsDefined(task.Trigger.Event.Value))
-            {
-                throw new TaskValidationException("trigger.event", "程序事件类型无效");
-            }
-            var paths = task.Trigger.ProcessPaths ?? [];
-            if (paths.Count == 0)
-            {
-                throw new TaskValidationException("trigger.processPaths", "请至少选择一个程序绝对路径");
-            }
-            if (paths.Any(path => !Path.IsPathFullyQualified(path)))
-            {
-                throw new TaskValidationException("trigger.processPaths", "程序路径必须是绝对路径");
-            }
-        }
-
-        for (var index = 0; index < task.Actions.Count; index++)
-        {
-            var action = task.Actions[index];
-            switch (action.Type)
-            {
-                case TaskActionType.StartProgram when string.IsNullOrWhiteSpace(action.ProgramPath):
-                    throw new TaskValidationException($"actions[{index}].programPath", "请选择要启动的程序");
-                case TaskActionType.StartTag when string.IsNullOrWhiteSpace(action.TagName):
-                    throw new TaskValidationException($"actions[{index}].tagName", "请选择快捷标签");
-                case TaskActionType.EndProcess when string.IsNullOrWhiteSpace(action.ProcessName):
-                    throw new TaskValidationException($"actions[{index}].processName", "请输入进程名");
-                case TaskActionType.Delay when action.DelaySeconds <= 0:
-                    throw new TaskValidationException($"actions[{index}].delaySeconds", "请输入有效的延迟秒数");
-                case TaskActionType.Delay when action.DelaySeconds > 86400:
-                    throw new TaskValidationException($"actions[{index}].delaySeconds", "延迟时间不能超过 86400 秒（24 小时）");
-                case TaskActionType.Keyboard:
-                    ValidateKeys(action.Keys, $"actions[{index}].keys");
-                    break;
-                case TaskActionType.Extension when string.IsNullOrWhiteSpace(action.PluginId):
-                    throw new TaskValidationException($"actions[{index}].pluginId", "请选择插件和动作");
-                case TaskActionType.Extension when string.IsNullOrWhiteSpace(action.ActionId):
-                    throw new TaskValidationException($"actions[{index}].actionId", "请选择插件和动作");
-                case TaskActionType.Shell when !IsSupportedShell(action.Shell):
-                    throw new TaskValidationException($"actions[{index}].shell", "Shell 仅支持 CMD 或 PowerShell");
-                case TaskActionType.Shell when string.IsNullOrWhiteSpace(action.Command):
-                    throw new TaskValidationException($"actions[{index}].command", "请输入 Shell 命令");
-                case TaskActionType.SendNotification when string.IsNullOrWhiteSpace(action.NotificationContent):
-                    throw new TaskValidationException($"actions[{index}].notificationContent", "请输入通知内容");
-                case TaskActionType.SendNotification:
-                    try
-                    {
-                        NotificationChannelCatalog.RequireChannel(action.NotificationChannel);
-                    }
-                    catch (InvalidOperationException exception)
-                    {
-                        throw new TaskValidationException($"actions[{index}].notificationChannel", exception.Message, exception);
-                    }
-                    break;
-                case TaskActionType.TaskState when string.IsNullOrWhiteSpace(action.TaskName):
-                    throw new TaskValidationException($"actions[{index}].taskName", "请选择任务");
-                case TaskActionType.TaskState when action.State is null:
-                    throw new TaskValidationException($"actions[{index}].state", "请选择状态");
-                case TaskActionType.TaskState when action.State is { } state && !Enum.IsDefined(state):
-                    throw new TaskValidationException($"actions[{index}].state", "任务状态无效");
-            }
-        }
-        return cron;
-    }
-
-    private static bool IsSupportedShell(string? shell) =>
-        shell is not null
-        && (shell.Equals("cmd", StringComparison.OrdinalIgnoreCase)
-                || shell.Equals("powershell", StringComparison.OrdinalIgnoreCase));
-
-    private static void ValidateKeys(IReadOnlyList<string>? keys, string field)
-    {
-        if (keys is null || keys.Count == 0)
-        {
-            throw new TaskValidationException(field, "请选择至少一个按键");
-        }
-        if (keys.Count > 3)
-        {
-            throw new TaskValidationException(field, "最多选择 3 个按键");
-        }
-        var parsed = new HashSet<KeyboardKey>();
-        foreach (var name in keys)
-        {
-            if (!Enum.TryParse<KeyboardKey>(name, true, out var key)
-                || !string.Equals(Enum.GetName(key), name, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new TaskValidationException(field, "包含不支持的按键");
-            }
-            if (!parsed.Add(key))
-            {
-                throw new TaskValidationException(field, "按键不能重复");
-            }
-        }
-    }
-
-    private static void ValidateName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)
-            || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-            || name.EndsWith('.')
-            || name.EndsWith(' '))
-        {
-            throw new TaskValidationException("name", "任务名称无效");
-        }
     }
 
     private sealed class CronSchedulerRun
