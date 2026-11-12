@@ -52,6 +52,8 @@ internal sealed class FeishuNotificationChannel(HttpClient httpClient) : IDispos
         }
         using var response = await httpClient.PostAsJsonAsync(settings.FeishuWebhookUrl, body, cancellationToken: token);
         response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+        EnsureSuccess(document.RootElement, "飞书通知发送");
     }
 
     private async Task<string> GetTokenAsync(NotificationSettings settings, CancellationToken token)
@@ -74,7 +76,7 @@ internal sealed class FeishuNotificationChannel(HttpClient httpClient) : IDispos
             var root = document.RootElement;
             if (root.TryGetProperty("code", out _))
             {
-                EnsureSuccess(root);
+                EnsureSuccess(root, "飞书令牌获取");
             }
             var access = root.GetProperty("tenant_access_token").GetString();
             if (string.IsNullOrWhiteSpace(access))
@@ -130,15 +132,28 @@ internal sealed class FeishuNotificationChannel(HttpClient httpClient) : IDispos
         using var response = await httpClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-        EnsureSuccess(result.RootElement);
+        EnsureSuccess(result.RootElement, "飞书消息回复");
     }
 
-    private static void EnsureSuccess(JsonElement result)
+    private static void EnsureSuccess(JsonElement result, string operation)
     {
-        if (!result.TryGetProperty("code", out var code) || !code.TryGetInt32(out var value) || value != 0)
+        if (result.ValueKind != JsonValueKind.Object
+            || !result.TryGetProperty("code", out var code)
+            || code.ValueKind != JsonValueKind.Number
+            || !code.TryGetInt32(out var value))
         {
-            throw new InvalidOperationException("飞书接口返回失败");
+            throw new InvalidOperationException($"{operation}响应无效");
         }
+        if (value == 0)
+        {
+            return;
+        }
+
+        var message = result.TryGetProperty("msg", out var msg) && msg.ValueKind == JsonValueKind.String
+            ? msg.GetString()
+            : null;
+        var detail = string.IsNullOrWhiteSpace(message) ? "" : $"：{message}";
+        throw new InvalidOperationException($"{operation}失败，错误码 {value}{detail}");
     }
 
     private async Task<string> UploadImageAsync(string path, string accessToken, CancellationToken token)
@@ -157,8 +172,15 @@ internal sealed class FeishuNotificationChannel(HttpClient httpClient) : IDispos
         using var response = await httpClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-        return document.RootElement.GetProperty("data").GetProperty("image_key").GetString()
-            ?? throw new InvalidOperationException("飞书图片上传失败");
+        var root = document.RootElement;
+        EnsureSuccess(root, "飞书图片上传");
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
+            || !data.TryGetProperty("image_key", out var key) || key.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(key.GetString()))
+        {
+            throw new InvalidOperationException("飞书图片上传响应缺少有效的图片标识");
+        }
+        return key.GetString()!;
     }
 
     public void Dispose() => tokenGate.Dispose();

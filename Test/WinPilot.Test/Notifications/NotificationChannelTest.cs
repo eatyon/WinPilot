@@ -766,9 +766,9 @@ public sealed class NotificationChannelTest
         using var handler = new RecordingHandler(request =>
             request.Uri.AbsolutePath switch
             {
-                "/open-apis/auth/v3/tenant_access_token/internal" => "{\"tenant_access_token\":\"feishu-access\"}",
-                "/open-apis/im/v1/images" => "{\"data\":{\"image_key\":\"image-key\"}}",
-                _ => "{}"
+                "/open-apis/auth/v3/tenant_access_token/internal" => "{\"code\":0,\"tenant_access_token\":\"feishu-access\"}",
+                "/open-apis/im/v1/images" => "{\"code\":0,\"data\":{\"image_key\":\"image-key\"}}",
+                _ => "{\"code\":0}"
             });
         using var client = new HttpClient(handler);
         using var sender = new FeishuNotificationChannel(client);
@@ -791,6 +791,61 @@ public sealed class NotificationChannelTest
         var content = post.RootElement.GetProperty("content").GetProperty("post").GetProperty("zh_cn").GetProperty("content")[0];
         Assert.Equal("标题\n正文", content[0].GetProperty("text").GetString());
         Assert.Equal("image-key", content[1].GetProperty("image_key").GetString());
+    }
+
+    [Theory]
+    [InlineData("{\"code\":0}", null)]
+    [InlineData("{\"code\":19024,\"msg\":\"Key Words Not Found\"}", "19024：Key Words Not Found")]
+    [InlineData("{}", "响应无效")]
+    [InlineData("null", "响应无效")]
+    [InlineData("{\"code\":\"0\"}", "响应无效")]
+    [InlineData("{\"code\":1,\"msg\":{}}", "错误码 1")]
+    public async Task FeishuValidatesWebhookBusinessResults(string response, string? error)
+    {
+        using var handler = new RecordingHandler(_ => response);
+        using var client = new HttpClient(handler);
+        using var sender = new FeishuNotificationChannel(client);
+        var send = () => sender.SendAsync(new() { FeishuWebhookUrl = "https://example.test/hook" },
+            new("正文"), CancellationToken.None);
+
+        if (error is null)
+        {
+            await send();
+        }
+        else
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(send);
+            Assert.Contains(error, exception.Message);
+        }
+        using var payload = JsonDocument.Parse(Assert.Single(handler.Requests).Body);
+        Assert.Equal("text", payload.RootElement.GetProperty("msg_type").GetString());
+        Assert.Equal("正文", payload.RootElement.GetProperty("content").GetProperty("text").GetString());
+    }
+
+    [Theory]
+    [InlineData("{\"code\":234001,\"msg\":\"Permission denied\",\"data\":{\"image_key\":\"unused\"}}", "234001：Permission denied")]
+    [InlineData("{\"code\":0,\"data\":{}}", "图片标识")]
+    [InlineData("{\"code\":0,\"data\":{\"image_key\":\"\"}}", "图片标识")]
+    [InlineData("{\"code\":0,\"data\":null}", "图片标识")]
+    public async Task FeishuRejectsInvalidImageResultsBeforeSendingWebhook(string response, string error)
+    {
+        using var data = new TestData();
+        using var handler = new RecordingHandler(request => request.Uri.AbsolutePath == "/open-apis/auth/v3/tenant_access_token/internal"
+            ? "{\"code\":0,\"tenant_access_token\":\"access\"}"
+            : response);
+        using var client = new HttpClient(handler);
+        using var sender = new FeishuNotificationChannel(client);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => sender.SendAsync(new()
+        {
+            FeishuWebhookUrl = "https://example.test/hook",
+            FeishuAppId = "app",
+            FeishuAppSecret = "secret"
+        }, new("正文", data.Image), CancellationToken.None));
+
+        Assert.Contains(error, exception.Message);
+        Assert.Equal(new[] { "/open-apis/auth/v3/tenant_access_token/internal", "/open-apis/im/v1/images" },
+            handler.Requests.Select(request => request.Uri.AbsolutePath));
     }
 
     [Fact]
