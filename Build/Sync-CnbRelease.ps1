@@ -123,7 +123,7 @@ try {
         body = $release.body
         draft = $false
         prerelease = [bool]$release.prerelease
-        make_latest = if ($release.prerelease) { 'false' } else { 'legacy' }
+        make_latest = if ($release.prerelease) { 'false' } else { 'true' }
     } | Out-Null
     Write-Output "已同步：$Tag -> $CnbRepository"
 }
