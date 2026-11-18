@@ -242,7 +242,7 @@ public sealed class NotificationDiagnosticsTest
                 _,
                 _) => Fail(), _ =>
             {
-            }, () => state, value => state = value, _ =>
+            }, () => state, (value, _) => state = value, _ =>
             {
             }),
             "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (
@@ -303,7 +303,7 @@ public sealed class NotificationDiagnosticsTest
                 _,
                 _) => throw new QQBotConnectionException("永久失败", true), _ =>
             {
-            }, () => state, value => state = value, _ =>
+            }, () => state, (value, _) => state = value, _ =>
             {
             }),
             "onebot" => new OneBotCommandBotReceiver(new LoggerAdapter<OneBotCommandBotService>(logger), (

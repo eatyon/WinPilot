@@ -442,6 +442,9 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
     }
 
     protected void SetStatus(CommandBotStatus value)
+        => SetStatus(value, LogLevel.Information);
+
+    protected void SetStatus(CommandBotStatus value, LogLevel connectionLogLevel)
     {
         bool connected;
         lock (gate)
@@ -459,7 +462,7 @@ public abstract class CommandBotService : IHostedService, IDisposable, IAsyncDis
         }
         if (connected)
         {
-            logger.LogInformation("{Channel} 命令机器人连接成功", name);
+            logger.Log(connectionLogLevel, "{Channel} 命令机器人连接成功", name);
         }
     }
 

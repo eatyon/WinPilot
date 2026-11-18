@@ -7,6 +7,7 @@ using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WinPilot.Core;
 using WinPilot.Features.Notifications;
 using WinPilot.Features.Notifications.CommandBots;
@@ -252,6 +253,53 @@ public sealed class QQBotCommandBotTest
         Assert.True((await second) > 0);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GatewayReconnectIsDebugWhileNetworkFailureRemainsWarning(bool requestedByGateway)
+    {
+        await using var fixture = new Fixture();
+        await fixture.Enable();
+        fixture.Disconnect!.TrySetException(requestedByGateway
+            ? new QQBotReconnectRequestedException()
+            : new IOException("network disconnected"));
+        await TestWait.UntilAsync(() => fixture.Bot.Status.State == "reconnecting");
+        Assert.Equal(requestedByGateway ? null : "无法连接 QQBot，请检查网络和平台配置，正在重连", fixture.Bot.Status.Error);
+        await TestWait.UntilAsync(() => fixture.Attempts == 2 && fixture.Bot.Status.State == "connected");
+        // 状态先提交再记录连接日志，停止并等待接收循环退出后检查完整日志。
+        await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
+        var warnings = fixture.Logger.Entries.Where(entry => entry.Level == LogLevel.Warning).ToArray();
+        Assert.Equal(requestedByGateway ? 0 : 1, warnings.Length);
+        Assert.Equal(requestedByGateway ? 0 : 1, fixture.Logger.Diagnostics.Count);
+        var connections = fixture.Logger.Entries.Where(entry => entry.Message == "QQBot 命令机器人连接成功").ToArray();
+        Assert.Equal(2, connections.Length);
+        Assert.Equal(LogLevel.Information, connections[0].Level);
+        Assert.Equal(requestedByGateway ? LogLevel.Debug : LogLevel.Information, connections[1].Level);
+        if (requestedByGateway)
+        {
+            Assert.Contains(fixture.Logger.Entries, entry => entry.Level == LogLevel.Debug && entry.Message == "QQBot 网关要求重新连接");
+        }
+    }
+
+    [Fact]
+    public async Task NetworkFailureDuringGatewayReconnectIsNotHidden()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Enable();
+        fixture.Failure = new IOException("network disconnected");
+        fixture.Disconnect!.TrySetException(new QQBotReconnectRequestedException());
+        await TestWait.UntilAsync(() => fixture.Attempts >= 2
+            && fixture.Bot.Status.Error == "无法连接 QQBot，请检查网络和平台配置，正在重连");
+        Assert.Equal("reconnecting", fixture.Bot.Status.State);
+        Assert.Equal("无法连接 QQBot，请检查网络和平台配置，正在重连", fixture.Bot.Status.Error);
+        fixture.Failure = null;
+        await TestWait.UntilAsync(() => fixture.Attempts >= 3 && fixture.Bot.Status.State == "connected");
+        await fixture.Bot.SetEnabledAsync(false, CancellationToken.None);
+        Assert.Single(fixture.Logger.Diagnostics);
+        Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == LogLevel.Warning));
+        Assert.Equal(2, fixture.Logger.Entries.Count(entry => entry.Level == LogLevel.Information && entry.Message == "QQBot 命令机器人连接成功"));
+    }
+
     [Fact]
     public async Task ConnectedBindingRejectsConcurrentRequestsAndReleasesSlotAfterSuccessAndCancellation()
     {
@@ -377,6 +425,23 @@ public sealed class QQBotCommandBotTest
         Assert.Single(fixture.Logger.Entries.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Warning));
         Assert.Contains("inner-known-receiver", diagnostic);
         Assert.DoesNotContain("secret", diagnostic);
+    }
+
+    [Fact]
+    public async Task GatewayReconnectInstructionPreservesSessionWithoutBecomingNetworkFailure()
+    {
+        using var socket = new TestSocket();
+        socket.Enqueue(new { op = 10, d = new { heartbeat_interval = 10000 } });
+        socket.Enqueue(new { op = 0, s = 12, t = "READY", d = new { session_id = "session" } });
+        socket.Enqueue(new { op = 7 });
+        var resume = new QQBotGatewaySession();
+        var connected = 0;
+        await Assert.ThrowsAsync<QQBotReconnectRequestedException>(() => QQBotCommandBotTransport.RunSessionAsync(
+            socket, "access", resume, () => connected++, _ => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, connected);
+        Assert.Equal("session", resume.Id);
+        Assert.Equal(12, resume.Sequence);
+        Assert.True(socket.Aborted);
     }
 
     [Fact]

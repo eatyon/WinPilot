@@ -134,9 +134,9 @@ public sealed class QQBotCommandBotService : CommandBotService
         }
     }
 
-    private void PublishStatus(CommandBotStatus status)
+    private void PublishStatus(CommandBotStatus status, bool gatewayReconnect)
     {
-        SetStatus(status);
+        SetStatus(status, gatewayReconnect ? LogLevel.Debug : LogLevel.Information);
         if (status.State == "connected")
         {
             return;

@@ -110,7 +110,7 @@ internal static class QQBotCommandBotTransport
                 }
                 if (op == 7)
                 {
-                    throw new IOException("QQBot 请求重连");
+                    throw new QQBotReconnectRequestedException();
                 }
                 if (op == 9)
                 {

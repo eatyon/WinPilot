@@ -9,9 +9,9 @@ internal sealed class QQBotCommandBotReceiver(
     QQBotConnectAsync connect,
     Action<JsonElement> rawReceive,
     Func<CommandBotStatus> status,
-    Action<CommandBotStatus> publish,
+    Action<CommandBotStatus, bool> publish,
     Action<CommandBotMessage> receive)
-    : CommandBotReceiver(status, publish, receive)
+    : CommandBotReceiver(status, value => publish(value, false), receive)
 {
     public override async Task RunAsync(WinPilotSettings configuration, CancellationToken token)
     {
@@ -20,6 +20,7 @@ internal sealed class QQBotCommandBotReceiver(
         var seen = new Dictionary<string, DateTimeOffset>();
         var attempts = 0;
         var authenticationFailures = 0;
+        var gatewayReconnect = false;
         while (!token.IsCancellationRequested)
         {
             long? connectedAt = null;
@@ -29,7 +30,8 @@ internal sealed class QQBotCommandBotReceiver(
                 {
                     connectedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                     authenticationFailures = 0;
-                    SetStatus(Status with { State = "connected", Error = null });
+                    publish(Status with { State = "connected", Error = null }, gatewayReconnect);
+                    gatewayReconnect = false;
                 }, payload =>
                 {
                     if (token.IsCancellationRequested)
@@ -131,13 +133,23 @@ internal sealed class QQBotCommandBotReceiver(
                     ? 60
                     : Math.Min(Math.Pow(2, Math.Min(attempts, 6)), 60);
                 attempts++;
-                if (Status.State != "reconnecting")
+                var requestedByGateway = exception is QQBotReconnectRequestedException;
+                if (requestedByGateway)
+                {
+                    logger.LogDebug("QQBot 网关要求重新连接");
+                }
+                else if (Status.State != "reconnecting" || gatewayReconnect)
                 {
                     logger.LogWarning(
                         NotificationFailureDiagnostics.Redact(exception, NotificationFailureDiagnostics.Secrets(settings)),
                         "QQBot 命令机器人连接中断，正在重连");
                 }
-                SetStatus(Status with { State = "reconnecting", Error = "无法连接 QQBot，请检查网络和平台配置，正在重连" });
+                gatewayReconnect = requestedByGateway;
+                SetStatus(Status with
+                {
+                    State = "reconnecting",
+                    Error = requestedByGateway ? null : "无法连接 QQBot，请检查网络和平台配置，正在重连"
+                });
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(seconds * (1 + Random.Shared.NextDouble() * 0.2)), token);
@@ -174,3 +186,5 @@ internal sealed class QQBotConnectionException(string message, bool permanent) :
 {
     public bool Permanent { get; } = permanent;
 }
+
+internal sealed class QQBotReconnectRequestedException() : IOException("QQBot 网关要求重新连接");
