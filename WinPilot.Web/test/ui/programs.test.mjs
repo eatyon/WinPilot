@@ -277,16 +277,37 @@ test('protected members disable ending the group without blocking other members'
   } finally { f.dispose(); }
 });
 
-test('program launch rejects blank and relative paths without a request', async () => {
-  const f = await fixture();
-  try {
-    for (const path of ['', ' ', 'app.exe', '.\\app.exe', 'C:app.exe', '\\app.exe']) {
-      f.subject.programPath.value = path;
-      await f.subject.launch();
-      assert.equal(f.requests.length, 0, path);
-      assert.equal(f.subject.launchFormError.value, path.trim() ? '程序路径必须是绝对路径' : '请输入程序路径');
-    }
-  } finally { f.dispose(); }
+test('program launch and tag saves reject blank and relative paths without requests or toasts', async () => {
+  for (const operation of ['launch', 'saveTag']) {
+    const f = await fixture();
+    try {
+      f.subject.tagName.value = 'Tag';
+      for (const path of ['', ' ', 'app.exe', '.\\app.exe', 'C:app.exe', '\\app.exe']) {
+        f.subject.programPath.value = path;
+        await f.subject[operation]();
+        assert.equal(f.requests.length, 0, path);
+        assert.equal(f.subject.launchFormError.value, path.trim() ? '程序路径必须是绝对路径' : '请输入程序路径');
+        assert.equal(f.toasts.length, 0);
+      }
+    } finally { f.dispose(); }
+  }
+});
+
+test('creating and editing tags require a name before sending a request', async () => {
+  for (const originalName of [undefined, 'Existing']) {
+    const f = await fixture();
+    try {
+      f.subject.editingTagName.value = originalName;
+      for (const name of ['', '  ']) {
+        f.subject.tagName.value = name;
+        await f.subject.saveTag();
+        assert.equal(f.subject.launchFormError.value, '请输入标签名称');
+        assert.equal(f.subject.editingTagName.value, originalName);
+        assert.equal(f.requests.length, 0);
+        assert.equal(f.toasts.length, 0);
+      }
+    } finally { f.dispose(); }
+  }
 });
 
 test('program launch accepts drive and network absolute paths', async () => {

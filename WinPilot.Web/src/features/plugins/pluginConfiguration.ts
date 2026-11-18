@@ -20,8 +20,6 @@ export function configurationError(
     const value = config[collection.name];
     if (!Array.isArray(value)) continue;
     const items = value as PluginDynamicConfigurationItem[];
-    if (items.some(item => typeof item.__winpilot?.remark !== 'string' || !item.__winpilot.remark.trim()))
-      return '备注不能为空';
     for (const item of items) {
       const field = collection.item.fields.find(field => {
         const value = item[field.name];

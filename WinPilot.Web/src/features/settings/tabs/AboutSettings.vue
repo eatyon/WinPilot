@@ -440,7 +440,7 @@ onBeforeUnmount(() => {
       <div class="about-link-list">
         <div class="about-link-row">
           <span>项目主页</span>
-          <NButton text tag="a" :href="repositoryUrl" target="_blank" rel="noopener noreferrer">GitHub</NButton>
+          <NButton text tag="a" :href="repositoryUrl" target="_blank" rel="noopener noreferrer">访问 GitHub</NButton>
         </div>
         <div class="about-link-row">
           <span>问题反馈</span>

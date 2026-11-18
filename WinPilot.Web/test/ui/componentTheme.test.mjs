@@ -60,9 +60,9 @@ test('component theme inherits library typography and sizes while preserving acc
       const commonTheme = (mode === 'dark' ? darkTheme : lightTheme).common;
       assert.equal(theme.Tooltip.color, commonTheme.popoverColor);
       assert.equal(theme.Tooltip.textColor, commonTheme.textColor2);
-      for (const color of ['colorEmbedded', 'colorEmbeddedModal', 'colorEmbeddedPopover']) {
-        assert.equal(theme.Card[color], 'var(--surface-subtle)');
-      }
+      assert.equal(theme.Card.colorEmbedded, 'var(--surface-subtle)');
+      assert.equal(theme.Card.colorEmbeddedModal, `oklch(from ${commonTheme.modalColor} calc(l - 0.02) c h)`);
+      assert.equal(theme.Card.colorEmbeddedPopover, `oklch(from ${commonTheme.popoverColor} calc(l - 0.02) c h)`);
       for (const component of ['Card', 'Dialog', 'Drawer']) {
         assert.equal(theme[component].closeSize, undefined);
         assert.equal(theme[component].closeBorderRadius, theme.common.borderRadius);
@@ -143,13 +143,13 @@ test('host semantic colors follow the actual provider theme and release their gl
   try {
     scope.run(() => runInNewContext(loadScriptModule(new URL('../../src/components/AppThemeTokens.vue', import.meta.url)), context));
     assert.equal(values.get('--canvas'), '#f5f5f5');
-    assert.equal(values.get('--surface-subtle'), `color-mix(in srgb, ${lightTheme.common.cardColor} 98%, ${lightTheme.common.textColorBase} 2%)`);
+    assert.equal(values.get('--surface-subtle'), `oklch(from ${lightTheme.common.cardColor} calc(l - 0.02) c h)`);
     assert.notEqual(values.get('--surface-subtle'), values.get('--surface'));
     theme.value = { ...darkTheme.common, ...createComponentTheme(getAccentTokens('blue', 'dark'), 'dark').common };
     await nextTick();
     assert.equal(values.get('--canvas'), darkTheme.common.bodyColor);
     assert.equal(values.get('--surface'), darkTheme.common.cardColor);
-    assert.equal(values.get('--surface-subtle'), `color-mix(in srgb, ${darkTheme.common.cardColor} 98%, ${darkTheme.common.textColorBase} 2%)`);
+    assert.equal(values.get('--surface-subtle'), `oklch(from ${darkTheme.common.cardColor} calc(l - 0.02) c h)`);
     assert.notEqual(values.get('--surface-subtle'), values.get('--surface'));
     assert.equal(values.get('--text-muted'), darkTheme.common.textColor2);
     assert.equal(values.get('--border'), darkTheme.common.dividerColor);

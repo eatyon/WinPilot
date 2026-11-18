@@ -69,7 +69,7 @@ const tagDeleteTargetModal = useModalState<ProgramTag | undefined>(() => undefin
 const tagDeleteTarget = tagDeleteTargetModal.data;
 const pageError = ref('');
 const launchFormError = ref('');
-const launchErrorField = ref<'programPath' | ''>('');
+const launchErrorField = ref<'programPath' | 'tagName' | ''>('');
 const tagLaunchTargetModal = useModalState<ProgramTag | undefined>(() => undefined);
 const tagLaunchTarget = tagLaunchTargetModal.data;
 const launchingTagName = ref('');
@@ -365,16 +365,25 @@ function setLaunchFormFailure(error: unknown, fallback: string, submittedVersion
   launchFormError.value = userErrorMessage(error, fallback);
   showToast(launchFormError.value);
 }
+function validateLaunchForm(path: string, name?: string) {
+  launchErrorField.value = '';
+  if (!path || !/^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(path)) {
+    launchErrorField.value = 'programPath';
+    launchFormError.value = path ? '程序路径必须是绝对路径' : '请输入程序路径';
+    return false;
+  }
+  if (name !== undefined && !name) {
+    launchErrorField.value = 'tagName';
+    launchFormError.value = '请输入标签名称';
+    return false;
+  }
+  return true;
+}
 async function launch() {
   if (safeModeEnabled.value || isLaunching.value) return;
   const submittedVersion = launchFormVersion;
   const payload = launchPayload();
-  launchErrorField.value = '';
-  if (!payload.programPath || !/^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(payload.programPath)) {
-    launchErrorField.value = 'programPath';
-    launchFormError.value = payload.programPath ? '程序路径必须是绝对路径' : '请输入程序路径';
-    return;
-  }
+  if (!validateLaunchForm(payload.programPath)) return;
   await performAction('launch', '/api/programs/launch', {
     method: 'POST', body: JSON.stringify(payload),
   }, () => {
@@ -389,7 +398,7 @@ async function saveTag() {
   const submittedVersion = launchFormVersion;
   const payload = { name: tagName.value.trim(), ...launchPayload() };
   const originalName = editingTagName.value;
-  launchErrorField.value = '';
+  if (!validateLaunchForm(payload.programPath, payload.name)) return;
   const url = originalName ? `/api/programs/tags/${encodeURIComponent(originalName)}` : '/api/programs/tags';
   await performAction('save-tag', url, {
     method: originalName ? 'PUT' : 'POST', body: JSON.stringify(payload),
@@ -673,11 +682,13 @@ const showUsageLoading = useDelayedLoading(() => isUsageLoading.value);
           <NFormItem
             label="标签名称"
             :label-props="{ for: `${formId}-field-4` }"
-            :show-feedback="false"
+            :show-feedback="launchErrorField === 'tagName' && Boolean(launchFormError)"
+            :validation-status="launchErrorField === 'tagName' && launchFormError ? 'error' : undefined"
+            :feedback="launchErrorField === 'tagName' ? launchFormError : undefined"
             class="form-field"
           >
             <NInput
-              :input-props="{ id: `${formId}-field-4` }"
+              :input-props="{ id: `${formId}-field-4`, 'aria-invalid': launchErrorField === 'tagName' && Boolean(launchFormError) || undefined }"
               v-model:value="tagName"
               :disabled="safeModeEnabled"
               :placeholder="editingTagName ? '请输入标签名称' : '创建标签时填写'"

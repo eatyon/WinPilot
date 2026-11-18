@@ -1460,7 +1460,7 @@ function retryPageLoads() {
 .tasks-view { display: grid; gap: var(--page-card-row-gap) 18px; }
 .task-list { display: grid; align-content: start; gap: 0; }
 .task-row, .task-form-section { transition: border-color .3s cubic-bezier(.4, 0, .2, 1); }
-.task-list .content-empty { margin: 0; padding: 14px 0 4px; text-align: center; }
+.task-list .content-empty { text-align: center; }
 .task-list .content-section-header { padding-bottom: 8px; justify-content: flex-end; }
 .task-list .content-section-header > .content-actions { width: 100%; flex-wrap: nowrap; align-items: center; justify-content: flex-end; }
 .task-list .content-section-header > .content-actions:has(.tag-search) { justify-content: space-between; }

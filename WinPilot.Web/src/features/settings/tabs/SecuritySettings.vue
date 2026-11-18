@@ -302,7 +302,7 @@ async function saveNotifications() {
             @toggle="toggleEvent"
           />
         </NFormItem>
-        <div class="settings-actions security-notification-actions">
+        <div class="security-notification-actions">
           <NButton
             :loading="notificationSaving"
             attr-type="button"
@@ -325,9 +325,10 @@ async function saveNotifications() {
 }
 .security-notification-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .security-notification-events { padding-top: 2px; }
-.security-notification-actions { margin-top: 2px; }
-.settings-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
-@media (max-width: 767px) {
-  .settings-actions { justify-content: stretch; }
+.security-notification-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+  padding-top: 4px;
 }
 </style>

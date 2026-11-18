@@ -4,7 +4,7 @@ import AppLoadError from '../../components/AppLoadError.vue';
 import { useModalState } from '../../ui/useModalState';
 import AppLoading from '../../components/AppLoading.vue';
 import AppNumberInput from '../../components/AppNumberInput.vue';
-import { NFormItem, NEmpty, NAlert, NBreadcrumb, NBreadcrumbItem, NButton, NInput, NCheckbox, NCard, NCollapseTransition, NPagination, NProgress, NScrollbar, NSpace, NSpin, NText } from 'naive-ui';
+import { NFormItem, NEmpty, NAlert, NBreadcrumb, NBreadcrumbItem, NButton, NInput, NCheckbox, NCard, NCollapseTransition, NPagination, NProgress, NScrollbar, NSpace, NSpin, NText, type ScrollbarInst } from 'naive-ui';
 import { useId, computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import AppModal from '../../components/AppModal.vue';
 import AppIcon from '../../components/AppIcon.vue';
@@ -181,6 +181,24 @@ const breadcrumbs = computed<Breadcrumb[]>(() => {
   }
   return result;
 });
+const breadcrumbScrollbar = ref<ScrollbarInst | null>(null);
+const breadcrumbContent = ref<HTMLElement | null>(null);
+const targetPathScrollbar = ref<ScrollbarInst | null>(null);
+const targetPathContent = ref<HTMLElement | null>(null);
+watch(
+  () => directory.value?.path,
+  () => {
+    if (breadcrumbContent.value) breadcrumbScrollbar.value?.scrollTo({ left: breadcrumbContent.value.scrollWidth });
+  },
+  { flush: 'post' },
+);
+watch(
+  () => targetDirectory.value?.path,
+  () => {
+    if (targetPathContent.value) targetPathScrollbar.value?.scrollTo({ left: targetPathContent.value.scrollWidth });
+  },
+  { flush: 'post' },
+);
 onMounted(() => {
   if (!safeModeEnabled.value) void loadRoots();
 });
@@ -647,18 +665,20 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
             选择驱动器
             <AppIcon name="chevron-down" class="files-crumb-chevron" />
           </NButton>
-          <NScrollbar v-if="directory" x-scrollable class="files-breadcrumb-scrollbar">
-            <NBreadcrumb class="files-breadcrumb" aria-label="当前路径">
-              <NBreadcrumbItem
-                v-for="(crumb, index) in breadcrumbs"
-                :key="crumb.path"
-                :href="index < breadcrumbs.length - 1 ? '#' : undefined"
-                :clickable="index < breadcrumbs.length - 1"
-                @click.prevent="index < breadcrumbs.length - 1 && browse(crumb.path)"
-              >
-                <span :aria-current="index === breadcrumbs.length - 1 ? 'page' : undefined">{{ crumb.name }}</span>
-              </NBreadcrumbItem>
-            </NBreadcrumb>
+          <NScrollbar v-if="directory" ref="breadcrumbScrollbar" x-scrollable class="files-breadcrumb-scrollbar">
+            <div ref="breadcrumbContent" class="files-breadcrumb-content">
+              <NBreadcrumb class="files-breadcrumb" aria-label="当前路径">
+                <NBreadcrumbItem
+                  v-for="(crumb, index) in breadcrumbs"
+                  :key="crumb.path"
+                  :href="index < breadcrumbs.length - 1 ? '#' : undefined"
+                  :clickable="index < breadcrumbs.length - 1"
+                  @click.prevent="index < breadcrumbs.length - 1 && browse(crumb.path)"
+                >
+                  <span :aria-current="index === breadcrumbs.length - 1 ? 'page' : undefined">{{ crumb.name }}</span>
+                </NBreadcrumbItem>
+              </NBreadcrumb>
+            </div>
           </NScrollbar>
           <p v-else>选择驱动器开始浏览</p>
         </div>
@@ -1118,7 +1138,9 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
             </NButton>
           </div>
           <template v-else>
-            <p class="file-target-path">{{ targetDirectory.path }}</p>
+            <NScrollbar ref="targetPathScrollbar" x-scrollable class="file-target-path">
+              <span ref="targetPathContent" class="file-target-path-text">{{ targetDirectory.path }}</span>
+            </NScrollbar>
             <div class="file-target-actions">
               <NButton
                 v-if="targetDirectory.parentPath"
@@ -1144,7 +1166,7 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
               <NEmpty
                 :show-icon="false"
                 v-if="!targetDirectory.entries.some((item) => item.isDirectory)"
-                class="content-empty"
+                class="file-target-empty"
               >
                 没有可进入的子文件夹
               </NEmpty>
@@ -1276,6 +1298,7 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
 <style>
 .files-view {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   max-width: none;
   gap: var(--page-card-row-gap) 18px;
@@ -1323,8 +1346,9 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
 .files-crumb { flex-shrink: 0; width: fit-content; }
 .files-crumb-chevron { flex-shrink: 0; font-size: 16px; transition: transform 0.15s ease; }
 .files-crumb[aria-expanded='true'] .files-crumb-chevron { transform: rotate(180deg); }
-.files-breadcrumb-scrollbar { flex: 1; width: auto; min-width: 0; max-width: min(760px, 70vw); }
-.files-breadcrumb { min-width: max-content; padding-bottom: 2px; white-space: nowrap; }
+.files-breadcrumb-scrollbar { flex: 1; width: auto; min-width: 0; }
+.files-breadcrumb-content { width: max-content; min-width: 100%; }
+.files-breadcrumb { min-width: max-content; padding-block: 5px; white-space: nowrap; }
 .file-root-list {
   --file-root-height: 88px;
   display: grid;
@@ -1478,16 +1502,19 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
   margin: 0;
 }
 .file-target-path {
-  overflow: hidden;
-  padding: 9px 10px;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.file-target-path-text {
+  display: block;
+  width: max-content;
+  padding: 9px 10px;
+  white-space: pre;
 }
 .file-target-scrollbar {
   max-height: 260px;
@@ -1499,11 +1526,12 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
   min-height: 42px;
   height: auto;
   justify-content: flex-start;
-}.file-target-button small {
+}
+.file-target-button small {
   color: var(--warning-text);
 }
-.file-target-list .content-empty {
-  padding: 0 12px;
+.file-target-empty {
+  padding: 12px;
 }
 .file-list > .content-empty {
   margin: 0;
@@ -1581,7 +1609,7 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    padding-bottom: 12px;
+    padding-bottom: 0;
   }
   .files-location {
     display: contents;
@@ -1590,17 +1618,15 @@ const showTargetLoading = useDelayedLoading(() => targetLoading.value);
     grid-column: 1;
     grid-row: 1;
   }
-  .files-breadcrumb-scrollbar, .files-breadcrumb, .files-location > p {
+  .files-breadcrumb-scrollbar, .files-location > p {
     grid-column: 1 / -1;
     grid-row: 2;
   }
   .files-location > p {
-    margin: 8px 0 0;
+    margin: 8px 0 12px;
   }
   .files-breadcrumb {
-    width: 100%;
-    max-width: 100%;
-    padding: 8px 0 3px;
+    padding: 15px 0;
     border-top: 1px solid var(--border);
   }
   .files-header-actions {

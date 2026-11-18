@@ -28,7 +28,7 @@ test('available commands allow the modal default backdrop dismissal', () => {
 test('about links make only their value clickable rather than the whole row', () => {
   const source = readFileSync(new URL('../../src/features/settings/tabs/AboutSettings.vue', import.meta.url), 'utf8');
   assert.equal((source.match(/<div class="about-link-row">/g) ?? []).length, 5);
-  for (const text of ['GitHub', '提交 Issue', '查看 Releases', 'AGPL-3.0-only', '查看声明']) {
+  for (const text of ['访问 GitHub', '提交 Issue', '查看 Releases', 'AGPL-3.0-only', '查看声明']) {
     assert.ok(source.includes(`>${text}</NButton>`));
   }
   assert.equal((source.match(/<NButton text tag="a"[^>]*target="_blank" rel="noopener noreferrer"/g) ?? []).length, 5);

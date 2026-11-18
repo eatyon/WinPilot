@@ -104,7 +104,10 @@ test('file path navigation uses keyboard-accessible library breadcrumbs', () => 
   assert.match(source, /<NBreadcrumb class="files-breadcrumb" aria-label="当前路径">/);
   assert.match(source, /<NBreadcrumbItem[\s\S]*?:href="index < breadcrumbs.length - 1 \? '#' : undefined"/);
   assert.match(source, /@click.prevent="index < breadcrumbs.length - 1 && browse\(crumb.path\)"/);
-  assert.match(source, /<NScrollbar v-if="directory" x-scrollable class="files-breadcrumb-scrollbar">/);
+  const [scrollbar] = elements(source, node => node.tag === 'NScrollbar' && attribute(node, 'class') === 'files-breadcrumb-scrollbar');
+  assert.ok(scrollbar);
+  assert.equal(scrollbar.props.find(prop => prop.type === 7 && prop.name === 'if')?.exp?.content, 'directory');
+  assert.ok(scrollbar.props.some(prop => prop.type === 6 && prop.name === 'x-scrollable'));
   assert.doesNotMatch(source, /files-breadcrumb-link|files-breadcrumb-separator|files-breadcrumb-current/);
 });
 
@@ -161,12 +164,12 @@ test('keyboard states and dynamic collection disclosure delegate to library comp
   assert.doesNotMatch(styles, /virtual-key:disabled|\.virtual-key\.selected|\.keyboard-message/);
 });
 
-test('dynamic configuration expansion follows item identities across adding and deleting', () => {
+test('dynamic configuration names follow remarks and positions while expansion follows identities', () => {
   const props = reactive({
     field: { name: 'rules', type: 'collection', mode: 'dynamic', item: { fields: [{ name: 'enabled', type: 'checkbox' }] } },
     modelValue: [{ __winpilot: { id: 'existing', remark: '已有配置' }, enabled: true }],
   });
-  const code = loadScriptModule(new URL('../../src/features/plugins/PluginSettingField.vue', import.meta.url), 'expandedNames,addCollectionItem,requestDelete,confirmDelete');
+  const code = loadScriptModule(new URL('../../src/features/plugins/PluginSettingField.vue', import.meta.url), 'expandedNames,addCollectionItem,requestDelete,confirmDelete,collectionItemName');
   const context = {
     exports: {}, crypto: webcrypto,
     defineProps: () => props,
@@ -183,6 +186,12 @@ test('dynamic configuration expansion follows item identities across adding and 
   assert.equal(state.expandedNames.value.length, 0);
   state.addCollectionItem();
   const addedId = props.modelValue[1].__winpilot.id;
+  assert.equal(state.collectionItemName(0), '已有配置');
+  assert.equal(state.collectionItemName(1), '配置 2');
+  props.modelValue[1].__winpilot.remark = '  测试配置  ';
+  assert.equal(state.collectionItemName(1), '测试配置');
+  props.modelValue[1].__winpilot.remark = '  ';
+  assert.equal(state.collectionItemName(1), '配置 2');
   assert.deepEqual([...state.expandedNames.value], [addedId]);
   assert.equal(props.modelValue[1].enabled, false);
   state.expandedNames.value.push('existing');
@@ -190,6 +199,8 @@ test('dynamic configuration expansion follows item identities across adding and 
   state.confirmDelete();
   assert.equal(props.modelValue.length, 1);
   assert.equal(props.modelValue[0].__winpilot.id, addedId);
+  assert.equal(state.collectionItemName(0), '配置 1');
+  assert.equal(props.modelValue[0].__winpilot.remark, '  ');
   assert.deepEqual([...state.expandedNames.value], [addedId]);
   state.requestDelete(0);
   state.confirmDelete();

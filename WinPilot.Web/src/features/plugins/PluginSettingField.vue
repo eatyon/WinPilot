@@ -33,6 +33,9 @@ const multiValues = computed<string[]>(() =>
 const multiOptions = computed(() => normalizeOptions(props.field.options));
 const fixedItems = computed(() => (props.modelValue || {}) as Record<string, Record<string, unknown>>);
 const dynamicItems = computed(() => (props.modelValue || []) as PluginDynamicConfigurationItem[]);
+function collectionItemName(index: number): string {
+  return dynamicItems.value[index]?.__winpilot?.remark?.trim() || `配置 ${index + 1}`;
+}
 function toggleMultiValue(value: string, checked: boolean) {
   const values = multiValues.value;
   emit(
@@ -166,19 +169,19 @@ function confirmDelete() {
             :name="String(item.__winpilot?.id)"
           >
             <template #header="{ collapsed }">
-              <NButton text strong class="plugin-collection-title" :aria-expanded="!collapsed">{{ item.__winpilot?.remark || '新增配置' }}</NButton>
+              <NButton text strong class="plugin-collection-title" :aria-expanded="!collapsed">{{ collectionItemName(index) }}</NButton>
             </template>
             <div class="plugin-collection-item-fields">
               <NCard embedded size="small" content-class="plugin-setting-field plugin-collection-remark-field">
                 <NFormItem
                   label="备注"
-                  required
                   :label-props="{ for: `${fieldId || fieldName()}-${item.__winpilot.id}-remark` }"
                   :show-feedback="false"
                   class="form-field"
                 >
                   <NInput
                     v-model:value="item.__winpilot.remark"
+                    placeholder="选填，用于区分配置"
                     :input-props="{ id: `${fieldId || fieldName()}-${item.__winpilot.id}-remark` }"
                     maxlength="100"
                   />
@@ -206,7 +209,7 @@ function confirmDelete() {
           title="确认删除配置"
           @close="deleteIndexModal.close()"
         >
-          <p>确认删除配置“{{ dynamicItems[deleteIndex]?.__winpilot?.remark || '新增配置' }}”吗？</p>
+          <p>确认删除配置“{{ collectionItemName(deleteIndex) }}”吗？</p>
           <template #actions>
             <NButton @click="deleteIndexModal.close()">取消</NButton>
             <NButton type="error" @click="confirmDelete">删除</NButton>

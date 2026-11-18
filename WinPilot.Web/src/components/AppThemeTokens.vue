@@ -49,7 +49,7 @@ watchEffect(() => {
   }
   document.documentElement.style.setProperty(
     '--surface-subtle',
-    `color-mix(in srgb, ${theme.value.cardColor} 98%, ${theme.value.textColorBase} 2%)`,
+    `oklch(from ${theme.value.cardColor} calc(l - 0.02) c h)`,
   );
 });
 onBeforeUnmount(() => {

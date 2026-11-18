@@ -2,6 +2,7 @@ import { readStylesheet, readFeatureStyles } from '../support/stylesheet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { attribute, elements } from '../support/template.mjs';
 
 const read = path => path.endsWith('.css') ? readStylesheet(new URL(`../../src/${path}`, import.meta.url)) : readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
 
@@ -33,8 +34,12 @@ test('dialog lists use the edge-aligned modal scrollbar instead of another inset
 });
 
 test('horizontal navigation and log details use library scrollbars without replacing terminal or editor scrolling', () => {
-  assert.match(read('features/files/FilesView.vue'), /<NScrollbar v-if="directory" x-scrollable class="files-breadcrumb-scrollbar">/);
-  assert.match(read('features/files/FilesView.vue'), /@scroll="syncEditLines"/);
+  const files = read('features/files/FilesView.vue');
+  for (const className of ['files-breadcrumb-scrollbar', 'file-target-path']) {
+    const [scrollbar] = elements(files, node => node.tag === 'NScrollbar' && attribute(node, 'class') === className);
+    assert.ok(scrollbar?.props.some(prop => prop.type === 6 && prop.name === 'x-scrollable'), className);
+  }
+  assert.match(files, /@scroll="syncEditLines"/);
   assert.match(read('features/logs/LogsView.vue'), /<NScrollbar class="log-details-scrollbar" x-scrollable>/);
   const terminal = read('features/terminal/TerminalView.vue');
   assert.match(terminal, /<NTabs[^>]*class="terminal-tabs"/);

@@ -32,12 +32,16 @@ test('plugin configuration preserves optional, zero, false and numeric field val
   assert.equal(configurationError(definitions, { enabled: false }), '');
 });
 
-test('dynamic collection remarks precede child field validation and preserve item order', () => {
+test('dynamic collection remarks are optional while child fields remain required', () => {
   const first = { __winpilot: { id: 'first', remark: '配置一' }, target: '' };
   const second = { __winpilot: { id: 'second', remark: '  ' }, target: 'valid' };
-  assert.equal(configurationError([collection], { profiles: [first, second] }), '备注不能为空');
-  second.__winpilot.remark = '配置二';
   assert.equal(configurationError([collection], { profiles: [first, second] }), '目标不能为空');
+  for (const remark of ['', '  ', '配置二']) {
+    second.__winpilot.remark = remark;
+    assert.equal(configurationError([collection], { profiles: [second] }), '');
+    assert.equal(second.__winpilot.id, 'second');
+    assert.equal(second.__winpilot.remark, remark);
+  }
   for (const value of [undefined, null, '', []]) {
     assert.equal(configurationError([collection], { profiles: [{ ...first, target: value }] }), '目标不能为空');
   }
